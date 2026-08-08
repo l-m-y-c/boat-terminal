@@ -1,47 +1,42 @@
 # 08 – User Flows
 
-## 1. Member Checks Out a Boat (Happy Path)
+## 1. Member Arrives for a Booked Sail
 
-1. Member has an active booking in the LMYC system
-2. Arrives at the marina and opens the LMYC phone app
-3. Selects the booking → taps “Check In & Pair”
-4. App contacts the club backend and receives a short-lived pairing token
-5. Member approaches the boat terminal and initiates pairing (QR or BLE)
-6. Terminal displays “Paired with [Name] – Valid until [time]”
-7. Terminal begins showing live instrument data
-8. Member can now sail; phone can be put away or used for charts/weather
+1. Member already has a reservation in the LMYC online calendar
+2. Arrives at the marina and opens the LMYC companion on their phone
+3. Sees their active booking and taps “Pair with Boat”
+4. Completes a quick pairing step with the cabin terminal (QR or Bluetooth)
+5. Terminal confirms the booking is active and begins showing live instrument data
+6. Member can put the phone away or continue using it for charts and weather as usual
 
 ## 2. While Under Way
 
-- Terminal continues to show depth, wind, speed, battery, etc.
-- Phone may be used for navigation, weather, or communication
-- If the member wants, the phone can mirror selected instrument data while still paired
-- No constant cellular connection is required for the terminal to function
+- The terminal continues to display depth, wind, speed, battery, and other available data
+- The phone remains available for navigation, weather, or club communications
+- No constant connection between phone and terminal is required
 
-## 3. Member Notices a Problem
+## 3. Member Notices Something Worth Reporting
 
-1. Opens the phone app (or uses a simple form on the terminal)
-2. Creates an issue report (text + optional photo)
-3. Report is queued and uploaded when cellular is available
-4. Club maintenance team sees the report linked to the boat and booking
+1. Opens the companion on their phone (or uses a simple form on the terminal)
+2. Adds a short note and optional photo
+3. The information is associated with the current booking and flows into the club’s existing maintenance tracking when connectivity is available
 
-## 4. End of Sail – Check Out
+## 4. End of the Reservation
 
 1. Member returns to the marina
-2. Opens the app and taps “Check Out”
-3. Optionally enters final engine hours and any closing notes
-4. App notifies the backend; pairing token is revoked
-5. Terminal returns to the “Available” or public status screen
-6. Next member can pair when their booking becomes active
+2. Opens the companion and completes check-out (or simply lets the booking window end)
+3. Optionally records final engine hours or closing notes
+4. Pairing is released
+5. Terminal returns to its ready state for the next member
 
-## 5. Maintenance Volunteer
+## 5. Maintenance or Training Use
 
-- Can pair with elevated privileges (if implemented) or simply use the terminal in read-only mode
-- Sees recent issue reports and hour logs for that boat
-- Can clear or acknowledge items as they are resolved
+- Volunteers or instructors can still view live instruments on the terminal at any time
+- Elevated or longer-lived access can be added later if the club finds it useful
+- The system is designed to stay out of the way when it is not needed
 
-## 6. No Phone / Phone Dead
+## 6. Phone Unavailable
 
-- Terminal still shows live instruments (core value preserved)
-- Check-in/out can fall back to the existing manual process
-- Pairing is a convenience, not a hard requirement for basic use of the boat
+- The terminal continues to show live instrument data
+- Booking and check-out can continue through the existing web process
+- Pairing is a convenience that enhances the experience; it is not a requirement to use the boat
