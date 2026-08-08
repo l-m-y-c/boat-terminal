@@ -27,7 +27,7 @@
 
 - Small capacitive touchscreen running custom firmware
 - Powered from boat 12 V system
-- Reads NMEA data directly from the boat’s instrument network
+- Reads NMEA data via an **isolated** interface
 - Shows gauges, status, and pairing state
 - Acts as a Bluetooth LE peripheral (and optionally a local Wi-Fi access point)
 
@@ -35,7 +35,7 @@
 
 - Runs the LMYC companion app (or progressive web app)
 - Handles authentication against the club booking system
-- Performs the pairing ceremony with the terminal
+- Performs the secure pairing ceremony with the terminal
 - Provides cellular connectivity for check-in confirmation, log upload, and issue reporting
 - Can display richer information (charts, weather, manuals) that would be impractical on the small terminal
 
@@ -51,15 +51,17 @@
 1. **Phone does the heavy lifting** – maps, accounts, photos, cellular
 2. **Terminal stays simple and robust** – instruments + status + pairing
 3. **Pairing is temporary** – tied to the booking window
-4. **Offline-first for instruments** – NMEA display works without any network
-5. **Open and inspectable** – no black-box proprietary lock-in
+4. **Offline-first and pairing-independent for instruments** – live NMEA display must continue even if the token expires, the phone is lost, or the backend is unreachable
+5. **Bus safety first** – any NMEA 2000 connection uses a galvanically isolated interface with clean failure behaviour
+6. **Mutual authentication** – both the booking token and the physical terminal are verified
+7. **Open and inspectable** – no black-box proprietary lock-in; more than one person must be able to maintain it
 
 ## Data Flow Summary
 
 | Data | Source | Destination | Path |
 |------|--------|-------------|------|
-| Depth, wind, speed, etc. | Boat instruments | Terminal screen | NMEA direct |
+| Depth, wind, speed, etc. | Boat instruments | Terminal screen | NMEA direct (isolated) |
 | Booking status | Club backend | Terminal + Phone | Via phone after pairing |
 | Check-in / check-out | Phone | Club backend | Cellular |
 | Engine hours / issues | Terminal or Phone | Club backend | Via phone |
-| Pairing token | Club backend | Phone → Terminal | BLE or local Wi-Fi |
+| Pairing token | Club backend | Phone → Terminal | BLE (LE Secure Connections) |
