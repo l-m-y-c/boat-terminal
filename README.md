@@ -68,14 +68,17 @@ The terminal may still listen to waypoint and autopilot data and offer basic nav
 | [11 – Open Questions](docs/11-open-questions.md) | Go/no-go items and discussion points |
 | [12 – Next Steps](docs/12-next-steps.md) | Careful path forward |
 | [13 – Risks & Mitigations](docs/13-risks-and-mitigations.md) | Serious risks and how they will be handled |
+| [14 – Prototype Hardware](docs/14-prototype-hardware.md) | **Ordered board + getting started guide** |
 
 ---
 
 ### Current Status
 
-This is a **proposal only**.  
-No hardware has been ordered and no software has been written yet.  
-The documents now include explicit treatment of NMEA bus safety, pairing security, firmware maintenance ownership, navigation scope, and other issues that must be resolved before any boat is modified.
+**Hardware ordered:** Waveshare ESP32-S3-Touch-LCD-7 (7" with CAN + RS485).  
+See [14 – Prototype Hardware](docs/14-prototype-hardware.md) for documentation links and first steps.
+
+Software development has not yet started.  
+The documents still treat NMEA bus safety, pairing security, and firmware ownership as required items before any boat is modified.
 
 ---
 
