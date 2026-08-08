@@ -1,29 +1,34 @@
 # 11 – Open Questions for Club Discussion
 
-These items need input from members, the Board, and technical volunteers before significant development begins.
+These items need input from members, the Board, and technical volunteers. Several are now considered **go / no-go** items rather than optional discussion points.
+
+## Go / No-Go Items (Resolve Before Phase 1 Hardware)
+
+1. **Who owns ongoing firmware and hardware maintenance?**  
+   A single-volunteer bus factor is unacceptable once devices are wired into instrument networks. What is the succession plan?
+
+2. **Is the Board comfortable with limited, isolated modifications to boat instrument networks?**  
+   This has potential insurance and liability implications.
+
+3. **Which boat is the best pilot candidate?**  
+   Preference for a vessel with clean, well-documented NMEA access and a suitable cabin location.
 
 ## Product & Experience
 
-1. Is a 4.3" screen large enough, or should we standardise on 7" for better gauge visibility?
-2. How important is a fully native phone app versus a good Progressive Web App?
-3. Should the terminal show member name while paired, or just “Booked” for privacy?
-4. Do we want pre-departure / post-sail digital checklists in v1?
+4. Is a 4.3" screen large enough, or should we standardise on 7"?
+5. How important is a fully native phone app versus a good Progressive Web App?
+6. Should the terminal show the member’s name while paired, or simply “Booked”?
+7. Do we want light digital checklists in the first version?
 
 ## Technical
 
-5. Which boats have the cleanest NMEA 0183 or NMEA 2000 access for a pilot?
-6. Do we prefer direct NMEA or a Signal K intermediate layer from the start?
-7. How should elevated access for maintenance volunteers work?
+8. Direct NMEA versus an intermediate Signal K layer — still prefer direct for v1?
+9. How should elevated access for maintenance volunteers work?
+10. What is the preferred firmware update path (local USB vs marina Wi-Fi)?
 
-## Process & Governance
+## Process
 
-8. Who will own the ongoing maintenance of the firmware and app?
-9. How do we handle boats that temporarily have no working instrument network?
-10. Should pairing be mandatory for check-out, or always optional?
+11. How do we handle boats that have little or no usable instrument data?
+12. Should pairing be encouraged but always optional for using the boat?
 
-## Future
-
-11. Is there interest in eventually supporting outdoor / helm-capable displays?
-12. Should the system ever support guest or training-mode restricted access?
-
-Please add new questions as GitHub Issues or raise them in meetings.
+Please add further questions as GitHub Issues or raise them in meetings.

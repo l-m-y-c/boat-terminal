@@ -1,57 +1,61 @@
 # 10 – Costs & Rollout
 
-## Hardware Cost per Boat (Estimate)
+## Hardware Cost per Boat (Revised Estimate)
 
 | Item | Low | High |
 |------|-----|------|
 | Waveshare terminal | $55 | $80 |
+| Isolated NMEA 2000 interface | $40 | $90 |
 | Enclosure & mounting | $15 | $35 |
-| Power & NMEA cabling | $20 | $50 |
-| Misc (fuse, labels, etc.) | $10 | $15 |
-| **Total** | **≈ $100** | **≈ $180** |
+| Power & fusing | $10 | $20 |
+| Certified drop cable / adapters | $25 | $60 |
+| Misc | $10 | $15 |
+| **Hardware subtotal** | **≈ $155** | **≈ $300** |
 
-A five-boat fleet would be roughly **CAD $500–900** in hardware.
+## Additional Costs Not in the BOM
 
-## Development Effort
+| Item | Notes |
+|------|-------|
+| Install & commissioning labour | Volunteer time; allow half a day to a full day per boat depending on access |
+| Survey of existing NMEA wiring | Required before hardware is ordered for that boat |
+| Possible small parts unique to each hull | Terminals, adapters, extra cable |
+| Future firmware maintenance | Ongoing volunteer effort |
 
-- Firmware (terminal): moderate — NMEA + LVGL UI + BLE pairing
-- Phone app / PWA: moderate — authentication, pairing, forms
-- Backend changes: small — a few new endpoints
-- Documentation & testing: ongoing volunteer effort
+A five-boat fleet is therefore roughly **CAD $800–1,500** in hardware plus volunteer installation time.
 
-Most of the work can be done by interested technical members.  
-No large external contract is required for a pilot.
+## Boat Variability
+
+Not every boat in the fleet has the same instrument network:
+
+- Some may offer clean NMEA 2000
+- Some may only have NMEA 0183
+- Some may have limited or no networked instruments
+
+The pilot must begin with a boat whose network is well understood. Later boats may receive a reduced feature set if full NMEA data is not practical.
 
 ## Suggested Rollout Phases
 
 ### Phase 0 – Proposal Review (Current)
-- Club members and Board review this documentation
-- Collect feedback and decide whether to proceed
+- Membership and Board review the documentation
+- Critical risks (NMEA isolation, pairing security, maintenance ownership) are discussed
+- Decision whether to form a working group
 
 ### Phase 1 – Single Boat Pilot
-- Choose one boat with reasonable instrument access
-- Install one terminal
-- Implement basic NMEA display + simple pairing
-- Run for 2–3 months with a small group of volunteer members
-- Gather real-world feedback
+- Select one boat with accessible, well-understood instrument data
+- Design and test the isolated NMEA interface on the bench first
+- Implement basic instrument display + secure pairing
+- Run for 2–3 months with volunteer members
+- Explicitly test token-expiry and offline behaviour
 
-### Phase 2 – Refine & Expand
-- Improve UI and reliability based on pilot results
-- Add issue reporting and hour logging
-- Roll out to remaining boats if the pilot is successful
+### Phase 2 – Refine & Decide
+- Incorporate pilot feedback
+- Confirm firmware update process works in practice
+- Decide whether to proceed to additional boats
 
-### Phase 3 – Nice-to-Haves
-- Richer phone features
-- Maintenance dashboards
-- Optional Signal K integration
+### Phase 3 – Controlled Expansion
+- Roll out only to boats that have been surveyed
+- Maintain documentation of each installation
 
 ## Risk vs Reward
 
-| Risk | Mitigation |
-|------|------------|
-| Members find pairing awkward | Keep manual fallback; iterate on UX |
-| Hardware fails in cabin environment | Choose robust board; simple replaceable design |
-| Development stalls | Keep scope small; pilot first |
-| Low adoption | Demonstrate clear value (instruments + easy logging) |
-
-The financial risk is low. The main investment is volunteer time.
+The financial outlay remains modest. The larger risks are technical (bus safety) and organisational (long-term maintenance). Both are addressed in the Risks & Mitigations document and must be resolved before Phase 1 hardware is permanently installed.

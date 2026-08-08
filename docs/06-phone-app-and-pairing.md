@@ -4,7 +4,7 @@
 
 The phone remains the member’s primary personal interface to LMYC. It already works well for viewing the calendar, managing bookings, and accessing boat information through the club’s web system.
 
-The boat terminal simply adds a local, always-available companion on the vessel itself.
+The boat terminal adds a local, always-available companion on the vessel itself.
 
 ### Responsibilities of the Phone
 
@@ -17,7 +17,7 @@ The boat terminal simply adds a local, always-available companion on the vessel 
 
 ### What the Phone Does *Not* Have to Do
 
-- Be the primary instrument display while sailing (the terminal handles that)
+- Be the primary instrument display while sailing
 - Stay permanently connected to the terminal
 - Have perfect cellular coverage while under way
 
@@ -25,44 +25,75 @@ The boat terminal simply adds a local, always-available companion on the vessel 
 
 1. Member has an active booking in the existing LMYC web system
 2. Arrives at the boat and opens the LMYC companion (app or progressive web app)
-3. Confirms the booking and taps “Pair with Boat”
-4. The system issues a short-lived pairing token linked to that reservation
-5. Member pairs with the terminal (QR code or Bluetooth)
-6. Terminal shows the booking is active and begins displaying live instrument data
-7. While paired, the member can optionally send notes or observations
-8. At the end of the reservation the pairing is released and the terminal returns to its ready state
+3. Confirms the booking and initiates pairing
+4. The backend issues a short-lived, boat-specific pairing token
+5. Member completes pairing with the terminal (QR + BLE recommended)
+6. Terminal and phone mutually authenticate
+7. Terminal shows the booking is active and continues displaying live instrument data
+8. At the end of the reservation (or on explicit check-out) the pairing is released
 
 This flow is intended to feel like a natural extension of the booking the member already made online.
 
-## Pairing Technologies
+## Security Requirements for Pairing
 
-| Method | Pros | Cons | Recommendation |
-|--------|------|------|----------------|
-| Bluetooth LE | Low power, works without Wi-Fi | Slightly more complex | **Primary** |
-| Local Wi-Fi (terminal as AP) | Simple data transfer | Higher power use | Secondary / fallback |
-| QR code | Very simple bootstrap | Best combined with a backend token | Useful starting point |
+“Standard BLE encryption” is not sufficient. The following are required:
+
+### 1. Mutual Authentication
+- The **token** proves the member has a valid booking for this boat.
+- The **terminal** must also prove its identity so a member cannot be tricked by a spoofed device advertising as “Boat X” in the marina.
+
+### 2. Recommended BLE Approach
+- Use **LE Secure Connections**
+- Prefer Out-of-Band (OOB) pairing where the QR code displayed on the terminal (or a short numeric code) supplies the OOB data
+- Avoid “Just Works” pairing for any token exchange that matters
+
+### 3. Terminal Identity
+- Each terminal is provisioned at build / install time with a unique device key or certificate
+- The phone (or backend) can verify that it is talking to the expected physical terminal for that boat
+
+### 4. Token Properties
+- Issued only by the club backend
+- Bound to a specific boat and booking window
+- Short-lived (booking duration + modest grace period)
+- Single-use or tightly limited replay window
+- Securely forgotten by the terminal on expiry or check-out
+
+## Instrument Display Independence (Critical Edge Case)
+
+**The live instrument display on the terminal must never depend on a valid pairing token.**
+
+- Token expiry, check-out, or loss of the phone must not blank or disable depth, wind, speed, or other instrument data.
+- Pairing only controls booking status, member name display, and the ability to push logs from the terminal.
+- This is a hard requirement, not a preference. A sailor mid-passage must not lose instruments because a booking window ended.
+
+## Advertising & Discovery Behaviour
+
+- The terminal should advertise minimally.
+- Detailed booking or occupancy state must not be broadcast in the clear.
+- Full state is revealed only after a successful handshake.
+- This prevents passive observers in the marina from easily determining which boats are currently unoccupied.
 
 ## Suggested Feature Set (v1)
 
 **Core**
 - Login using existing LMYC credentials
 - View and act on current bookings
-- Pair / un-pair with the boat terminal
+- Secure pair / un-pair with the boat terminal
 - Simple observation or condition note (text + optional photo)
 - Engine hour entry
 
 **Useful additions**
 - Mirror of selected live instrument values while paired
-- Boat-specific notes and contacts already maintained by the club
+- Boat-specific notes already maintained by the club
 - Light pre-departure or post-sail checklist
 
 **Later possibilities**
-- Deeper integration with the existing maintenance items view
+- Deeper integration with existing maintenance items
 - Offline chart support
 - Weather overlays
 
 ## Offline Behaviour
 
-- The terminal’s instrument display never depends on the phone or cellular coverage
-- A previously issued pairing token can remain valid for the booking window
-- Any notes the member creates can be queued on the phone and uploaded when connectivity is available
+- Instrument display never depends on the phone or cellular coverage
+- A previously issued pairing token remains valid until its natural expiry
+- Notes created on the phone can be queued and uploaded when connectivity returns

@@ -7,14 +7,14 @@ The terminal is designed to accept both major marine data standards:
 ### NMEA 0183
 - Serial protocol (typically 4800 or 38400 baud)
 - Common on older instruments and many depth / wind / GPS units
-- Connected via the board’s RS485 or UART interface
-- Easy to parse with existing open-source libraries
+- Connected via isolated RS-422 / RS-485 or opto-isolated UART
+- Relatively low risk to the rest of the boat’s systems
 
 ### NMEA 2000
 - CAN-bus based, modern standard
 - Preferred on newer boats
-- The Waveshare board includes a CAN interface
-- Mature open-source library ecosystem (NMEA2000 by ttlappalainen and community forks)
+- Requires careful, isolated connection (see safety section below)
+- Mature open-source library ecosystem exists (`NMEA2000` + community ESP32 ports)
 
 ## What Data Should Be Displayed?
 
@@ -25,8 +25,8 @@ The terminal is designed to accept both major marine data standards:
 - Wind speed & direction (apparent / true if available)
 - Heading or COG
 - GPS position (lat/lon) — mainly for confirmation
-- Battery voltage / house bank status (if available on the network)
-- Engine hours or RPM (if the boat has an engine network connection)
+- Battery voltage / house bank status (if available)
+- Engine hours or RPM (if present on the network)
 
 **Nice-to-have later:**
 - Water temperature
@@ -38,26 +38,58 @@ The terminal is designed to accept both major marine data standards:
 
 ### Option A – Direct NMEA to Terminal (Recommended for v1)
 - Terminal talks directly to the boat’s NMEA network
-- Simplest, lowest latency, works completely offline
-- Phone only needs instrument data if the member wants to mirror it
+- Lowest latency, works completely offline
+- Simplest software path
 
 ### Option B – Signal K Bridge
-- A small Signal K server (could even run on the same ESP32 or a separate Raspberry Pi) normalises all data
-- Terminal becomes a Signal K consumer
-- More flexible for future expansion, slightly more complex
+- Intermediate Signal K server normalises data
+- More flexible for future multi-display or richer integrations
+- Adds complexity and another component to maintain
 
-**Proposal:** Start with **Option A** (direct NMEA).  
-Add Signal K later if the club wants richer integration or multiple displays.
+**Proposal:** Start with **Option A**. Revisit Signal K only if the pilot demonstrates clear need.
+
+---
+
+## NMEA 2000 Bus Safety Requirements (Critical)
+
+Connecting any new device to a boat’s NMEA 2000 backbone is the highest-risk part of this project. The backbone often carries data used by the autopilot, chartplotter, and engine systems. A poorly designed node can degrade or disable the entire segment.
+
+### Mandatory Requirements Before Any NMEA 2000 Connection
+
+1. **Galvanic isolation**  
+   The terminal must not share a common ground or power reference with the NMEA 2000 bus. An isolated CAN transceiver (or a purpose-built marine NMEA 2000 interface module) is required. The ESP32’s onboard CAN controller alone is insufficient.
+
+2. **Clean failure mode**  
+   If the terminal loses power, locks up, or is removed, it must drop off the bus cleanly. It must never load the bus, inject noise, or hold the bus in a dominant state.
+
+3. **Load Equivalency Number (LEN)**  
+   The interface must declare and respect a realistic LEN. The total LEN on any segment must stay within NMEA 2000 limits.
+
+4. **Certified or high-quality drop cable**  
+   Prefer a proper Micro-C drop cable and tee rather than DIY wiring. This reduces installation errors and improves reliability.
+
+5. **No bus power draw from the backbone**  
+   The terminal should be powered from the boat’s 12 V system, not from the NMEA 2000 net power pair, unless a carefully designed and approved interface is used.
+
+### Liability Note
+
+Modifying a vessel’s instrument network has insurance and liability implications. Before any permanent installation on a club boat, the Board should be informed and, if appropriate, the club’s insurer consulted. This is not purely a technical decision.
+
+### Pilot Recommendation
+
+For the first pilot boat, prefer a vessel that already has clean NMEA 0183 outputs or a well-documented NMEA 2000 backbone with available drop points. Avoid boats where the network is poorly understood or heavily loaded until the isolated interface has been proven.
+
+---
 
 ## Physical Connection Notes
 
-- Most club boats already have some form of instrument network
-- Installation will require identifying the existing NMEA 0183 talker or NMEA 2000 backbone
-- A simple drop cable or tee connector is usually sufficient
-- Isolation and proper termination remain important on NMEA 2000
+- Installation requires identifying the existing talker (0183) or backbone (2000)
+- Keep runs short
+- Use proper shielding and strain relief
+- Document the connection point and any LEN contribution for future maintainers
 
 ## Library Support (for later implementation)
 
-- NMEA 0183: multiple mature Arduino / ESP-IDF parsers
-- NMEA 2000: `NMEA2000` + `NMEA2000_esp32` libraries are production-proven on ESP32
-- Several existing open projects already run NMEA 2000 instrument displays on Waveshare ESP32-S3 boards
+- NMEA 0183: multiple mature parsers exist for ESP-IDF / Arduino
+- NMEA 2000: `NMEA2000` library family is the de-facto open standard on ESP32
+- Several existing open projects already drive instrument displays on Waveshare ESP32-S3 hardware
