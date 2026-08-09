@@ -68,7 +68,8 @@ The terminal may still listen to waypoint and autopilot data and offer basic nav
 | [11 – Open Questions](docs/11-open-questions.md) | Go/no-go items and discussion points |
 | [12 – Next Steps](docs/12-next-steps.md) | Careful path forward |
 | [13 – Risks & Mitigations](docs/13-risks-and-mitigations.md) | Serious risks and how they will be handled |
-| [14 – Prototype Hardware](docs/14-prototype-hardware.md) | **Ordered board + getting started guide** |
+| [14 – Prototype Hardware](docs/14-prototype-hardware.md) | Ordered board + getting started guide |
+| [15 – Useful Resources](docs/15-useful-resources.md) | **Curated NMEA 0183 / 2000 guides and references** |
 
 ---
 
@@ -76,6 +77,8 @@ The terminal may still listen to waypoint and autopilot data and offer basic nav
 
 **Hardware ordered:** Waveshare ESP32-S3-Touch-LCD-7 (7" with CAN + RS485).  
 See [14 – Prototype Hardware](docs/14-prototype-hardware.md) for documentation links and first steps.
+
+A curated list of high-quality NMEA references has been started in [15 – Useful Resources](docs/15-useful-resources.md).
 
 Software development has not yet started.  
 The documents still treat NMEA bus safety, pairing security, and firmware ownership as required items before any boat is modified.
