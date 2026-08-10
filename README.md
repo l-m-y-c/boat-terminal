@@ -69,7 +69,8 @@ The terminal may still listen to waypoint and autopilot data and offer basic nav
 | [12 – Next Steps](docs/12-next-steps.md) | Careful path forward |
 | [13 – Risks & Mitigations](docs/13-risks-and-mitigations.md) | Serious risks and how they will be handled |
 | [14 – Prototype Hardware](docs/14-prototype-hardware.md) | Ordered board + getting started guide |
-| [15 – Useful Resources](docs/15-useful-resources.md) | **Curated NMEA 0183 / 2000 guides and references** |
+| [15 – Useful Resources](docs/15-useful-resources.md) | Curated NMEA 0183 / 2000 guides and related projects |
+| [16 – Related Projects: Tritium](docs/16-related-projects-tritium.md) | **Deep dive into tritium.co.uk ESP32 marine projects** |
 
 ---
 
@@ -78,7 +79,8 @@ The terminal may still listen to waypoint and autopilot data and offer basic nav
 **Hardware ordered:** Waveshare ESP32-S3-Touch-LCD-7 (7" with CAN + RS485).  
 See [14 – Prototype Hardware](docs/14-prototype-hardware.md) for documentation links and first steps.
 
-A curated list of high-quality NMEA references has been started in [15 – Useful Resources](docs/15-useful-resources.md).
+A curated list of high-quality NMEA references is in [15 – Useful Resources](docs/15-useful-resources.md).  
+A detailed analysis of the Tritium ESP32 marine projects (including closed-source status and transferable design lessons) is in [16 – Related Projects: Tritium](docs/16-related-projects-tritium.md).
 
 Software development has not yet started.  
 The documents still treat NMEA bus safety, pairing security, and firmware ownership as required items before any boat is modified.
