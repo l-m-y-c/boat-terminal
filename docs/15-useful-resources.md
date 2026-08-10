@@ -2,7 +2,7 @@
 
 Curated reference material for the LMYC Boat Terminal project.
 
-Focus is on practical understanding of **NMEA 0183**, **NMEA 2000**, wiring, isolation, and marine networking so that club members and developers can make good decisions.
+Focus is on practical understanding of **NMEA 0183**, **NMEA 2000**, wiring, isolation, marine networking, and related open projects.
 
 ---
 
@@ -48,6 +48,19 @@ Focus is on practical understanding of **NMEA 0183**, **NMEA 2000**, wiring, iso
 
 ---
 
+## Related Open / Semi-Open Projects
+
+| Project | Relevance |
+|---------|-----------|
+| **[Tritium](https://tritium.co.uk/projects)** | ESP32 NMEA WiFi bridge + touchscreen AIS display. Excellent UX patterns. **Firmware is closed-source** — see [doc 16](16-related-projects-tritium.md) for full analysis. |
+| [Sailor Hat ESP32 (Hat Labs)](https://docs.hatlabs.fi/sh-esp32/) | Open hardware ESP32 board designed for marine 12/24 V systems with NMEA 2000 compatibility. |
+| [Signal K](https://signalk.org/) | Open marine data exchange format and server ecosystem. Strong long-term integration candidate. |
+| [canboat](https://github.com/canboat/canboat) | NMEA 2000 PGN decoder utilities (reference implementation). |
+| [NMEA2000 library (ttlappalainen)](https://github.com/ttlappalainen/NMEA2000) | Widely used ESP32 / Arduino NMEA 2000 library. |
+| [Boatingwiththebaileys Marine Displays](https://github.com/Boatingwiththebaileys/Marine-Displays) | Open-source ESP32 marine instrument displays using Signal K / NMEA 2000. |
+
+---
+
 ## Key Concepts We Care About for the Boat Terminal
 
 - **NMEA 0183** is fundamentally single-talker / multi-listener. Multiple talkers require a multiplexer or careful timing.
@@ -55,6 +68,7 @@ Focus is on practical understanding of **NMEA 0183**, **NMEA 2000**, wiring, iso
 - Differential signalling (RS-422/RS-485 style) is preferred for noise immunity.
 - Galvanic isolation is strongly recommended when connecting any new device to an existing boat network.
 - Always respect backbone length, drop length, and termination rules on NMEA 2000.
+- WiFi NMEA (UDP 2000 / TCP 10110) is a practical and widely used complement to hard-wired interfaces.
 
 ---
 
@@ -63,6 +77,7 @@ Focus is on practical understanding of **NMEA 0183**, **NMEA 2000**, wiring, iso
 - The prototype board (ESP32-S3-Touch-LCD-7) has both **CAN** (for NMEA 2000) and **RS485** (for NMEA 0183).
 - For permanent installation we will still require proper isolation on both interfaces.
 - Listening is straightforward. Transmitting onto a live boat network needs more care (especially on NMEA 0183).
+- Supporting **both** hard-wired and WiFi NMEA input is recommended (see Tritium analysis).
 
 ---
 
