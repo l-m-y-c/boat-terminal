@@ -6,6 +6,11 @@ LMYC already has a clear, web-based online booking system. Members log in, view 
 
 The boat terminal project is designed to **complement** this existing digital foundation rather than replace it. The aim is to extend the same seamless experience from the web browser onto the boat itself, while solving the everyday operational needs of a shared fleet.
 
+## Core Design Principle
+
+**The phone is the powerhouse and the primary user interface.**  
+On-boat devices provide presence, persistence, glanceability, and local interaction that does not require the phone to stay unlocked or in hand.
+
 ## What the System Is For
 
 The primary purpose is to serve the **co-operative**:
@@ -14,7 +19,7 @@ The primary purpose is to serve the **co-operative**:
 - Act as the **maintenance book** (problem reporting + visibility of open and scheduled work)
 - Act as a **boat-specific reference manual** that stays with the vessel
 - Provide a clean digital handover when a member arrives for their booking
-- Show live instrument data in the cabin as a convenient secondary benefit
+- Show live instrument data and useful status information without forcing constant phone use
 
 ## Opportunities to Enhance the On-Board Experience
 
@@ -30,8 +35,8 @@ The primary purpose is to serve the **co-operative**:
 4. **Boat knowledge that stays with the boat**  
    Quick reference pages (systems overview, quirks, location of gear, starting procedures, etc.) reduce reliance on tribal knowledge.
 
-5. **Live instruments in the cabin**  
-   Depth, wind, speed, battery and other NMEA data are available at a glance without needing to unlock a phone.
+5. **Live instruments + persistent status**  
+   Depth, wind, speed, battery and other NMEA data are available at a glance. A large, low-power display can hold an overview (including map context) for long periods.
 
 6. **Keep the system open and affordable**  
    Inexpensive, well-supported hardware and open software allow the whole fleet to be equipped without large capital outlay.
@@ -45,12 +50,14 @@ The primary purpose is to serve the **co-operative**:
 - Make it easy for members to report observations and log hours while on board
 - Keep total cost per boat low enough that the club can equip the whole fleet
 - Remain maintainable by more than one club volunteer
+- Keep the member’s phone as the rich, primary interactive surface
 
 ### Secondary Goals
 
-- Display live NMEA instrument data reliably
+- Display live NMEA instrument data reliably on a fast interactive screen
+- Provide a large, daylight-readable, ultra-low-power status / overview board
 - Support simple checklists and boat-specific notes
-- Allow basic navigation *awareness* (see Non-Goals below)
+- Allow basic navigation *awareness* and occasional high-quality map overviews (see Non-Goals)
 - Work offline for core functions (cellular only needed for pairing and uploading logs)
 
 ### Non-Goals (Explicitly Out of Scope)
@@ -63,20 +70,20 @@ Members are better served by continuing to trust a professional chartplotter cor
 
 Therefore the following remain out of scope:
 
-- Full chartplotting or route planning on the terminal
+- Full interactive chartplotting or route planning on either on-boat display
 - Acting as the primary navigation system
 - Sending commands to the autopilot
 - Replacing the official logbook or any legal requirements
 - Real-time tracking of boats by the club while under way
-- High-brightness outdoor / helm displays (cabin focus first)
+- Attempting fluid “moving map” animation on the E-Ink panel
 
 ### Allowed Navigation-Related Features
 
-While the terminal will not become a chartplotter, it **may**:
+While neither on-boat display will become a chartplotter, the system **may**:
 
 - Listen to (snoop on) NMEA data including active waypoints, routes, and autopilot status
-- Display basic navigation awareness (current waypoint, distance, bearing, cross-track error, simple track history)
-- Show limited map context or weather information when it adds value without pretending to be the primary navigation tool
+- Display basic navigation awareness on the interactive terminal
+- Push high-quality static or slowly updating map / route overviews from the phone to the large E-Ink board (on demand or every 30–60 seconds). At typical club speeds (5–7 kn) and the ranges shown on such overviews, this update rate is entirely practical.
 
 ## Success Criteria for a Pilot
 
@@ -86,5 +93,6 @@ A successful pilot on one boat would demonstrate:
 - Smooth QR-based pairing that feels like a natural extension of the existing booking process
 - Useful boat-specific reference information available at the terminal
 - Live instrument data that remains available even if pairing expires
-- Hardware that is practical and reliable in normal cabin conditions
+- A large, readable status / overview board that stays useful with infrequent updates
+- Hardware that is practical and reliable in normal cabin (and optionally protected outdoor) conditions
 - Clear evidence that the system helps the co-operative rather than adding complexity

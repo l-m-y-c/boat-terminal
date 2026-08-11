@@ -1,78 +1,94 @@
 # 04 – Hardware
 
-## Recommended Boat Terminal
+## Overview of the On-Boat Hardware Mix
 
-### Primary Candidate: Waveshare ESP32-S3-Touch-LCD-4.3B
+The project now uses two complementary displays plus the member’s phone:
+
+| Role | Hardware | Key characteristics |
+|------|----------|---------------------|
+| **Interactive cabin terminal** | Waveshare ESP32-S3-Touch-LCD-7 (ordered) | Fast colour capacitive touch, CAN + RS485, cabin use |
+| **Persistent status / overview board** | 13.3" Spectra 6 E-Ink + XIAO EE02 | 1200×1600, 6-colour, excellent daylight, ultra-low power when static, battery capable |
+| **Primary UI & compute** | Member’s phone | Rich maps, forms, photos, cellular |
+| **Optional mesh experiments** | XIAO ESP32S3 + Wio-SX1262 | LoRa / Meshtastic |
+
+## 1. Interactive Cabin Terminal (Primary)
+
+**Ordered prototype:** Waveshare ESP32-S3-Touch-LCD-7
 
 | Feature | Specification | Why it matters |
 |---------|---------------|----------------|
-| Display | 4.3" 800×480 capacitive touch | Readable in cabin, good enough for gauges + menus |
-| Processor | ESP32-S3 dual-core 240 MHz | Sufficient for LVGL UI + NMEA parsing |
-| Memory | 16 MB Flash + 8 MB PSRAM | Comfortable for modern embedded GUI |
-| Power | 7–36 V DC wide input | Direct connection to boat 12 V system |
-| Interfaces | CAN, RS485, UART, isolated digital I/O | Base for NMEA 0183 and (with proper external transceiver) NMEA 2000 |
-| Connectivity | Wi-Fi + Bluetooth 5 LE | Pairing and optional local network |
-| Other | TF card, RTC, battery header | Logging and timekeeping |
+| Display | 7" capacitive touch, colour | Readable interaction for logbook, instruments, menus |
+| Processor | ESP32-S3 | Sufficient for LVGL UI + NMEA parsing |
+| Interfaces | CAN header + RS485 header | Base for NMEA 0183 and (with external isolation) NMEA 2000 |
+| Connectivity | Wi-Fi + Bluetooth 5 LE | Pairing and local network |
+| Power | 5 V (requires proper 12 V → 5 V conversion) | Boat power via buck converter + fuse |
 
-Approximate cost (2026): **CAD $50–70** for the board itself.
+**Critical requirement:** Any connection to a live NMEA 2000 backbone must use a proper galvanically isolated transceiver and clean failure behaviour. See [05 – NMEA Connectivity](05-nmea-connectivity.md).
 
-### Alternative / Larger Options from Waveshare
+Cabin installation for the interactive terminal (not weatherproof).
 
-| Model | Size | Notes |
-|-------|------|-------|
-| ESP32-S3-Touch-LCD-5 / 5B | 5" | Slightly more screen real estate |
-| ESP32-S3-Touch-LCD-7 / 7B | 7" | Better for multiple gauges at once; still cabin-friendly |
-| ESP32-S3-Touch-LCD-4 (square) | 4" 480×480 | Already used in several open marine projects |
+## 2. Persistent Status Board (13.3" E-Ink)
 
-**Recommendation for pilot:** Start with the **4.3B** or the **7"** version depending on available cabin space on the chosen pilot boat.
+**Ordered hardware:**
+- 13.3" Spectra™ 6 E-Ink panel (1200×1600, six colours)
+- XIAO ePaper Display Board EE02 (ESP32-S3 Plus)
 
-## Critical Hardware Requirement: Isolated NMEA 2000 Interface
+| Characteristic | Implication |
+|----------------|-------------|
+| Resolution 1200×1600 | Perfectly usable for charts and overview maps |
+| Six colours (B/W/R/Y/G/Blue) | Sufficient for clear navigational rendering when the phone prepares the image |
+| Full refresh typically 10–20 s | Not suitable for fluid interaction or live moving maps |
+| Near-zero power while static | Excellent for always-on status |
+| EE02 battery support (JST 2.0 mm) | Can run from a substantial lithium pack |
+| Operating temperature –20 °C to 70 °C | Suitable for protected outdoor mounting |
 
-The ESP32 board’s onboard CAN controller is **not** sufficient by itself for safe connection to a boat’s NMEA 2000 backbone.
+**Intended use**
+- Always-visible booking / occupancy status
+- Open maintenance summary
+- High-quality map or route overview pushed from the phone
+- Key instrument summary
 
-**Required for any NMEA 2000 installation:**
+**Update model**
+- Push on demand from the phone, **or**
+- Periodic refresh every 30–60 seconds
 
-- A proper **galvanically isolated** NMEA 2000 / CAN transceiver (e.g. ISO1050, or a purpose-built marine NMEA 2000 interface module)
-- Correct Load Equivalency Number (LEN) budgeting
-- Use of a certified or high-quality Micro-C drop cable / tee rather than ad-hoc wiring
-- Clear failure behaviour: if the terminal faults, it must drop off the bus cleanly and never load or disrupt the backbone
+At typical club speeds (5–7 kn) and the ranges shown on overview maps, this rate is practical and keeps the display useful without fighting the panel’s physics.
 
-This is a safety and liability consideration, not merely an engineering preference. See [05 – NMEA Connectivity](05-nmea-connectivity.md) for the full requirements.
+**Mounting options**
+- Cabin
+- Outside in a 3D-printed or commercial waterproof enclosure with clear front, large rechargeable lithium battery, and simple charging provision
 
-## Power & Installation
+The EE02 board already includes battery connector, charging support, and power switch, making a self-contained outdoor unit realistic.
 
-- Powered from the boat’s 12 V bus via a fused connection (inline fuse required)
-- The wide 7–36 V input removes the need for a separate regulator in most cases
-- Optional small LiPo or supercapacitor for clean shutdown and RTC backup
-- Mounting: simple bulkhead or surface mount with a 3D-printed or off-the-shelf enclosure
-- Cabin installation only for v1 (not weatherproof)
+## 3. Supporting Hardware
 
-## Cabling Summary
+| Item | Role |
+|------|------|
+| XIAO Expansion Board (Grove) | Prototyping, small OLED, extra sensors |
+| XIAO ESP32S3 + Wio-SX1262 | Optional LoRa / Meshtastic mesh experiments |
 
-| Standard | Recommended Approach |
-|----------|----------------------|
-| NMEA 0183 | Isolated RS-422 / RS-485 or opto-isolated UART |
-| NMEA 2000 | Isolated transceiver + certified Micro-C drop cable |
+## Power Notes
 
-Keep cable runs short. Use proper shielding and twisted pair where applicable.
+| Device | Power approach |
+|--------|----------------|
+| 7" interactive terminal | Boat 12 V → fused buck converter → 5 V |
+| 13.3" E-Ink + EE02 | Boat 12 V (via converter) **or** large Li battery for fully independent outdoor mounting |
+| Isolation | Required on any NMEA 2000 connection; recommended on NMEA 0183 for permanent installs |
 
-## Enclosure Considerations
+## Bill of Materials (Current Prototype Direction)
 
-- Not waterproof — cabin use only
-- Protect against accidental knocks and condensation
-- Provide clean strain relief for power and data cables
-- Optional matte film or light hood if glare is an issue
+| Item | Approx. Cost |
+|------|--------------|
+| Waveshare ESP32-S3-Touch-LCD-7 | Already ordered |
+| Isolated NMEA interface components | 40–90 CAD |
+| 13.3" Spectra 6 E-Ink panel | $149 USD |
+| XIAO EE02 driver board | $14.90 USD |
+| Enclosure + battery for E-Ink (optional outdoor) | TBD |
+| XIAO Expansion + LoRa kit | Already ordered |
 
-## Bill of Materials (Pilot Estimate per Boat)
+Exact per-boat production costing will be refined after the pilot.
 
-| Item | Approx. Cost (CAD) |
-|------|--------------------|
-| Waveshare ESP32-S3 terminal | 55–80 |
-| Isolated NMEA 2000 transceiver / interface | 40–90 |
-| Enclosure + mounting hardware | 15–30 |
-| Power cable + fuse + connectors | 10–20 |
-| Certified NMEA drop cable / adapters | 25–60 |
-| Miscellaneous (strain relief, labels, etc.) | 10–15 |
-| **Hardware total per boat** | **≈ $155–295** |
+## Enclosure Philosophy
 
-Install and commissioning time is additional (see Costs & Rollout). Costs improve with a small batch purchase.
+- **7" terminal:** Simple cabin enclosure, protection from knocks and condensation.
+- **13.3" E-Ink:** Can be a sealed, weather-resistant unit with large battery if mounted where it has clear view from the cockpit. E-ink’s readability in daylight and low static power make this attractive.
