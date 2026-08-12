@@ -1,0 +1,9 @@
+# PlatformIO build artifacts
+.pio/
+**/.pio/
+
+# Dependencies (managed by PlatformIO)
+libdeps/
+
+# macOS
+.DS_Store
