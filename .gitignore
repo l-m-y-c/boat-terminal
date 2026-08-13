@@ -5,5 +5,8 @@
 # Dependencies (managed by PlatformIO)
 libdeps/
 
+# Local secrets (never commit Wi-Fi / API credentials)
+firmware/src/secrets.h
+
 # macOS
 .DS_Store
