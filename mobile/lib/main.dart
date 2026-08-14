@@ -45,8 +45,11 @@ class _HomePageState extends State<HomePage> {
   StreamSubscription<Uri>? _linkSubscription;
 
   String? _lastDeepLink;
-  String? _pairingToken;
   String? _boatId;
+  String? _terminalId;
+  String? _bleName;
+  String? _oob;
+  String? _version;
 
   @override
   void initState() {
@@ -77,28 +80,25 @@ class _HomePageState extends State<HomePage> {
 
     if (uri.scheme != 'lmyc') return;
 
+    // Real terminal format (from firmware):
+    //   lmyc://pair?v=1&boat=BENCH-01&tid=WS7-001&ble=LMYC-D649&oob=226c6c38...
+    final params = uri.queryParameters;
+
     setState(() {
       _lastDeepLink = uri.toString();
-
-      // Expected forms (examples):
-      //   lmyc://pair?token=abc123&boat=deserata
-      //   lmyc://boat/deserata
-      if (uri.host == 'pair' || uri.pathSegments.contains('pair')) {
-        _pairingToken = uri.queryParameters['token'];
-        _boatId = uri.queryParameters['boat'];
-      } else if (uri.host.isNotEmpty) {
-        // lmyc://boatname or lmyc://boat/boatname
-        _boatId = uri.host;
-        if (uri.pathSegments.isNotEmpty) {
-          _boatId = uri.pathSegments.last;
-        }
-      }
+      _version = params['v'];
+      _boatId = params['boat'];
+      _terminalId = params['tid'];
+      _bleName = params['ble'];
+      _oob = params['oob'];
     });
 
-    if (_pairingToken != null && mounted) {
+    if (_oob != null && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Pairing token received for boat: ${_boatId ?? "unknown"}'),
+          content: Text(
+            'Pairing data received for ${_boatId ?? "unknown boat"}',
+          ),
           backgroundColor: const Color(0xFF00B4A6),
         ),
       );
@@ -111,8 +111,16 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
+  String _short(String? value, [int max = 16]) {
+    if (value == null || value.isEmpty) return '—';
+    if (value.length <= max) return value;
+    return '${value.substring(0, max)}…';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final hasPairingData = _oob != null;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('LMYC Boat Terminal'),
@@ -146,7 +154,7 @@ class _HomePageState extends State<HomePage> {
                       color: Colors.black54,
                     ),
               ),
-              const SizedBox(height: 40),
+              const SizedBox(height: 32),
 
               // Status card
               Card(
@@ -156,23 +164,48 @@ class _HomePageState extends State<HomePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Deep-link status',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
+                      Row(
+                        children: [
+                          Text(
+                            'Deep-link status',
+                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                          const Spacer(),
+                          if (hasPairingData)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF00B4A6).withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Text(
+                                'Ready to pair',
+                                style: TextStyle(
+                                  color: Color(0xFF00B4A6),
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ),
+                        ],
                       ),
-                      const SizedBox(height: 12),
-                      _statusRow('Last link', _lastDeepLink ?? '— none yet —'),
-                      const SizedBox(height: 8),
-                      _statusRow('Boat', _boatId ?? '—'),
-                      const SizedBox(height: 8),
-                      _statusRow(
-                        'Pairing token',
-                        _pairingToken != null
-                            ? '${_pairingToken!.substring(0, _pairingToken!.length.clamp(0, 12))}…'
-                            : '—',
-                      ),
+                      const SizedBox(height: 16),
+                      _statusRow('Boat', _boatId),
+                      _statusRow('Terminal', _terminalId),
+                      _statusRow('BLE name', _bleName),
+                      _statusRow('OOB data', _short(_oob, 20)),
+                      _statusRow('Version', _version),
+                      if (_lastDeepLink != null) ...[
+                        const SizedBox(height: 8),
+                        const Divider(),
+                        const SizedBox(height: 8),
+                        _statusRow('Raw link', _short(_lastDeepLink, 40)),
+                      ],
                     ],
                   ),
                 ),
@@ -181,7 +214,9 @@ class _HomePageState extends State<HomePage> {
               const Spacer(),
 
               Text(
-                'Scan the QR code shown on the boat terminal\nto open lmyc:// and begin pairing.',
+                hasPairingData
+                    ? 'Pairing data received from terminal.\nNext step: BLE handshake.'
+                    : 'Scan the QR code shown on the boat terminal\nto open lmyc:// and begin pairing.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Colors.black45,
@@ -195,27 +230,30 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _statusRow(String label, String value) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 110,
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontWeight: FontWeight.w500,
-              color: Colors.black54,
+  Widget _statusRow(String label, String? value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontWeight: FontWeight.w500,
+                color: Colors.black54,
+              ),
             ),
           ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(fontFamily: 'monospace'),
+          Expanded(
+            child: Text(
+              value ?? '—',
+              style: const TextStyle(fontFamily: 'monospace'),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
