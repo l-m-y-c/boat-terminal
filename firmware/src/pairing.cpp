@@ -7,8 +7,9 @@
  *  3. Phone writes "PAIR <oob_hex>" to the session characteristic
  *  4. Terminal verifies OOB matches the one minted for this boot → "Paired"
  *
- * Still not full LE Secure Connections; this is an application-level proof
- * that the phone actually scanned *this* terminal's QR (not a spoofed name).
+ * Bench security: open GATT link (no forced bond). Application-level OOB
+ * is the proof the phone scanned this terminal's QR. Full LE Secure
+ * Connections can replace this later.
  */
 
 #include "pairing.h"
@@ -102,12 +103,10 @@ class PairingServerCallbacks : public BLEServerCallbacks {
 class SessionCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *chr) override
     {
-        // Arduino-ESP32 BLE stack returns Arduino String from getValue()
         String value = chr->getValue();
         Serial.printf("BLE session write (%u bytes): %s\n",
                       static_cast<unsigned>(value.length()), value.c_str());
 
-        /* Expected: "PAIR <32-char-hex-oob>" */
         if (value.startsWith("PAIR ")) {
             String offered = value.substring(5);
             offered.trim();
@@ -143,32 +142,7 @@ class SessionCallbacks : public BLECharacteristicCallbacks {
     }
 };
 
-class PairingSecurityCallbacks : public BLESecurityCallbacks {
-    uint32_t onPassKeyRequest() override { return 0; }
-
-    void onPassKeyNotify(uint32_t pass_key) override
-    {
-        Serial.printf("BLE: passkey notify %u\n", static_cast<unsigned>(pass_key));
-    }
-
-    bool onSecurityRequest() override { return true; }
-
-    void onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl) override
-    {
-        if (cmpl.success) {
-            Serial.println("BLE: link encrypted (Just Works bond)");
-            /* Application-level Paired still requires OOB write */
-        } else {
-            g_status = "Pair failed";
-            Serial.printf("BLE: bond failed, reason=%u\n", cmpl.fail_reason);
-        }
-    }
-
-    bool onConfirmPIN(uint32_t /*pin*/) override { return true; }
-};
-
 static PairingServerCallbacks g_server_cb;
-static PairingSecurityCallbacks g_security_cb;
 static SessionCallbacks g_session_cb;
 
 static bool start_ble_peripheral(void)
@@ -176,14 +150,11 @@ static bool start_ble_peripheral(void)
     BLEDevice::init(g_ble_name);
     BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_ADV);
     BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_DEFAULT);
-    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT);
-    BLEDevice::setSecurityCallbacks(&g_security_cb);
 
-    BLESecurity *security = new BLESecurity();
-    security->setAuthenticationMode(ESP_LE_AUTH_BOND);
-    security->setCapability(ESP_IO_CAP_NONE);
-    security->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
-    security->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+    /* Bench: do not force bonding/encryption. Android often drops the link
+     * during Just-Works negotiation before discoverServices completes.
+     * Application OOB remains the real pairing proof. */
+    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_NONE);
 
     g_server = BLEDevice::createServer();
     g_server->setCallbacks(&g_server_cb);
@@ -200,7 +171,7 @@ static bool start_ble_peripheral(void)
     serial->setValue(LMYC_TERMINAL_ID);
     BLECharacteristic *fw = dis->createCharacteristic(
         BLEUUID((uint16_t)0x2A26), BLECharacteristic::PROPERTY_READ);
-    fw->setValue("bench-oob-v1");
+    fw->setValue("bench-oob-v2");
     dis->start();
 
     BLEService *svc = g_server->createService(kLmycServiceUuid);
@@ -237,7 +208,7 @@ static bool start_ble_peripheral(void)
     advertising->start();
 
     g_status = "Advertising";
-    Serial.printf("BLE: advertising as %s (GATT + OOB confirm)\n", g_ble_name);
+    Serial.printf("BLE: advertising as %s (open GATT + OOB confirm)\n", g_ble_name);
     return true;
 }
 

@@ -223,6 +223,28 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<List<BluetoothService>> _discoverWithRetry(BluetoothDevice device) async {
+    // Wait until the stack reports connected, then settle briefly.
+    await device.connectionState
+        .firstWhere((s) => s == BluetoothConnectionState.connected)
+        .timeout(const Duration(seconds: 10));
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+
+    try {
+      return await device.discoverServices();
+    } catch (e) {
+      debugPrint('discoverServices first attempt failed: $e — retrying');
+      if (!device.isConnected) {
+        await device.connect(
+          timeout: const Duration(seconds: 15),
+          autoConnect: false,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
+      return await device.discoverServices();
+    }
+  }
+
   Future<void> _connectAndConfirm(BluetoothDevice device) async {
     try {
       await _connSubscription?.cancel();
@@ -238,17 +260,32 @@ class _HomePageState extends State<HomePage> {
         }
       });
 
+      // Clear any stale Android bond that can poison reconnection
+      try {
+        await device.removeBond();
+      } catch (_) {}
+
       await device.connect(
         timeout: const Duration(seconds: 15),
         autoConnect: false,
       );
 
+      // Request a larger MTU when available (harmless if unsupported)
+      try {
+        await device.requestMtu(185);
+      } catch (_) {}
+
       setState(() {
         _blePhase = BlePhase.confirming;
+        _bleDetail = 'Connected — discovering services…';
+      });
+
+      final services = await _discoverWithRetry(device);
+
+      setState(() {
         _bleDetail = 'Connected — proving OOB from QR…';
       });
 
-      final services = await device.discoverServices();
       BluetoothCharacteristic? sessionChr;
       BluetoothCharacteristic? payloadChr;
 
@@ -271,17 +308,15 @@ class _HomePageState extends State<HomePage> {
         setState(() {
           _blePhase = BlePhase.failed;
           _bleDetail =
-              'Connected, but terminal has no session characteristic.\nFlash latest firmware.';
+              'Connected, but terminal has no session characteristic.\nFlash latest firmware (make flash).';
         });
         return;
       }
 
-      // Application-level proof: we scanned *this* QR
       final cmd = 'PAIR $_oob';
       await sessionChr.write(utf8.encode(cmd), withoutResponse: false);
 
-      // Small delay then read reply
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await Future<void>.delayed(const Duration(milliseconds: 250));
       final replyBytes = await sessionChr.read();
       final reply = utf8.decode(replyBytes).trim();
 
