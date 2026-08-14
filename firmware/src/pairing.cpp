@@ -7,9 +7,9 @@
  *  3. Phone writes "PAIR <oob_hex>" to the session characteristic
  *  4. Terminal verifies OOB matches the one minted for this boot → "Paired"
  *
- * Bench security: open GATT link (no forced bond). Application-level OOB
- * is the proof the phone scanned this terminal's QR. Full LE Secure
- * Connections can replace this later.
+ * Bench security: open GATT link (no forced bond/encryption callbacks).
+ * Application-level OOB is the proof the phone scanned this terminal's QR.
+ * Full LE Secure Connections can replace this later.
  */
 
 #include "pairing.h"
@@ -17,7 +17,6 @@
 #include <Arduino.h>
 #include <BLE2902.h>
 #include <BLEDevice.h>
-#include <BLESecurity.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <cstdio>
@@ -151,10 +150,8 @@ static bool start_ble_peripheral(void)
     BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_ADV);
     BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_DEFAULT);
 
-    /* Bench: do not force bonding/encryption. Android often drops the link
-     * during Just-Works negotiation before discoverServices completes.
-     * Application OOB remains the real pairing proof. */
-    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_NONE);
+    /* No BLESecurity / no setEncryptionLevel — open link for stable bench
+     * pairing. Application OOB remains the real proof of QR scan. */
 
     g_server = BLEDevice::createServer();
     g_server->setCallbacks(&g_server_cb);
