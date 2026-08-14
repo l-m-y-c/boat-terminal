@@ -1,13 +1,8 @@
 /**
- * QR + BLE pairing bootstrap with OOB confirmation (NimBLE).
+ * QR + BLE pairing bootstrap with OOB confirmation (NimBLE 1.4 API).
  *
- * Bluedroid was timing out Android GATT discovery under RGB+LVGL load.
- * NimBLE is lighter and answers ATT requests reliably on ESP32-S3.
- *
- * Flow:
- *  1. Advertise as LMYC-XXYY + show QR with oob=...
- *  2. Phone connects, discovers GATT, writes "PAIR <oob>"
- *  3. Terminal verifies OOB → status "Paired"
+ * Bluedroid timed out Android GATT discovery under RGB+LVGL load.
+ * NimBLE is lighter and answers ATT requests more reliably on ESP32-S3.
  */
 
 #include "pairing.h"
@@ -83,7 +78,7 @@ static bool oob_matches(const char *candidate)
 }
 
 class ServerCallbacks : public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer * /*server*/, NimBLEConnInfo & /*connInfo*/) override
+    void onConnect(NimBLEServer * /*pServer*/) override
     {
         g_connect_count++;
         g_confirmed = false;
@@ -94,21 +89,20 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         set_status(buf);
     }
 
-    void onDisconnect(NimBLEServer * /*server*/, NimBLEConnInfo & /*connInfo*/,
-                      int reason) override
+    void onDisconnect(NimBLEServer * /*pServer*/) override
     {
         g_confirmed = false;
         if (g_session_chr != nullptr) {
             g_session_chr->setValue("WAIT");
         }
         set_status("Advertising");
-        Serial.printf("BLE: disconnect reason=%d — advertising again\n", reason);
+        Serial.println("BLE: disconnected — advertising again");
         NimBLEDevice::startAdvertising();
     }
 };
 
 class SessionCallbacks : public NimBLECharacteristicCallbacks {
-    void onWrite(NimBLECharacteristic *chr, NimBLEConnInfo & /*connInfo*/) override
+    void onWrite(NimBLECharacteristic *chr) override
     {
         std::string value = chr->getValue();
         Serial.printf("BLE session write (%u bytes): %s\n",
@@ -141,7 +135,7 @@ class SessionCallbacks : public NimBLECharacteristicCallbacks {
         chr->setValue("ERR");
     }
 
-    void onRead(NimBLECharacteristic *chr, NimBLEConnInfo & /*connInfo*/) override
+    void onRead(NimBLECharacteristic *chr) override
     {
         Serial.println("BLE: session read");
         chr->setValue(g_confirmed ? "OK" : "WAIT");
@@ -149,7 +143,7 @@ class SessionCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 class PayloadCallbacks : public NimBLECharacteristicCallbacks {
-    void onRead(NimBLECharacteristic * /*chr*/, NimBLEConnInfo & /*connInfo*/) override
+    void onRead(NimBLECharacteristic * /*chr*/) override
     {
         Serial.println("BLE: payload read");
     }
@@ -167,7 +161,6 @@ static bool start_ble_peripheral(void)
     g_server = NimBLEDevice::createServer();
     g_server->setCallbacks(&g_server_cb);
 
-    /* Device Information Service */
     NimBLEService *dis = g_server->createService("180A");
     dis->createCharacteristic("2A29", NIMBLE_PROPERTY::READ)->setValue("LMYC");
     dis->createCharacteristic("2A24", NIMBLE_PROPERTY::READ)->setValue("Boat Terminal");
@@ -175,7 +168,6 @@ static bool start_ble_peripheral(void)
     dis->createCharacteristic("2A26", NIMBLE_PROPERTY::READ)->setValue("nimble-oob-v1");
     dis->start();
 
-    /* LMYC service */
     NimBLEService *svc = g_server->createService(kLmycServiceUuid);
 
     g_payload_chr = svc->createCharacteristic(
@@ -195,7 +187,7 @@ static bool start_ble_peripheral(void)
     adv->setName(g_ble_name);
     adv->addServiceUUID("180A");
     adv->addServiceUUID(kLmycServiceUuid);
-    adv->enableScanResponse(true);
+    adv->setScanResponse(true);
     adv->setMinInterval(0x40);
     adv->setMaxInterval(0x80);
     adv->start();
