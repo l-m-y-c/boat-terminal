@@ -224,11 +224,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<List<BluetoothService>> _discoverWithRetry(BluetoothDevice device) async {
-    // Wait until the stack reports connected, then settle briefly.
     await device.connectionState
         .firstWhere((s) => s == BluetoothConnectionState.connected)
         .timeout(const Duration(seconds: 10));
-    await Future<void>.delayed(const Duration(milliseconds: 400));
+    await Future<void>.delayed(const Duration(milliseconds: 500));
 
     try {
       return await device.discoverServices();
@@ -239,7 +238,7 @@ class _HomePageState extends State<HomePage> {
           timeout: const Duration(seconds: 15),
           autoConnect: false,
         );
-        await Future<void>.delayed(const Duration(milliseconds: 500));
+        await Future<void>.delayed(const Duration(milliseconds: 600));
       }
       return await device.discoverServices();
     }
@@ -260,7 +259,6 @@ class _HomePageState extends State<HomePage> {
         }
       });
 
-      // Clear any stale Android bond that can poison reconnection
       try {
         await device.removeBond();
       } catch (_) {}
@@ -270,10 +268,7 @@ class _HomePageState extends State<HomePage> {
         autoConnect: false,
       );
 
-      // Request a larger MTU when available (harmless if unsupported)
-      try {
-        await device.requestMtu(185);
-      } catch (_) {}
+      // Do not call requestMtu — it times out on this ESP32 stack and blocks pairing.
 
       setState(() {
         _blePhase = BlePhase.confirming;
