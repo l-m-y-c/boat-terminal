@@ -237,6 +237,7 @@ class _HomePageState extends State<HomePage> {
         await device.connect(
           timeout: const Duration(seconds: 15),
           autoConnect: false,
+          mtu: null,
         );
         await Future<void>.delayed(const Duration(milliseconds: 600));
       }
@@ -263,12 +264,14 @@ class _HomePageState extends State<HomePage> {
         await device.removeBond();
       } catch (_) {}
 
+      // CRITICAL: flutter_blue_plus defaults mtu: 512 which auto-calls
+      // requestMtu after connect. That negotiation drops this ESP32 link.
+      // Pass mtu: null to skip MTU negotiation entirely.
       await device.connect(
         timeout: const Duration(seconds: 15),
         autoConnect: false,
+        mtu: null,
       );
-
-      // Do not call requestMtu — it times out on this ESP32 stack and blocks pairing.
 
       setState(() {
         _blePhase = BlePhase.confirming;
