@@ -102,17 +102,16 @@ class PairingServerCallbacks : public BLEServerCallbacks {
 class SessionCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *chr) override
     {
-        std::string value = chr->getValue();
+        // Arduino-ESP32 BLE stack returns Arduino String from getValue()
+        String value = chr->getValue();
         Serial.printf("BLE session write (%u bytes): %s\n",
-                      static_cast<unsigned>(value.size()), value.c_str());
+                      static_cast<unsigned>(value.length()), value.c_str());
 
         /* Expected: "PAIR <32-char-hex-oob>" */
-        if (value.rfind("PAIR ", 0) == 0) {
-            const char *offered = value.c_str() + 5;
-            while (*offered == ' ') {
-                ++offered;
-            }
-            if (oob_matches(offered)) {
+        if (value.startsWith("PAIR ")) {
+            String offered = value.substring(5);
+            offered.trim();
+            if (oob_matches(offered.c_str())) {
                 g_confirmed = true;
                 g_status = "Paired";
                 chr->setValue("OK");
