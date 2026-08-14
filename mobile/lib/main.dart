@@ -127,7 +127,6 @@ class _HomePageState extends State<HomePage> {
       _bleDetail = 'Requesting Bluetooth permissions…';
     });
 
-    // Android 12+ needs SCAN + CONNECT; older needs location for scan
     final statuses = await [
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
@@ -136,9 +135,6 @@ class _HomePageState extends State<HomePage> {
 
     final scanOk = statuses[Permission.bluetoothScan]?.isGranted ?? true;
     final connectOk = statuses[Permission.bluetoothConnect]?.isGranted ?? true;
-    // Location is only strictly required on older Android; treat soft
-    final locationOk =
-        statuses[Permission.locationWhenInUse]?.isGranted ?? true;
 
     if (!scanOk || !connectOk) {
       setState(() {
@@ -147,11 +143,6 @@ class _HomePageState extends State<HomePage> {
             'Bluetooth permission denied. Enable it in system settings.';
       });
       return false;
-    }
-
-    if (!locationOk) {
-      // Warn but still try — Android 12+ can scan without location
-      debugPrint('Location permission not granted; scan may fail on older Android');
     }
 
     final adapterState = await FlutterBluePlus.adapterState.first;
@@ -187,7 +178,6 @@ class _HomePageState extends State<HomePage> {
     });
 
     try {
-      // Stop any previous scan
       await FlutterBluePlus.stopScan();
       await _scanSubscription?.cancel();
 
@@ -260,7 +250,6 @@ class _HomePageState extends State<HomePage> {
       });
 
       await device.connect(
-        license: License.free,
         timeout: const Duration(seconds: 15),
         autoConnect: false,
       );
@@ -288,8 +277,7 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) return;
       setState(() {
         _blePhase = BlePhase.connected;
-        _bleDetail =
-            'Connected to ${device.platformName}$extra';
+        _bleDetail = 'Connected to ${device.platformName}$extra';
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
