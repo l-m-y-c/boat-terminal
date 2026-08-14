@@ -223,32 +223,55 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<List<BluetoothService>> _discoverWithRetry(BluetoothDevice device) async {
+  Future<void> _ensureConnected(BluetoothDevice device) async {
+    if (device.isConnected) return;
+    await device.connect(
+      timeout: const Duration(seconds: 20),
+      autoConnect: false,
+      mtu: null, // never auto-request MTU — drops this ESP32
+    );
     await device.connectionState
         .firstWhere((s) => s == BluetoothConnectionState.connected)
         .timeout(const Duration(seconds: 10));
-    await Future<void>.delayed(const Duration(milliseconds: 500));
+  }
 
-    try {
-      return await device.discoverServices();
-    } catch (e) {
-      debugPrint('discoverServices first attempt failed: $e — retrying');
-      if (!device.isConnected) {
-        await device.connect(
-          timeout: const Duration(seconds: 15),
-          autoConnect: false,
-          mtu: null,
-        );
-        await Future<void>.delayed(const Duration(milliseconds: 600));
+  Future<List<BluetoothService>> _discoverWithRetry(BluetoothDevice device) async {
+    // ESP32 often needs a beat after connection before the attribute table is ready.
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      await _ensureConnected(device);
+
+      setState(() {
+        _bleDetail = 'Discovering services (attempt $attempt/3)…';
+      });
+
+      try {
+        final services = await device.discoverServices();
+        if (services.isNotEmpty) {
+          debugPrint('discoverServices ok: ${services.length} services');
+          return services;
+        }
+        debugPrint('discoverServices returned 0 services (attempt $attempt)');
+      } catch (e) {
+        debugPrint('discoverServices attempt $attempt failed: $e');
       }
-      return await device.discoverServices();
+
+      // Back off and try again while still connected if possible
+      await Future<void>.delayed(Duration(milliseconds: 800 * attempt));
     }
+
+    throw Exception(
+      'GATT discovery returned no services after 3 attempts. '
+      'Terminal may still show Connected — try again.',
+    );
   }
 
   Future<void> _connectAndConfirm(BluetoothDevice device) async {
     try {
       await _connSubscription?.cancel();
       _connSubscription = device.connectionState.listen((state) {
+        debugPrint('connectionState: $state');
         if (!mounted) return;
         if (state == BluetoothConnectionState.disconnected &&
             (_blePhase == BlePhase.paired || _blePhase == BlePhase.confirming)) {
@@ -264,14 +287,7 @@ class _HomePageState extends State<HomePage> {
         await device.removeBond();
       } catch (_) {}
 
-      // CRITICAL: flutter_blue_plus defaults mtu: 512 which auto-calls
-      // requestMtu after connect. That negotiation drops this ESP32 link.
-      // Pass mtu: null to skip MTU negotiation entirely.
-      await device.connect(
-        timeout: const Duration(seconds: 15),
-        autoConnect: false,
-        mtu: null,
-      );
+      await _ensureConnected(device);
 
       setState(() {
         _blePhase = BlePhase.confirming;
@@ -288,8 +304,10 @@ class _HomePageState extends State<HomePage> {
       BluetoothCharacteristic? payloadChr;
 
       for (final s in services) {
+        debugPrint('service: ${s.uuid}');
         if (s.uuid == kLmycService) {
           for (final c in s.characteristics) {
+            debugPrint('  char: ${c.uuid}');
             if (c.uuid == kLmycSessionChr) sessionChr = c;
             if (c.uuid == kLmycPayloadChr) payloadChr = c;
           }
@@ -298,15 +316,19 @@ class _HomePageState extends State<HomePage> {
 
       if (payloadChr != null) {
         try {
-          await payloadChr.read();
-        } catch (_) {}
+          final payload = await payloadChr.read();
+          debugPrint('payload bytes: ${payload.length}');
+        } catch (e) {
+          debugPrint('payload read: $e');
+        }
       }
 
       if (sessionChr == null) {
         setState(() {
           _blePhase = BlePhase.failed;
           _bleDetail =
-              'Connected, but terminal has no session characteristic.\nFlash latest firmware (make flash).';
+              'Connected, but LMYC session characteristic not found.\n'
+              'Services seen: ${services.map((s) => s.uuid).join(", ")}';
         });
         return;
       }
@@ -314,7 +336,7 @@ class _HomePageState extends State<HomePage> {
       final cmd = 'PAIR $_oob';
       await sessionChr.write(utf8.encode(cmd), withoutResponse: false);
 
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
       final replyBytes = await sessionChr.read();
       final reply = utf8.decode(replyBytes).trim();
 
@@ -338,7 +360,8 @@ class _HomePageState extends State<HomePage> {
           _blePhase = BlePhase.failed;
           _sessionReply = reply;
           _bleDetail =
-              'Terminal rejected OOB (reply: $reply).\nRescan the QR — OOB rotates on terminal reboot.';
+              'Terminal rejected OOB (reply: $reply).\n'
+              'Rescan the QR — OOB rotates on terminal reboot.';
         });
       }
     } catch (e) {
@@ -586,7 +609,7 @@ class _HomePageState extends State<HomePage> {
                         Text(
                           'The phone proved it scanned this terminal’s QR '
                           '(OOB match). Next: booking token, LE Secure '
-                          'Connections, and member tools (log notes, engine hours).',
+                          'Connections, and member tools.',
                           style: TextStyle(height: 1.4, color: Colors.black87),
                         ),
                       ],
