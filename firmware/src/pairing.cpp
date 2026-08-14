@@ -3,13 +3,11 @@
  *
  * Flow:
  *  1. Terminal advertises as LMYC-XXYY and shows QR with oob=...
- *  2. Phone scans QR, connects over BLE, reads payload characteristic
- *  3. Phone writes "PAIR <oob_hex>" to the session characteristic
- *  4. Terminal verifies OOB matches the one minted for this boot → "Paired"
+ *  2. Phone scans QR, connects over BLE
+ *  3. Phone discovers GATT, writes "PAIR <oob_hex>" to session characteristic
+ *  4. Terminal verifies OOB → "Paired"
  *
- * Bench security: open GATT link (no forced bond/encryption callbacks).
- * Application-level OOB is the proof the phone scanned this terminal's QR.
- * Full LE Secure Connections can replace this later.
+ * Bench: open GATT (no bond). Application OOB is the proof of QR scan.
  */
 
 #include "pairing.h"
@@ -31,13 +29,22 @@ static constexpr const char *kLmycSessionUuid = "6c6d7963-0001-4000-8000-0000000
 static char g_oob_hex[(kPairingOobBytes * 2) + 1];
 static char g_payload[kPairingPayloadMax];
 static char g_ble_name[24];
-static const char *g_status = "Idle";
+static char g_status_buf[48] = "Idle";
+static const char *g_status = g_status_buf;
 static bool g_ble_ok = false;
 static bool g_confirmed = false;
+static uint32_t g_connect_count = 0;
+static uint32_t g_session_writes = 0;
 
 static BLEServer *g_server = nullptr;
 static BLECharacteristic *g_payload_chr = nullptr;
 static BLECharacteristic *g_session_chr = nullptr;
+
+static void set_status(const char *s)
+{
+    snprintf(g_status_buf, sizeof(g_status_buf), "%s", s);
+    g_status = g_status_buf;
+}
 
 static void bytes_to_hex(const uint8_t *in, size_t n, char *out)
 {
@@ -79,22 +86,34 @@ static bool oob_matches(const char *candidate)
 }
 
 class PairingServerCallbacks : public BLEServerCallbacks {
-    void onConnect(BLEServer * /*server*/) override
+    void onConnect(BLEServer *server) override
     {
-        g_status = "Connected";
+        g_connect_count++;
         g_confirmed = false;
-        Serial.println("BLE: phone connected");
+        g_session_writes = 0;
+
+        /* Stop advertising while a phone is connected — keeps the radio
+         * focused on the single link (helps GATT discovery on busy RGB+LVGL). */
+        BLEDevice::getAdvertising()->stop();
+
+        snprintf(g_status_buf, sizeof(g_status_buf), "Connected #%lu",
+                 static_cast<unsigned long>(g_connect_count));
+        g_status = g_status_buf;
+
+        Serial.printf("BLE: phone connected (#%lu) — advertising stopped, GATT should answer discovery\n",
+                      static_cast<unsigned long>(g_connect_count));
+        Serial.printf("BLE: connId count=%d\n", server->getConnectedCount());
     }
 
     void onDisconnect(BLEServer * /*server*/) override
     {
-        g_status = "Advertising";
         g_confirmed = false;
         if (g_session_chr != nullptr) {
             g_session_chr->setValue("WAIT");
         }
-        Serial.println("BLE: disconnected, advertising again");
-        delay(80);
+        set_status("Advertising");
+        Serial.println("BLE: disconnected — restarting advertising");
+        delay(100);
         BLEDevice::startAdvertising();
     }
 };
@@ -103,7 +122,9 @@ class SessionCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *chr) override
     {
         String value = chr->getValue();
-        Serial.printf("BLE session write (%u bytes): %s\n",
+        g_session_writes++;
+        Serial.printf("BLE session write #%lu (%u bytes): %s\n",
+                      static_cast<unsigned long>(g_session_writes),
                       static_cast<unsigned>(value.length()), value.c_str());
 
         if (value.startsWith("PAIR ")) {
@@ -111,12 +132,12 @@ class SessionCallbacks : public BLECharacteristicCallbacks {
             offered.trim();
             if (oob_matches(offered.c_str())) {
                 g_confirmed = true;
-                g_status = "Paired";
+                set_status("Paired");
                 chr->setValue("OK");
                 Serial.println("BLE: OOB confirmed — Paired");
             } else {
                 g_confirmed = false;
-                g_status = "OOB mismatch";
+                set_status("OOB mismatch");
                 chr->setValue("FAIL");
                 Serial.println("BLE: OOB mismatch");
             }
@@ -133,6 +154,7 @@ class SessionCallbacks : public BLECharacteristicCallbacks {
 
     void onRead(BLECharacteristic *chr) override
     {
+        Serial.println("BLE: session characteristic read");
         if (g_confirmed) {
             chr->setValue("OK");
         } else {
@@ -141,17 +163,22 @@ class SessionCallbacks : public BLECharacteristicCallbacks {
     }
 };
 
+class PayloadCallbacks : public BLECharacteristicCallbacks {
+    void onRead(BLECharacteristic * /*chr*/) override
+    {
+        Serial.println("BLE: payload characteristic read (discovery/app activity)");
+    }
+};
+
 static PairingServerCallbacks g_server_cb;
 static SessionCallbacks g_session_cb;
+static PayloadCallbacks g_payload_cb;
 
 static bool start_ble_peripheral(void)
 {
     BLEDevice::init(g_ble_name);
     BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_ADV);
     BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_DEFAULT);
-
-    /* No BLESecurity / no setEncryptionLevel — open link for stable bench
-     * pairing. Application OOB remains the real proof of QR scan. */
 
     g_server = BLEDevice::createServer();
     g_server->setCallbacks(&g_server_cb);
@@ -168,7 +195,7 @@ static bool start_ble_peripheral(void)
     serial->setValue(LMYC_TERMINAL_ID);
     BLECharacteristic *fw = dis->createCharacteristic(
         BLEUUID((uint16_t)0x2A26), BLECharacteristic::PROPERTY_READ);
-    fw->setValue("bench-oob-v2");
+    fw->setValue("bench-oob-v3");
     dis->start();
 
     BLEService *svc = g_server->createService(kLmycServiceUuid);
@@ -176,6 +203,7 @@ static bool start_ble_peripheral(void)
     g_payload_chr = svc->createCharacteristic(
         kLmycPayloadUuid,
         BLECharacteristic::PROPERTY_READ);
+    g_payload_chr->setCallbacks(&g_payload_cb);
     g_payload_chr->setValue(g_payload);
 
     g_session_chr = svc->createCharacteristic(
@@ -199,13 +227,17 @@ static bool start_ble_peripheral(void)
     advertising->setAdvertisementData(adv);
     advertising->setScanResponseData(scan);
     advertising->setScanResponse(true);
-    advertising->setMinInterval(0x20);
-    advertising->setMaxInterval(0x40);
+    /* Slightly slower advertising — less radio contention with RGB panel */
+    advertising->setMinInterval(0x40);  /* 40 ms */
+    advertising->setMaxInterval(0x80);  /* 80 ms */
     advertising->setAppearance(kPairingBleAppearance);
     advertising->start();
 
-    g_status = "Advertising";
-    Serial.printf("BLE: advertising as %s (open GATT + OOB confirm)\n", g_ble_name);
+    set_status("Advertising");
+    Serial.printf("BLE: advertising as %s\n", g_ble_name);
+    Serial.printf("BLE: service %s\n", kLmycServiceUuid);
+    Serial.printf("BLE: payload  %s\n", kLmycPayloadUuid);
+    Serial.printf("BLE: session  %s\n", kLmycSessionUuid);
     return true;
 }
 
@@ -217,7 +249,6 @@ void pairing_init(void)
     g_confirmed = false;
     g_ble_ok = start_ble_peripheral();
     Serial.printf("Pairing payload: %s\n", g_payload);
-    Serial.printf("BLE name: %s\n", g_ble_name);
 }
 
 const char *pairing_payload(void) { return g_payload; }
@@ -230,6 +261,6 @@ bool pairing_is_confirmed(void) { return g_confirmed; }
 void pairing_set_status(const char *status)
 {
     if (status != nullptr) {
-        g_status = status;
+        set_status(status);
     }
 }
