@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
@@ -40,7 +41,8 @@ enum BlePhase {
   checkingPermissions,
   scanning,
   connecting,
-  connected,
+  confirming,
+  paired,
   failed,
 }
 
@@ -57,25 +59,24 @@ class _HomePageState extends State<HomePage> {
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<BluetoothConnectionState>? _connSubscription;
 
-  // From QR / deep link
-  String? _lastDeepLink;
   String? _boatId;
   String? _terminalId;
   String? _bleName;
   String? _oob;
   String? _version;
 
-  // BLE state
   BlePhase _blePhase = BlePhase.idle;
   String _bleDetail = '';
   BluetoothDevice? _device;
   int? _rssi;
+  String? _sessionReply;
 
-  // LMYC GATT (must match firmware)
   static final Guid kLmycService =
       Guid('6c6d7963-0001-4000-8000-000000000001');
   static final Guid kLmycPayloadChr =
       Guid('6c6d7963-0001-4000-8000-000000000010');
+  static final Guid kLmycSessionChr =
+      Guid('6c6d7963-0001-4000-8000-000000000020');
 
   @override
   void initState() {
@@ -98,27 +99,15 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _handleIncomingLink(Uri uri) {
-    debugPrint('Incoming deep link: $uri');
     if (uri.scheme != 'lmyc') return;
-
     final params = uri.queryParameters;
     setState(() {
-      _lastDeepLink = uri.toString();
       _version = params['v'];
       _boatId = params['boat'];
       _terminalId = params['tid'];
       _bleName = params['ble'];
       _oob = params['oob'];
     });
-
-    if (_oob != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Pairing data for ${_boatId ?? "boat"} — ready to connect'),
-          backgroundColor: const Color(0xFF00B4A6),
-        ),
-      );
-    }
   }
 
   Future<bool> _ensurePermissions() async {
@@ -139,8 +128,7 @@ class _HomePageState extends State<HomePage> {
     if (!scanOk || !connectOk) {
       setState(() {
         _blePhase = BlePhase.failed;
-        _bleDetail =
-            'Bluetooth permission denied. Enable it in system settings.';
+        _bleDetail = 'Bluetooth permission denied.';
       });
       return false;
     }
@@ -153,20 +141,19 @@ class _HomePageState extends State<HomePage> {
       });
       return false;
     }
-
     return true;
   }
 
   Future<void> _startScanAndConnect() async {
-    if (_bleName == null || _bleName!.isEmpty) {
+    if (_bleName == null || _oob == null) {
       setState(() {
         _blePhase = BlePhase.failed;
-        _bleDetail = 'No BLE name yet — scan the terminal QR first.';
+        _bleDetail = 'Scan the terminal QR first.';
       });
       return;
     }
 
-    await _disconnect();
+    await _disconnect(resetPhase: false);
 
     if (!await _ensurePermissions()) return;
 
@@ -175,6 +162,7 @@ class _HomePageState extends State<HomePage> {
       _bleDetail = 'Scanning for $_bleName …';
       _rssi = null;
       _device = null;
+      _sessionReply = null;
     });
 
     try {
@@ -188,8 +176,8 @@ class _HomePageState extends State<HomePage> {
         for (final r in results) {
           final name = r.device.platformName;
           final advName = r.advertisementData.advName;
-          final match = name == _bleName || advName == _bleName;
-          if (match && !completer.isCompleted) {
+          if ((name == _bleName || advName == _bleName) &&
+              !completer.isCompleted) {
             completer.complete(r);
           }
         }
@@ -214,7 +202,7 @@ class _HomePageState extends State<HomePage> {
         setState(() {
           _blePhase = BlePhase.failed;
           _bleDetail =
-              'Did not find "$_bleName".\nIs the terminal powered and showing the QR?';
+              'Did not find "$_bleName".\nIs the terminal on and advertising?';
         });
         return;
       }
@@ -226,7 +214,7 @@ class _HomePageState extends State<HomePage> {
         _bleDetail = 'Found $_bleName (${found.rssi} dBm) — connecting…';
       });
 
-      await _connectTo(found.device);
+      await _connectAndConfirm(found.device);
     } catch (e) {
       setState(() {
         _blePhase = BlePhase.failed;
@@ -235,16 +223,17 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _connectTo(BluetoothDevice device) async {
+  Future<void> _connectAndConfirm(BluetoothDevice device) async {
     try {
       await _connSubscription?.cancel();
       _connSubscription = device.connectionState.listen((state) {
         if (!mounted) return;
         if (state == BluetoothConnectionState.disconnected &&
-            _blePhase == BlePhase.connected) {
+            (_blePhase == BlePhase.paired || _blePhase == BlePhase.confirming)) {
           setState(() {
             _blePhase = BlePhase.idle;
-            _bleDetail = 'Disconnected';
+            _bleDetail = 'Disconnected from terminal';
+            _sessionReply = null;
           });
         }
       });
@@ -254,47 +243,80 @@ class _HomePageState extends State<HomePage> {
         autoConnect: false,
       );
 
-      // Discover services and try to read the payload characteristic
-      String extra = '';
-      try {
-        final services = await device.discoverServices();
-        for (final s in services) {
-          if (s.uuid == kLmycService) {
-            for (final c in s.characteristics) {
-              if (c.uuid == kLmycPayloadChr) {
-                final value = await c.read();
-                final text = String.fromCharCodes(value);
-                extra = '\nPayload OK (${text.length} chars)';
-                break;
-              }
-            }
-          }
-        }
-      } catch (e) {
-        extra = '\n(Connected; characteristic read skipped: $e)';
-      }
-
-      if (!mounted) return;
       setState(() {
-        _blePhase = BlePhase.connected;
-        _bleDetail = 'Connected to ${device.platformName}$extra';
+        _blePhase = BlePhase.confirming;
+        _bleDetail = 'Connected — proving OOB from QR…';
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Connected to boat terminal'),
-          backgroundColor: Color(0xFF00B4A6),
-        ),
-      );
+      final services = await device.discoverServices();
+      BluetoothCharacteristic? sessionChr;
+      BluetoothCharacteristic? payloadChr;
+
+      for (final s in services) {
+        if (s.uuid == kLmycService) {
+          for (final c in s.characteristics) {
+            if (c.uuid == kLmycSessionChr) sessionChr = c;
+            if (c.uuid == kLmycPayloadChr) payloadChr = c;
+          }
+        }
+      }
+
+      if (payloadChr != null) {
+        try {
+          await payloadChr.read();
+        } catch (_) {}
+      }
+
+      if (sessionChr == null) {
+        setState(() {
+          _blePhase = BlePhase.failed;
+          _bleDetail =
+              'Connected, but terminal has no session characteristic.\nFlash latest firmware.';
+        });
+        return;
+      }
+
+      // Application-level proof: we scanned *this* QR
+      final cmd = 'PAIR $_oob';
+      await sessionChr.write(utf8.encode(cmd), withoutResponse: false);
+
+      // Small delay then read reply
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final replyBytes = await sessionChr.read();
+      final reply = utf8.decode(replyBytes).trim();
+
+      if (!mounted) return;
+
+      if (reply == 'OK') {
+        setState(() {
+          _blePhase = BlePhase.paired;
+          _sessionReply = reply;
+          _bleDetail =
+              'Paired with ${_boatId ?? "boat"}\nTerminal confirmed OOB.';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Paired with ${_boatId ?? "terminal"}'),
+            backgroundColor: const Color(0xFF00B4A6),
+          ),
+        );
+      } else {
+        setState(() {
+          _blePhase = BlePhase.failed;
+          _sessionReply = reply;
+          _bleDetail =
+              'Terminal rejected OOB (reply: $reply).\nRescan the QR — OOB rotates on terminal reboot.';
+        });
+      }
     } catch (e) {
       setState(() {
         _blePhase = BlePhase.failed;
-        _bleDetail = 'Connect failed: $e';
+        _bleDetail = 'Pairing failed: $e';
       });
     }
   }
 
-  Future<void> _disconnect() async {
+  Future<void> _disconnect({bool resetPhase = true}) async {
     await FlutterBluePlus.stopScan();
     await _scanSubscription?.cancel();
     _scanSubscription = null;
@@ -303,12 +325,19 @@ class _HomePageState extends State<HomePage> {
     try {
       await _device?.disconnect();
     } catch (_) {}
+    if (resetPhase && mounted) {
+      setState(() {
+        _blePhase = BlePhase.idle;
+        _bleDetail = '';
+        _sessionReply = null;
+      });
+    }
   }
 
   @override
   void dispose() {
     _linkSubscription?.cancel();
-    _disconnect();
+    _disconnect(resetPhase: false);
     super.dispose();
   }
 
@@ -320,12 +349,13 @@ class _HomePageState extends State<HomePage> {
 
   Color get _phaseColor {
     switch (_blePhase) {
-      case BlePhase.connected:
+      case BlePhase.paired:
         return const Color(0xFF00B4A6);
       case BlePhase.failed:
         return Colors.red.shade700;
       case BlePhase.scanning:
       case BlePhase.connecting:
+      case BlePhase.confirming:
       case BlePhase.checkingPermissions:
         return Colors.orange.shade700;
       case BlePhase.idle:
@@ -343,8 +373,10 @@ class _HomePageState extends State<HomePage> {
         return 'Scanning';
       case BlePhase.connecting:
         return 'Connecting';
-      case BlePhase.connected:
-        return 'Connected';
+      case BlePhase.confirming:
+        return 'Confirming';
+      case BlePhase.paired:
+        return 'Paired';
       case BlePhase.failed:
         return 'Failed';
     }
@@ -355,7 +387,9 @@ class _HomePageState extends State<HomePage> {
     final hasPairingData = _oob != null && _bleName != null;
     final busy = _blePhase == BlePhase.scanning ||
         _blePhase == BlePhase.connecting ||
+        _blePhase == BlePhase.confirming ||
         _blePhase == BlePhase.checkingPermissions;
+    final isPaired = _blePhase == BlePhase.paired;
 
     return Scaffold(
       appBar: AppBar(
@@ -368,14 +402,16 @@ class _HomePageState extends State<HomePage> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: 8),
-              const Icon(
-                Icons.sailing,
+              Icon(
+                isPaired ? Icons.verified : Icons.sailing,
                 size: 64,
-                color: Color(0xFF001F3F),
+                color: isPaired
+                    ? const Color(0xFF00B4A6)
+                    : const Color(0xFF001F3F),
               ),
               const SizedBox(height: 12),
               Text(
-                'Lower Mainland Yacht Club',
+                isPaired ? 'Paired' : 'Lower Mainland Yacht Club',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.bold,
@@ -384,7 +420,9 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(height: 4),
               Text(
-                'Companion app for boat check-in and terminal pairing',
+                isPaired
+                    ? 'You are connected to ${_boatId ?? "the terminal"}'
+                    : 'Companion app for boat check-in and terminal pairing',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Colors.black54,
@@ -392,7 +430,6 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(height: 28),
 
-              // Deep-link card
               Card(
                 elevation: 2,
                 child: Padding(
@@ -427,7 +464,6 @@ class _HomePageState extends State<HomePage> {
 
               const SizedBox(height: 16),
 
-              // BLE card
               Card(
                 elevation: 2,
                 child: Padding(
@@ -452,14 +488,15 @@ class _HomePageState extends State<HomePage> {
                       if (_bleDetail.isNotEmpty)
                         Text(
                           _bleDetail,
-                          style: TextStyle(
-                            color: _phaseColor,
-                            height: 1.35,
-                          ),
+                          style: TextStyle(color: _phaseColor, height: 1.35),
                         ),
                       if (_rssi != null) ...[
                         const SizedBox(height: 8),
                         _statusRow('RSSI', '$_rssi dBm'),
+                      ],
+                      if (_sessionReply != null) ...[
+                        const SizedBox(height: 4),
+                        _statusRow('Session', _sessionReply),
                       ],
                       const SizedBox(height: 16),
                       SizedBox(
@@ -468,27 +505,21 @@ class _HomePageState extends State<HomePage> {
                           onPressed: busy
                               ? null
                               : hasPairingData
-                                  ? (_blePhase == BlePhase.connected
-                                      ? () async {
-                                          await _disconnect();
-                                          setState(() {
-                                            _blePhase = BlePhase.idle;
-                                            _bleDetail = 'Disconnected';
-                                          });
-                                        }
+                                  ? (isPaired
+                                      ? () => _disconnect()
                                       : _startScanAndConnect)
                                   : null,
                           icon: Icon(
-                            _blePhase == BlePhase.connected
+                            isPaired
                                 ? Icons.link_off
                                 : Icons.bluetooth_searching,
                           ),
                           label: Text(
-                            _blePhase == BlePhase.connected
+                            isPaired
                                 ? 'Disconnect'
                                 : busy
                                     ? 'Working…'
-                                    : 'Connect to terminal',
+                                    : 'Connect & pair',
                           ),
                           style: FilledButton.styleFrom(
                             backgroundColor: const Color(0xFF001F3F),
@@ -501,17 +532,46 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
 
+              if (isPaired) ...[
+                const SizedBox(height: 16),
+                Card(
+                  color: const Color(0xFF00B4A6).withValues(alpha: 0.08),
+                  elevation: 0,
+                  child: const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Bench pairing complete',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 16,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          'The phone proved it scanned this terminal’s QR '
+                          '(OOB match). Next: booking token, LE Secure '
+                          'Connections, and member tools (log notes, engine hours).',
+                          style: TextStyle(height: 1.4, color: Colors.black87),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+
               const SizedBox(height: 24),
               Text(
                 hasPairingData
-                    ? 'System Bluetooth Settings often hides LE-only devices.\nUse the button above — in-app scan is more reliable.'
-                    : 'Scan the QR code on the boat terminal to load pairing data.',
+                    ? 'Watch the terminal BLE status — it should move\nAdvertising → Connected → Paired.'
+                    : 'Scan the QR code on the boat terminal to begin.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Colors.black45,
                     ),
               ),
-              const SizedBox(height: 8),
             ],
           ),
         ),

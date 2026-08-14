@@ -1,11 +1,14 @@
 /**
- * QR + BLE pairing bootstrap.
+ * QR + BLE pairing bootstrap with OOB confirmation.
  *
- * ESP32-S3 is BLE-only (no Classic). Android Settings will list a named,
- * connectable GATT peripheral; iPhone Settings will not.
+ * Flow:
+ *  1. Terminal advertises as LMYC-XXYY and shows QR with oob=...
+ *  2. Phone scans QR, connects over BLE, reads payload characteristic
+ *  3. Phone writes "PAIR <oob_hex>" to the session characteristic
+ *  4. Terminal verifies OOB matches the one minted for this boot → "Paired"
  *
- * This is still not the finished LE Secure Connections + booking-token
- * handshake. It is a discoverable, pairable bench peripheral.
+ * Still not full LE Secure Connections; this is an application-level proof
+ * that the phone actually scanned *this* terminal's QR (not a spoofed name).
  */
 
 #include "pairing.h"
@@ -23,15 +26,18 @@
 
 static constexpr const char *kLmycServiceUuid = "6c6d7963-0001-4000-8000-000000000001";
 static constexpr const char *kLmycPayloadUuid = "6c6d7963-0001-4000-8000-000000000010";
+static constexpr const char *kLmycSessionUuid = "6c6d7963-0001-4000-8000-000000000020";
 
 static char g_oob_hex[(kPairingOobBytes * 2) + 1];
 static char g_payload[kPairingPayloadMax];
 static char g_ble_name[24];
 static const char *g_status = "Idle";
 static bool g_ble_ok = false;
+static bool g_confirmed = false;
 
 static BLEServer *g_server = nullptr;
 static BLECharacteristic *g_payload_chr = nullptr;
+static BLECharacteristic *g_session_chr = nullptr;
 
 static void bytes_to_hex(const uint8_t *in, size_t n, char *out)
 {
@@ -64,57 +70,107 @@ static void build_payload(void)
              LMYC_BOAT_ID, LMYC_TERMINAL_ID, g_ble_name, g_oob_hex);
 }
 
+static bool oob_matches(const char *candidate)
+{
+    if (candidate == nullptr) {
+        return false;
+    }
+    return strcasecmp(candidate, g_oob_hex) == 0;
+}
+
 class PairingServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer * /*server*/) override
     {
         g_status = "Connected";
+        g_confirmed = false;
         Serial.println("BLE: phone connected");
     }
 
     void onDisconnect(BLEServer * /*server*/) override
     {
         g_status = "Advertising";
+        g_confirmed = false;
+        if (g_session_chr != nullptr) {
+            g_session_chr->setValue("WAIT");
+        }
         Serial.println("BLE: disconnected, advertising again");
         delay(80);
         BLEDevice::startAdvertising();
     }
 };
 
-class PairingSecurityCallbacks : public BLESecurityCallbacks {
-    uint32_t onPassKeyRequest() override
+class SessionCallbacks : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *chr) override
     {
-        return 0;
+        std::string value = chr->getValue();
+        Serial.printf("BLE session write (%u bytes): %s\n",
+                      static_cast<unsigned>(value.size()), value.c_str());
+
+        /* Expected: "PAIR <32-char-hex-oob>" */
+        if (value.rfind("PAIR ", 0) == 0) {
+            const char *offered = value.c_str() + 5;
+            while (*offered == ' ') {
+                ++offered;
+            }
+            if (oob_matches(offered)) {
+                g_confirmed = true;
+                g_status = "Paired";
+                chr->setValue("OK");
+                Serial.println("BLE: OOB confirmed — Paired");
+            } else {
+                g_confirmed = false;
+                g_status = "OOB mismatch";
+                chr->setValue("FAIL");
+                Serial.println("BLE: OOB mismatch");
+            }
+            return;
+        }
+
+        if (value == "PING") {
+            chr->setValue("PONG");
+            return;
+        }
+
+        chr->setValue("ERR");
     }
+
+    void onRead(BLECharacteristic *chr) override
+    {
+        if (g_confirmed) {
+            chr->setValue("OK");
+        } else {
+            chr->setValue("WAIT");
+        }
+    }
+};
+
+class PairingSecurityCallbacks : public BLESecurityCallbacks {
+    uint32_t onPassKeyRequest() override { return 0; }
 
     void onPassKeyNotify(uint32_t pass_key) override
     {
         Serial.printf("BLE: passkey notify %u\n", static_cast<unsigned>(pass_key));
     }
 
-    bool onSecurityRequest() override
-    {
-        return true;
-    }
+    bool onSecurityRequest() override { return true; }
 
     void onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl) override
     {
         if (cmpl.success) {
-            g_status = "Paired";
-            Serial.println("BLE: paired (Just Works bond)");
+            Serial.println("BLE: link encrypted (Just Works bond)");
+            /* Application-level Paired still requires OOB write */
         } else {
             g_status = "Pair failed";
-            Serial.printf("BLE: pair failed, reason=%u\n", cmpl.fail_reason);
+            Serial.printf("BLE: bond failed, reason=%u\n", cmpl.fail_reason);
         }
     }
 
-    bool onConfirmPIN(uint32_t /*pin*/) override
-    {
-        return true;
-    }
+    bool onConfirmPIN(uint32_t /*pin*/) override { return true; }
 };
 
 static PairingServerCallbacks g_server_cb;
 static PairingSecurityCallbacks g_security_cb;
+static SessionCallbacks g_session_cb;
 
 static bool start_ble_peripheral(void)
 {
@@ -145,18 +201,25 @@ static bool start_ble_peripheral(void)
     serial->setValue(LMYC_TERMINAL_ID);
     BLECharacteristic *fw = dis->createCharacteristic(
         BLEUUID((uint16_t)0x2A26), BLECharacteristic::PROPERTY_READ);
-    fw->setValue("bench-qr");
+    fw->setValue("bench-oob-v1");
     dis->start();
 
     BLEService *svc = g_server->createService(kLmycServiceUuid);
+
     g_payload_chr = svc->createCharacteristic(
         kLmycPayloadUuid,
         BLECharacteristic::PROPERTY_READ);
     g_payload_chr->setValue(g_payload);
+
+    g_session_chr = svc->createCharacteristic(
+        kLmycSessionUuid,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |
+            BLECharacteristic::PROPERTY_WRITE_NR);
+    g_session_chr->setCallbacks(&g_session_cb);
+    g_session_chr->setValue("WAIT");
+
     svc->start();
 
-    /* Keep the 31-byte advertise packet to flags + complete name + DIS UUID.
-     * That is what Android Settings uses to show a named available device. */
     BLEAdvertisementData adv;
     adv.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
     adv.setName(g_ble_name);
@@ -175,7 +238,7 @@ static bool start_ble_peripheral(void)
     advertising->start();
 
     g_status = "Advertising";
-    Serial.printf("BLE: advertising as %s (GATT + bondable)\n", g_ble_name);
+    Serial.printf("BLE: advertising as %s (GATT + OOB confirm)\n", g_ble_name);
     return true;
 }
 
@@ -184,35 +247,18 @@ void pairing_init(void)
     mint_oob();
     build_ble_name();
     build_payload();
+    g_confirmed = false;
     g_ble_ok = start_ble_peripheral();
     Serial.printf("Pairing payload: %s\n", g_payload);
     Serial.printf("BLE name: %s\n", g_ble_name);
 }
 
-const char *pairing_payload(void)
-{
-    return g_payload;
-}
-
-const char *pairing_oob_hex(void)
-{
-    return g_oob_hex;
-}
-
-const char *pairing_ble_name(void)
-{
-    return g_ble_name;
-}
-
-const char *pairing_status(void)
-{
-    return g_status;
-}
-
-bool pairing_ble_ok(void)
-{
-    return g_ble_ok;
-}
+const char *pairing_payload(void) { return g_payload; }
+const char *pairing_oob_hex(void) { return g_oob_hex; }
+const char *pairing_ble_name(void) { return g_ble_name; }
+const char *pairing_status(void) { return g_status; }
+bool pairing_ble_ok(void) { return g_ble_ok; }
+bool pairing_is_confirmed(void) { return g_confirmed; }
 
 void pairing_set_status(const char *status)
 {

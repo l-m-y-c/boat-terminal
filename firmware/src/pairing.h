@@ -23,4 +23,5 @@ const char *pairing_oob_hex(void);
 const char *pairing_ble_name(void);
 const char *pairing_status(void);
 bool pairing_ble_ok(void);
+bool pairing_is_confirmed(void);
 void pairing_set_status(const char *status);
