@@ -4,64 +4,49 @@ Flutter companion app for the Lower Mainland Yacht Club boat terminal.
 
 ## Purpose
 
-- Respond to `lmyc://` deep links (opened from the QR code on the boat terminal)
-- Support secure pairing between member phone and on-boat terminal
-- Provide check-in / booking context and simple tools (log notes, engine hours, etc.)
+- Open from `lmyc://` deep links (QR code on the boat terminal)
+- Scan and connect over BLE to the matching terminal
+- Foundation for secure pairing, check-in, and boat tools
 
-See `../docs/06-phone-app-and-pairing.md` and `../docs/08-user-flows.md` for the full design.
+See `../docs/06-phone-app-and-pairing.md` and `../docs/08-user-flows.md`.
 
-## Current status (v0.1)
+## Current status (v0.2)
 
-- Android deep-link handler for the `lmyc://` scheme is registered
-- App shows the most recent deep-link payload (boat id + pairing token when present)
-- Clean Material 3 UI with LMYC navy branding
-- Ready for the next increment: real pairing handshake, BLE, and booking integration
+- Android `lmyc://` deep-link handler
+- Parses real terminal QR payload (`boat`, `tid`, `ble`, `oob`, `v`)
+- In-app BLE scan targeting the exact name from the QR
+- GATT connect + read of the LMYC payload characteristic
+- Clear status UI (permissions → scanning → connecting → connected)
+
+**Note:** Android’s system Bluetooth Settings often hides pure LE peripherals. Use the in-app **Connect to terminal** button — it is more reliable than Settings → Scan.
 
 ## Development
 
 ```bash
 cd mobile
-
-# Get dependencies
 flutter pub get
-
-# Run on connected Android device (S26 Ultra, etc.)
 flutter run
-
-# Build release APK
-flutter build apk
 ```
 
-### Testing the deep link
-
-With the app installed, you can simulate a QR scan from a computer:
+### Test deep link without QR
 
 ```bash
-adb shell am start -a android.intent.action.VIEW -d "lmyc://pair?token=test123&boat=deserata"
+adb shell am start -a android.intent.action.VIEW \
+  -d "lmyc://pair?v=1&boat=BENCH-01&tid=WS7-001&ble=LMYC-D649&oob=test"
 ```
 
-Or create a simple QR code containing:
+Then tap **Connect to terminal** (with the real board advertising under that BLE name).
 
-```
-lmyc://pair?token=test123&boat=deserata
-```
+## Permissions
 
-and scan it with the phone camera / Google Lens.
+On first connect the app requests:
 
-## Project layout
-
-```
-mobile/
-├── lib/
-│   └── main.dart          # App entry + deep-link handling + home screen
-├── android/               # Android project (intent-filter for lmyc://)
-├── pubspec.yaml
-└── README.md
-```
+- `BLUETOOTH_SCAN` / `BLUETOOTH_CONNECT` (Android 12+)
+- Location (only required for BLE scan on Android 11 and older)
 
 ## Next steps
 
-1. Add a dedicated Pairing screen that is pushed when a valid `lmyc://pair` link arrives
-2. Implement BLE / secure handshake with the boat terminal (see firmware pairing code)
-3. Hook into the existing LMYC web booking system for member identity and current reservations
-4. Add simple observation / engine-hour forms
+1. Use OOB data for LE Secure Connections (replace Just Works)
+2. Booking-token exchange after GATT connect
+3. “Paired” state mirrored on the terminal UI
+4. Simple log / engine-hour forms once paired
