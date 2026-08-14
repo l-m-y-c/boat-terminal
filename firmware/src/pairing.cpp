@@ -1,22 +1,19 @@
 /**
- * QR + BLE pairing bootstrap with OOB confirmation.
+ * QR + BLE pairing bootstrap with OOB confirmation (NimBLE).
+ *
+ * Bluedroid was timing out Android GATT discovery under RGB+LVGL load.
+ * NimBLE is lighter and answers ATT requests reliably on ESP32-S3.
  *
  * Flow:
- *  1. Terminal advertises as LMYC-XXYY and shows QR with oob=...
- *  2. Phone scans QR, connects over BLE
- *  3. Phone discovers GATT, writes "PAIR <oob_hex>" to session characteristic
- *  4. Terminal verifies OOB → "Paired"
- *
- * Bench: open GATT (no bond). Application OOB is the proof of QR scan.
+ *  1. Advertise as LMYC-XXYY + show QR with oob=...
+ *  2. Phone connects, discovers GATT, writes "PAIR <oob>"
+ *  3. Terminal verifies OOB → status "Paired"
  */
 
 #include "pairing.h"
 
 #include <Arduino.h>
-#include <BLE2902.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
+#include <NimBLEDevice.h>
 #include <cstdio>
 #include <cstring>
 #include <esp_mac.h>
@@ -34,16 +31,16 @@ static const char *g_status = g_status_buf;
 static bool g_ble_ok = false;
 static bool g_confirmed = false;
 static uint32_t g_connect_count = 0;
-static uint32_t g_session_writes = 0;
 
-static BLEServer *g_server = nullptr;
-static BLECharacteristic *g_payload_chr = nullptr;
-static BLECharacteristic *g_session_chr = nullptr;
+static NimBLEServer *g_server = nullptr;
+static NimBLECharacteristic *g_payload_chr = nullptr;
+static NimBLECharacteristic *g_session_chr = nullptr;
 
 static void set_status(const char *s)
 {
     snprintf(g_status_buf, sizeof(g_status_buf), "%s", s);
     g_status = g_status_buf;
+    Serial.printf("BLE status: %s\n", g_status_buf);
 }
 
 static void bytes_to_hex(const uint8_t *in, size_t n, char *out)
@@ -85,52 +82,44 @@ static bool oob_matches(const char *candidate)
     return strcasecmp(candidate, g_oob_hex) == 0;
 }
 
-class PairingServerCallbacks : public BLEServerCallbacks {
-    void onConnect(BLEServer *server) override
+class ServerCallbacks : public NimBLEServerCallbacks {
+    void onConnect(NimBLEServer * /*server*/, NimBLEConnInfo & /*connInfo*/) override
     {
         g_connect_count++;
         g_confirmed = false;
-        g_session_writes = 0;
-
-        /* Stop advertising while a phone is connected — keeps the radio
-         * focused on the single link (helps GATT discovery on busy RGB+LVGL). */
-        BLEDevice::getAdvertising()->stop();
-
-        snprintf(g_status_buf, sizeof(g_status_buf), "Connected #%lu",
+        NimBLEDevice::stopAdvertising();
+        char buf[48];
+        snprintf(buf, sizeof(buf), "Connected #%lu",
                  static_cast<unsigned long>(g_connect_count));
-        g_status = g_status_buf;
-
-        Serial.printf("BLE: phone connected (#%lu) — advertising stopped, GATT should answer discovery\n",
-                      static_cast<unsigned long>(g_connect_count));
-        Serial.printf("BLE: connId count=%d\n", server->getConnectedCount());
+        set_status(buf);
     }
 
-    void onDisconnect(BLEServer * /*server*/) override
+    void onDisconnect(NimBLEServer * /*server*/, NimBLEConnInfo & /*connInfo*/,
+                      int reason) override
     {
         g_confirmed = false;
         if (g_session_chr != nullptr) {
             g_session_chr->setValue("WAIT");
         }
         set_status("Advertising");
-        Serial.println("BLE: disconnected — restarting advertising");
-        delay(100);
-        BLEDevice::startAdvertising();
+        Serial.printf("BLE: disconnect reason=%d — advertising again\n", reason);
+        NimBLEDevice::startAdvertising();
     }
 };
 
-class SessionCallbacks : public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *chr) override
+class SessionCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic *chr, NimBLEConnInfo & /*connInfo*/) override
     {
-        String value = chr->getValue();
-        g_session_writes++;
-        Serial.printf("BLE session write #%lu (%u bytes): %s\n",
-                      static_cast<unsigned long>(g_session_writes),
-                      static_cast<unsigned>(value.length()), value.c_str());
+        std::string value = chr->getValue();
+        Serial.printf("BLE session write (%u bytes): %s\n",
+                      static_cast<unsigned>(value.size()), value.c_str());
 
-        if (value.startsWith("PAIR ")) {
-            String offered = value.substring(5);
-            offered.trim();
-            if (oob_matches(offered.c_str())) {
+        if (value.rfind("PAIR ", 0) == 0) {
+            const char *offered = value.c_str() + 5;
+            while (*offered == ' ') {
+                ++offered;
+            }
+            if (oob_matches(offered)) {
                 g_confirmed = true;
                 set_status("Paired");
                 chr->setValue("OK");
@@ -152,92 +141,68 @@ class SessionCallbacks : public BLECharacteristicCallbacks {
         chr->setValue("ERR");
     }
 
-    void onRead(BLECharacteristic *chr) override
+    void onRead(NimBLECharacteristic *chr, NimBLEConnInfo & /*connInfo*/) override
     {
-        Serial.println("BLE: session characteristic read");
-        if (g_confirmed) {
-            chr->setValue("OK");
-        } else {
-            chr->setValue("WAIT");
-        }
+        Serial.println("BLE: session read");
+        chr->setValue(g_confirmed ? "OK" : "WAIT");
     }
 };
 
-class PayloadCallbacks : public BLECharacteristicCallbacks {
-    void onRead(BLECharacteristic * /*chr*/) override
+class PayloadCallbacks : public NimBLECharacteristicCallbacks {
+    void onRead(NimBLECharacteristic * /*chr*/, NimBLEConnInfo & /*connInfo*/) override
     {
-        Serial.println("BLE: payload characteristic read (discovery/app activity)");
+        Serial.println("BLE: payload read");
     }
 };
 
-static PairingServerCallbacks g_server_cb;
+static ServerCallbacks g_server_cb;
 static SessionCallbacks g_session_cb;
 static PayloadCallbacks g_payload_cb;
 
 static bool start_ble_peripheral(void)
 {
-    BLEDevice::init(g_ble_name);
-    BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_ADV);
-    BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_DEFAULT);
+    NimBLEDevice::init(g_ble_name);
+    NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
-    g_server = BLEDevice::createServer();
+    g_server = NimBLEDevice::createServer();
     g_server->setCallbacks(&g_server_cb);
 
-    BLEService *dis = g_server->createService(BLEUUID((uint16_t)0x180A));
-    BLECharacteristic *mfg = dis->createCharacteristic(
-        BLEUUID((uint16_t)0x2A29), BLECharacteristic::PROPERTY_READ);
-    mfg->setValue("LMYC");
-    BLECharacteristic *model = dis->createCharacteristic(
-        BLEUUID((uint16_t)0x2A24), BLECharacteristic::PROPERTY_READ);
-    model->setValue("Boat Terminal");
-    BLECharacteristic *serial = dis->createCharacteristic(
-        BLEUUID((uint16_t)0x2A25), BLECharacteristic::PROPERTY_READ);
-    serial->setValue(LMYC_TERMINAL_ID);
-    BLECharacteristic *fw = dis->createCharacteristic(
-        BLEUUID((uint16_t)0x2A26), BLECharacteristic::PROPERTY_READ);
-    fw->setValue("bench-oob-v3");
+    /* Device Information Service */
+    NimBLEService *dis = g_server->createService("180A");
+    dis->createCharacteristic("2A29", NIMBLE_PROPERTY::READ)->setValue("LMYC");
+    dis->createCharacteristic("2A24", NIMBLE_PROPERTY::READ)->setValue("Boat Terminal");
+    dis->createCharacteristic("2A25", NIMBLE_PROPERTY::READ)->setValue(LMYC_TERMINAL_ID);
+    dis->createCharacteristic("2A26", NIMBLE_PROPERTY::READ)->setValue("nimble-oob-v1");
     dis->start();
 
-    BLEService *svc = g_server->createService(kLmycServiceUuid);
+    /* LMYC service */
+    NimBLEService *svc = g_server->createService(kLmycServiceUuid);
 
     g_payload_chr = svc->createCharacteristic(
-        kLmycPayloadUuid,
-        BLECharacteristic::PROPERTY_READ);
+        kLmycPayloadUuid, NIMBLE_PROPERTY::READ);
     g_payload_chr->setCallbacks(&g_payload_cb);
     g_payload_chr->setValue(g_payload);
 
     g_session_chr = svc->createCharacteristic(
         kLmycSessionUuid,
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |
-            BLECharacteristic::PROPERTY_WRITE_NR);
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
     g_session_chr->setCallbacks(&g_session_cb);
     g_session_chr->setValue("WAIT");
 
     svc->start();
 
-    BLEAdvertisementData adv;
-    adv.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
-    adv.setName(g_ble_name);
-    adv.setCompleteServices(BLEUUID((uint16_t)0x180A));
-
-    BLEAdvertisementData scan;
-    scan.setCompleteServices(BLEUUID(kLmycServiceUuid));
-
-    BLEAdvertising *advertising = BLEDevice::getAdvertising();
-    advertising->setAdvertisementData(adv);
-    advertising->setScanResponseData(scan);
-    advertising->setScanResponse(true);
-    /* Slightly slower advertising — less radio contention with RGB panel */
-    advertising->setMinInterval(0x40);  /* 40 ms */
-    advertising->setMaxInterval(0x80);  /* 80 ms */
-    advertising->setAppearance(kPairingBleAppearance);
-    advertising->start();
+    NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+    adv->setName(g_ble_name);
+    adv->addServiceUUID("180A");
+    adv->addServiceUUID(kLmycServiceUuid);
+    adv->enableScanResponse(true);
+    adv->setMinInterval(0x40);
+    adv->setMaxInterval(0x80);
+    adv->start();
 
     set_status("Advertising");
-    Serial.printf("BLE: advertising as %s\n", g_ble_name);
+    Serial.printf("BLE(NimBLE): advertising as %s\n", g_ble_name);
     Serial.printf("BLE: service %s\n", kLmycServiceUuid);
-    Serial.printf("BLE: payload  %s\n", kLmycPayloadUuid);
-    Serial.printf("BLE: session  %s\n", kLmycSessionUuid);
     return true;
 }
 
