@@ -46,6 +46,26 @@ enum BlePhase {
   failed,
 }
 
+class _NearbyHit {
+  _NearbyHit(this.result);
+
+  ScanResult result;
+
+  String get id => result.device.remoteId.toString();
+
+  String get name {
+    final n = result.advertisementData.advName;
+    if (n.isNotEmpty) return n;
+    if (result.device.platformName.isNotEmpty) return result.device.platformName;
+    return '(no name)';
+  }
+
+  int get rssi => result.rssi;
+
+  List<String> get uuids =>
+      result.advertisementData.serviceUuids.map((u) => u.toString()).toList();
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -55,6 +75,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final _appLinks = AppLinks();
+  final _pasteController = TextEditingController();
   StreamSubscription<Uri>? _linkSubscription;
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<BluetoothConnectionState>? _connSubscription;
@@ -70,6 +91,9 @@ class _HomePageState extends State<HomePage> {
   BluetoothDevice? _device;
   int? _rssi;
   String? _sessionReply;
+
+  int _heardCount = 0;
+  final Map<String, _NearbyHit> _nearby = {};
 
   static final Guid kLmycService =
       Guid('6c6d7963-0001-4000-8000-000000000001');
@@ -110,6 +134,20 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  void _applyPastedUri() {
+    final raw = _pasteController.text.trim();
+    if (raw.isEmpty) return;
+    final uri = Uri.tryParse(raw);
+    if (uri == null || uri.scheme != 'lmyc') {
+      setState(() {
+        _blePhase = BlePhase.failed;
+        _bleDetail = 'Not an lmyc:// URI.';
+      });
+      return;
+    }
+    _handleIncomingLink(uri);
+  }
+
   Future<bool> _ensurePermissions() async {
     setState(() {
       _blePhase = BlePhase.checkingPermissions;
@@ -144,25 +182,36 @@ class _HomePageState extends State<HomePage> {
     return true;
   }
 
-  Future<void> _startScanAndConnect() async {
-    if (_bleName == null || _oob == null) {
-      setState(() {
-        _blePhase = BlePhase.failed;
-        _bleDetail = 'Scan the terminal QR first.';
-      });
-      return;
-    }
+  bool _isLmycHit(ScanResult r) {
+    final names = <String>[
+      r.device.platformName,
+      r.advertisementData.advName,
+    ].where((s) => s.isNotEmpty);
 
+    final uuidMatch = r.advertisementData.serviceUuids.any(
+      (u) => u == kLmycService,
+    );
+    final prefixMatch = names.any((n) => n.toUpperCase().startsWith('LMYC-'));
+    final exactMatch =
+        _bleName != null && names.any((n) => n == _bleName);
+    return exactMatch || prefixMatch || uuidMatch;
+  }
+
+  Future<void> _startScan({required bool autoConnectExact}) async {
     await _disconnect(resetPhase: false);
 
     if (!await _ensurePermissions()) return;
 
     setState(() {
       _blePhase = BlePhase.scanning;
-      _bleDetail = 'Scanning for $_bleName …';
+      _bleDetail = autoConnectExact && _bleName != null
+          ? 'Scanning for $_bleName …'
+          : 'Scanning for LMYC-* terminals …';
       _rssi = null;
       _device = null;
       _sessionReply = null;
+      _heardCount = 0;
+      _nearby.clear();
     });
 
     try {
@@ -170,51 +219,84 @@ class _HomePageState extends State<HomePage> {
       await _scanSubscription?.cancel();
 
       final completer = Completer<ScanResult?>();
-      Timer? timeout;
 
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+        _heardCount = results.length;
         for (final r in results) {
-          final name = r.device.platformName;
-          final advName = r.advertisementData.advName;
-          if ((name == _bleName || advName == _bleName) &&
+          if (!_isLmycHit(r)) continue;
+          final hit = _NearbyHit(r);
+          _nearby[hit.id] = hit;
+          if (autoConnectExact &&
+              _bleName != null &&
+              hit.name == _bleName &&
               !completer.isCompleted) {
             completer.complete(r);
           }
         }
+        if (mounted) setState(() {});
       });
 
+      // Unfiltered scan: LMYC UUID lives in scan-response and Android
+      // withServices filters often miss that. We match name/prefix in-app.
       await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 12),
+        timeout: const Duration(seconds: 15),
         androidUsesFineLocation: false,
+        androidScanMode: AndroidScanMode.lowLatency,
       );
 
-      timeout = Timer(const Duration(seconds: 12), () {
-        if (!completer.isCompleted) completer.complete(null);
-      });
+      ScanResult? found;
+      if (autoConnectExact && _bleName != null) {
+        found = await completer.future.timeout(
+          const Duration(seconds: 15),
+          onTimeout: () => null,
+        );
+      } else {
+        await FlutterBluePlus.isScanning
+            .firstWhere((v) => v == false)
+            .timeout(const Duration(seconds: 16), onTimeout: () => false);
+      }
 
-      final found = await completer.future;
-      timeout.cancel();
       await FlutterBluePlus.stopScan();
       await _scanSubscription?.cancel();
       _scanSubscription = null;
 
-      if (found == null) {
+      if (!mounted) return;
+
+      if (autoConnectExact) {
+        found ??= _nearby.values
+            .where((h) => h.name == _bleName)
+            .map((h) => h.result)
+            .firstOrNull;
+        if (found == null) {
+          setState(() {
+            _blePhase = BlePhase.failed;
+            _bleDetail = _nearby.isEmpty
+                ? 'Heard $_heardCount BLE device(s), 0 named LMYC-*.\n'
+                    'Terminal BLE line should read Advertising.\n'
+                    'Android Settings often hides LE-only devices — use this screen.'
+                : 'Did not find "$_bleName". Nearby: '
+                    '${_nearby.values.map((h) => h.name).join(", ")}';
+          });
+          return;
+        }
         setState(() {
-          _blePhase = BlePhase.failed;
-          _bleDetail =
-              'Did not find "$_bleName".\nIs the terminal on and advertising?';
+          _device = found!.device;
+          _rssi = found.rssi;
+          _blePhase = BlePhase.connecting;
+          _bleDetail = 'Found ${found.advertisementData.advName.isNotEmpty ? found.advertisementData.advName : _bleName} '
+              '(${found.rssi} dBm) — connecting…';
         });
+        await _connectAndConfirm(found.device);
         return;
       }
 
       setState(() {
-        _device = found.device;
-        _rssi = found.rssi;
-        _blePhase = BlePhase.connecting;
-        _bleDetail = 'Found $_bleName (${found.rssi} dBm) — connecting…';
+        _blePhase = _nearby.isEmpty ? BlePhase.failed : BlePhase.idle;
+        _bleDetail = _nearby.isEmpty
+            ? 'Heard $_heardCount BLE device(s), 0 LMYC hits.\n'
+                'Confirm the terminal DIAGNOSTICS card says Advertising.'
+            : 'Found ${_nearby.length} LMYC terminal(s). Tap one to connect.';
       });
-
-      await _connectAndConfirm(found.device);
     } catch (e) {
       setState(() {
         _blePhase = BlePhase.failed;
@@ -236,7 +318,6 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<List<BluetoothService>> _discoverWithRetry(BluetoothDevice device) async {
-    // ESP32 often needs a beat after connection before the attribute table is ready.
     await Future<void>.delayed(const Duration(milliseconds: 1200));
 
     for (var attempt = 1; attempt <= 3; attempt++) {
@@ -257,7 +338,6 @@ class _HomePageState extends State<HomePage> {
         debugPrint('discoverServices attempt $attempt failed: $e');
       }
 
-      // Back off and try again while still connected if possible
       await Future<void>.delayed(Duration(milliseconds: 800 * attempt));
     }
 
@@ -297,7 +377,9 @@ class _HomePageState extends State<HomePage> {
       final services = await _discoverWithRetry(device);
 
       setState(() {
-        _bleDetail = 'Connected — proving OOB from QR…';
+        _bleDetail = _oob == null
+            ? 'Connected. Scan/paste QR to prove OOB and finish pairing.'
+            : 'Connected — proving OOB from QR…';
       });
 
       BluetoothCharacteristic? sessionChr;
@@ -329,6 +411,16 @@ class _HomePageState extends State<HomePage> {
           _bleDetail =
               'Connected, but LMYC session characteristic not found.\n'
               'Services seen: ${services.map((s) => s.uuid).join(", ")}';
+        });
+        return;
+      }
+
+      if (_oob == null) {
+        setState(() {
+          _blePhase = BlePhase.idle;
+          _sessionReply = 'WAIT (no OOB yet)';
+          _bleDetail =
+              'Link is up. Scan the terminal QR (or paste lmyc://) then tap Pair.';
         });
         return;
       }
@@ -393,6 +485,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     _linkSubscription?.cancel();
+    _pasteController.dispose();
     _disconnect(resetPhase: false);
     super.dispose();
   }
@@ -446,6 +539,8 @@ class _HomePageState extends State<HomePage> {
         _blePhase == BlePhase.confirming ||
         _blePhase == BlePhase.checkingPermissions;
     final isPaired = _blePhase == BlePhase.paired;
+    final hits = _nearby.values.toList()
+      ..sort((a, b) => b.rssi.compareTo(a.rssi));
 
     return Scaffold(
       appBar: AppBar(
@@ -513,6 +608,26 @@ class _HomePageState extends State<HomePage> {
                       _statusRow('BLE name', _bleName),
                       _statusRow('OOB data', _short(_oob, 18)),
                       _statusRow('Version', _version),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _pasteController,
+                        decoration: const InputDecoration(
+                          labelText: 'Paste lmyc:// URI if camera does not open the app',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        minLines: 1,
+                        maxLines: 3,
+                        onSubmitted: (_) => _applyPastedUri(),
+                      ),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: _applyPastedUri,
+                          child: const Text('Apply URI'),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -546,6 +661,11 @@ class _HomePageState extends State<HomePage> {
                           _bleDetail,
                           style: TextStyle(color: _phaseColor, height: 1.35),
                         ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Heard $_heardCount BLE device(s) · ${_nearby.length} LMYC hit(s)',
+                        style: const TextStyle(color: Colors.black54),
+                      ),
                       if (_rssi != null) ...[
                         const SizedBox(height: 8),
                         _statusRow('RSSI', '$_rssi dBm'),
@@ -554,17 +674,72 @@ class _HomePageState extends State<HomePage> {
                         const SizedBox(height: 4),
                         _statusRow('Session', _sessionReply),
                       ],
+                      if (hits.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Nearby terminals',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 6),
+                        ...hits.map((h) {
+                          final match = _bleName != null && h.name == _bleName;
+                          return ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            leading: Icon(
+                              Icons.bluetooth,
+                              color: match
+                                  ? const Color(0xFF00B4A6)
+                                  : const Color(0xFF001F3F),
+                            ),
+                            title: Text(h.name),
+                            subtitle: Text(
+                              '${h.rssi} dBm'
+                              '${h.uuids.isEmpty ? '' : ' · ${h.uuids.length} uuid'}',
+                            ),
+                            trailing: TextButton(
+                              onPressed: busy
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        _device = h.result.device;
+                                        _rssi = h.rssi;
+                                        _blePhase = BlePhase.connecting;
+                                        _bleDetail =
+                                            'Connecting to ${h.name}…';
+                                      });
+                                      _connectAndConfirm(h.result.device);
+                                    },
+                              child: const Text('Connect'),
+                            ),
+                          );
+                        }),
+                      ],
                       const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: busy
+                              ? null
+                              : () => _startScan(autoConnectExact: false),
+                          icon: const Icon(Icons.radar),
+                          label: Text(busy ? 'Working…' : 'Find terminals'),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       SizedBox(
                         width: double.infinity,
                         child: FilledButton.icon(
                           onPressed: busy
                               ? null
-                              : hasPairingData
-                                  ? (isPaired
-                                      ? () => _disconnect()
-                                      : _startScanAndConnect)
-                                  : null,
+                              : isPaired
+                                  ? () => _disconnect()
+                                  : hasPairingData
+                                      ? () => _startScan(autoConnectExact: true)
+                                      : null,
                           icon: Icon(
                             isPaired
                                 ? Icons.link_off
@@ -620,9 +795,8 @@ class _HomePageState extends State<HomePage> {
 
               const SizedBox(height: 24),
               Text(
-                hasPairingData
-                    ? 'Watch the terminal BLE status — it should move\nAdvertising → Connected → Paired.'
-                    : 'Scan the QR code on the boat terminal to begin.',
+                'Find terminals works without a QR. Pairing still needs the QR OOB.\n'
+                'Watch the terminal DIAGNOSTICS card: Advertising → Connected → Paired.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Colors.black45,

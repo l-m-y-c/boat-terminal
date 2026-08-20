@@ -41,7 +41,10 @@ help:
 	@echo ""
 	@echo "Typical bench loop after pulling:"
 	@echo "  git pull && make pair-test"
+	@echo "  → terminal DIAGNOSTICS should say Advertising"
+	@echo "  → phone: Find terminals (not Android Settings)"
 	@echo "  → scan NEW QR on terminal → Connect & pair"
+	@echo "  (OOB / QR secret is regenerated every boot)"
 	@echo ""
 
 # ---------------------------------------------------------------------------

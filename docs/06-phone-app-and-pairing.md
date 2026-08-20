@@ -73,6 +73,14 @@ This flow is intended to feel like a natural extension of the booking the member
 - Full state is revealed only after a successful handshake.
 - This prevents passive observers in the marina from easily determining which boats are currently unoccupied.
 
+### Bench implementation (current firmware / app)
+
+The 7″ terminal advertises as `LMYC-XXXX` (last two BT MAC bytes). BLE advertising is 31 bytes: a 128-bit service UUID plus the local name **cannot** both fit in the primary packet. The firmware therefore puts **flags + complete local name in the primary ADV** and the LMYC 128-bit UUID only in the scan response.
+
+**Do not use Android Settings → Bluetooth to find the terminal.** System Settings hide most LE-only peripherals. Open the LMYC app and tap **Find terminals**. Pairing still requires the on-screen QR (`lmyc://pair?...`) because the OOB secret rotates every boot.
+
+Watch the terminal **DIAGNOSTICS** card: `Advertising` → `Connected` → `Paired`. **Reset BLE** restarts advertising if a previous connect left the radio stuck.
+
 ## Suggested Feature Set (v1)
 
 **Core**

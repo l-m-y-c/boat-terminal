@@ -18,6 +18,10 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#if __has_include("esp_coexist.h")
+#include "esp_coexist.h"
+#define LMYC_HAS_COEX 1
+#endif
 #include "lwip/ip4_addr.h"
 #include "lwip/pbuf.h"
 #include "lwip/netif.h"
@@ -56,6 +60,11 @@ static Board *g_board = nullptr;
 static lv_obj_t *g_wifi_value = nullptr;
 static lv_obj_t *g_ip_value = nullptr;
 static lv_obj_t *g_ble_value = nullptr;
+static lv_obj_t *g_mac_value = nullptr;
+static lv_obj_t *g_conn_value = nullptr;
+static lv_obj_t *g_event_value = nullptr;
+static lv_obj_t *g_adv_value = nullptr;
+static lv_obj_t *g_heap_value = nullptr;
 static lv_obj_t *g_sd_value = nullptr;
 static lv_timer_t *g_status_timer = nullptr;
 
@@ -63,25 +72,37 @@ static String g_sd_summary;
 static bool g_sd_ready = false;
 
 static volatile bool g_wifi_got_ip = false;
+static volatile bool g_wifi_want_reconnect = false;
 static char g_wifi_ip[16] = "-";
-static const char *g_wifi_status = "Starting...";
+static char g_wifi_line[48] = "Starting...";
+static uint32_t g_wifi_backoff_ms = 1000;
+static uint32_t g_wifi_next_try_ms = 0;
+static int8_t g_wifi_rssi = 0;
 
 static void wifi_event_handler(void * /*arg*/, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        g_wifi_status = "Connecting...";
+        snprintf(g_wifi_line, sizeof(g_wifi_line), "Connecting...");
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        /* Do not hammer esp_wifi_connect() — that starves BLE advertising. */
         g_wifi_got_ip = false;
-        g_wifi_status = "Retrying...";
         strncpy(g_wifi_ip, "-", sizeof(g_wifi_ip));
-        esp_wifi_connect();
+        g_wifi_want_reconnect = true;
+        g_wifi_next_try_ms = millis() + g_wifi_backoff_ms;
+        snprintf(g_wifi_line, sizeof(g_wifi_line), "Retry %lus",
+                 static_cast<unsigned long>((g_wifi_backoff_ms + 999) / 1000));
+        if (g_wifi_backoff_ms < 16000) {
+            g_wifi_backoff_ms *= 2;
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         auto *event = static_cast<ip_event_got_ip_t *>(event_data);
         snprintf(g_wifi_ip, sizeof(g_wifi_ip), IPSTR, IP2STR(&event->ip_info.ip));
         g_wifi_got_ip = true;
-        g_wifi_status = "Connected (client)";
+        g_wifi_want_reconnect = false;
+        g_wifi_backoff_ms = 1000;
+        snprintf(g_wifi_line, sizeof(g_wifi_line), "Connected (client)");
         Serial.printf("Wi-Fi got IP %s\n", g_wifi_ip);
     }
 }
@@ -143,14 +164,46 @@ static void init_sd_card(void)
 
 static void update_status_labels(void)
 {
-    set_label(g_wifi_value, g_wifi_status);
+    char conn[16];
+    char heap[24];
+    char wifi[48];
+
+    snprintf(conn, sizeof(conn), "%lu",
+             static_cast<unsigned long>(pairing_connect_count()));
+    snprintf(heap, sizeof(heap), "%lu KB",
+             static_cast<unsigned long>(ESP.getFreeHeap() / 1024));
+
+    if (g_wifi_got_ip) {
+        wifi_ap_record_t ap = {};
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            g_wifi_rssi = ap.rssi;
+            snprintf(wifi, sizeof(wifi), "Up  %d dBm", static_cast<int>(ap.rssi));
+        } else {
+            snprintf(wifi, sizeof(wifi), "%s", g_wifi_line);
+        }
+    } else {
+        snprintf(wifi, sizeof(wifi), "%s", g_wifi_line);
+    }
+
+    set_label(g_wifi_value, wifi);
     set_label(g_ip_value, g_wifi_ip);
     set_label(g_ble_value, pairing_status());
+    set_label(g_mac_value, pairing_mac());
+    set_label(g_conn_value, conn);
+    set_label(g_event_value, pairing_last_event());
+    set_label(g_adv_value, pairing_adv_layout());
+    set_label(g_heap_value, heap);
     set_label(g_sd_value, g_sd_summary.c_str());
 }
 
 static void status_timer_cb(lv_timer_t * /*timer*/)
 {
+    update_status_labels();
+}
+
+static void on_reset_ble(lv_event_t * /*e*/)
+{
+    pairing_restart_advertising();
     update_status_labels();
 }
 
@@ -185,9 +238,9 @@ static lv_obj_t *add_kv_row(lv_obj_t *card, const char *key, lv_coord_t y, lv_ob
     lv_label_set_text(v, "-");
     lv_obj_set_style_text_color(v, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(v, &lv_font_montserrat_16, 0);
-    lv_obj_align(v, LV_ALIGN_TOP_LEFT, 92, y);
+    lv_obj_align(v, LV_ALIGN_TOP_LEFT, 108, y);
     lv_label_set_long_mode(v, LV_LABEL_LONG_CLIP);
-    lv_obj_set_width(v, 230);
+    lv_obj_set_width(v, 220);
     *value_out = v;
     return v;
 }
@@ -211,7 +264,7 @@ static void create_ui(void)
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 140, 20);
 
     lv_obj_t *subtitle = lv_label_create(scr);
-    lv_label_set_text(subtitle, "Scan QR or open Android Bluetooth settings");
+    lv_label_set_text(subtitle, "Use the LMYC app → Find terminals  (not phone Settings)");
     lv_obj_set_style_text_color(subtitle, lv_color_hex(0x8FA3B8), 0);
     lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_16, 0);
     lv_obj_align(subtitle, LV_ALIGN_TOP_LEFT, 140, 58);
@@ -227,37 +280,49 @@ static void create_ui(void)
     lv_obj_align(qr, LV_ALIGN_TOP_MID, 0, 28);
 
     lv_obj_t *hint = lv_label_create(qr_card);
-    lv_label_set_text(hint, "Android: Settings > Bluetooth > Available");
+    lv_label_set_text(hint, "Scan QR in the LMYC app (or paste the URI)");
     lv_obj_set_style_text_color(hint, lv_color_hex(0x6B7C90), 0);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, 0);
 
-    lv_obj_t *status_card = make_card(scr, "THIS TERMINAL", 380, 380);
+    lv_obj_t *status_card = make_card(scr, "DIAGNOSTICS", 380, 380);
     lv_obj_align(status_card, LV_ALIGN_BOTTOM_RIGHT, -20, -16);
 
     lv_obj_t *boat_value = nullptr;
     lv_obj_t *tid_value = nullptr;
     lv_obj_t *name_value = nullptr;
-    add_kv_row(status_card, "Boat", 36, &boat_value);
+    add_kv_row(status_card, "Boat", 26, &boat_value);
     set_label(boat_value, LMYC_BOAT_ID);
-    add_kv_row(status_card, "Terminal", 68, &tid_value);
+    add_kv_row(status_card, "Terminal", 48, &tid_value);
     set_label(tid_value, LMYC_TERMINAL_ID);
-    add_kv_row(status_card, "BLE name", 100, &name_value);
+    add_kv_row(status_card, "BLE name", 70, &name_value);
     set_label(name_value, pairing_ble_name());
-    add_kv_row(status_card, "BLE", 132, &g_ble_value);
-    add_kv_row(status_card, "Wi-Fi", 164, &g_wifi_value);
-    add_kv_row(status_card, "IP", 196, &g_ip_value);
-    add_kv_row(status_card, "SD", 228, &g_sd_value);
+    add_kv_row(status_card, "BLE", 92, &g_ble_value);
+    add_kv_row(status_card, "MAC", 114, &g_mac_value);
+    add_kv_row(status_card, "Connects", 136, &g_conn_value);
+    add_kv_row(status_card, "Last", 158, &g_event_value);
+    add_kv_row(status_card, "ADV", 180, &g_adv_value);
+    add_kv_row(status_card, "Wi-Fi", 202, &g_wifi_value);
+    add_kv_row(status_card, "IP", 224, &g_ip_value);
+    add_kv_row(status_card, "Heap", 246, &g_heap_value);
+    add_kv_row(status_card, "SD", 268, &g_sd_value);
+
+    lv_obj_t *reset_btn = lv_btn_create(status_card);
+    lv_obj_set_size(reset_btn, 120, 32);
+    lv_obj_align(reset_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(reset_btn, lv_color_hex(0x1E3A5F), 0);
+    lv_obj_set_style_shadow_width(reset_btn, 0, 0);
+    lv_obj_add_event_cb(reset_btn, on_reset_ble, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *reset_lbl = lv_label_create(reset_btn);
+    lv_label_set_text(reset_lbl, "Reset BLE");
+    lv_obj_set_style_text_font(reset_lbl, &lv_font_montserrat_12, 0);
+    lv_obj_center(reset_lbl);
 
     lv_obj_t *note = lv_label_create(status_card);
-    lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(note, 340);
-    lv_label_set_text(note,
-                      "Look for this BLE name in Android Bluetooth settings and "
-                      "tap to pair. iPhone Settings will not list it.");
+    lv_label_set_text(note, "Settings hide LE-only");
     lv_obj_set_style_text_color(note, lv_color_hex(0x6B7C90), 0);
     lv_obj_set_style_text_font(note, &lv_font_montserrat_12, 0);
-    lv_obj_align(note, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_align(note, LV_ALIGN_BOTTOM_RIGHT, 0, 4);
 
     update_status_labels();
     g_status_timer = lv_timer_create(status_timer_cb, 1000, nullptr);
@@ -287,7 +352,11 @@ static void start_wifi_client(void)
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    /* MIN_MODEM yields the radio to BLE advertising; NONE starved discovery. */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+#ifdef LMYC_HAS_COEX
+    esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
+#endif
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
@@ -329,10 +398,16 @@ void setup()
     create_ui();
     lvgl_port_unlock();
 
-    Serial.println("UI ready. QR is BLE pairing bootstrap; Wi-Fi stays STA.");
+    Serial.println("UI ready. BLE name is in the primary ADV packet; scan in the LMYC app.");
 }
 
 void loop()
 {
-    delay(1000);
+    if (g_wifi_want_reconnect && millis() >= g_wifi_next_try_ms) {
+        g_wifi_want_reconnect = false;
+        snprintf(g_wifi_line, sizeof(g_wifi_line), "Retrying...");
+        Serial.println("Wi-Fi: reconnect (backoff)");
+        esp_wifi_connect();
+    }
+    delay(200);
 }

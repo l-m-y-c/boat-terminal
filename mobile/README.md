@@ -10,15 +10,16 @@ Flutter companion app for the Lower Mainland Yacht Club boat terminal.
 
 See `../docs/06-phone-app-and-pairing.md` and `../docs/08-user-flows.md`.
 
-## Current status (v0.2)
+## Current status (v0.3)
 
-- Android `lmyc://` deep-link handler
-- Parses real terminal QR payload (`boat`, `tid`, `ble`, `oob`, `v`)
-- In-app BLE scan targeting the exact name from the QR
-- GATT connect + read of the LMYC payload characteristic
-- Clear status UI (permissions → scanning → connecting → connected)
+- Android `lmyc://` deep-link handler **and** a paste-URI field (camera apps often don't open custom schemes)
+- **Find terminals** — in-app BLE scan that does **not** require a QR first
+- Matches `LMYC-*` advertised name (name is in the primary ADV packet) plus the LMYC service UUID if present
+- Shows heard-device count vs LMYC hits (diagnostics)
+- GATT connect + OOB `PAIR <secret>` once a QR / URI is applied
+- Clear status UI (permissions → scanning → connecting → paired)
 
-**Note:** Android’s system Bluetooth Settings often hides pure LE peripherals. Use the in-app **Connect to terminal** button — it is more reliable than Settings → Scan.
+**Do not use Android Settings → Bluetooth.** System Settings hide most LE-only peripherals. Use **Find terminals**.
 
 ## Development
 
@@ -28,6 +29,8 @@ flutter pub get
 flutter run
 ```
 
+Or from the repo root: `make phone-reinstall` after firmware/BLE changes.
+
 ### Test deep link without QR
 
 ```bash
@@ -35,7 +38,7 @@ adb shell am start -a android.intent.action.VIEW \
   -d "lmyc://pair?v=1&boat=BENCH-01&tid=WS7-001&ble=LMYC-D649&oob=test"
 ```
 
-Then tap **Connect to terminal** (with the real board advertising under that BLE name).
+Copy the live URI off the terminal serial log (`Pairing payload: lmyc://...`) — OOB rotates every boot.
 
 ## Permissions
 
@@ -48,5 +51,4 @@ On first connect the app requests:
 
 1. Use OOB data for LE Secure Connections (replace Just Works)
 2. Booking-token exchange after GATT connect
-3. “Paired” state mirrored on the terminal UI
-4. Simple log / engine-hour forms once paired
+3. Member tools once paired

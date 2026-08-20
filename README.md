@@ -86,7 +86,8 @@ The system may still listen to waypoint and autopilot data and can push high-qua
 
 See [04 – Hardware](docs/04-hardware.md) and [14 – Prototype Hardware](docs/14-prototype-hardware.md) for details.
 
-Software development has not yet started.  
+**Prototype software (this repo):** firmware for the 7″ ESP32-S3 terminal (`firmware/`) and an Android companion (`mobile/`). Bench pairing is QR + BLE OOB. **Use the app’s Find terminals** — Android Settings hide most LE-only devices. After a pull: `make pair-test`, then rescan the QR (OOB rotates every boot).
+
 NMEA bus safety, pairing security, and firmware ownership remain required items before any boat is modified.
 
 ---

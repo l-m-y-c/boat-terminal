@@ -2,7 +2,7 @@ name: lmyc_app
 description: LMYC Boat Terminal companion app — pairing, check-in, and boat tools for Lower Mainland Yacht Club members.
 publish_to: 'none'
 
-version: 0.2.0+2
+version: 0.3.0+3
 
 environment:
   sdk: ^3.13.0

@@ -11,11 +11,12 @@ PlatformIO project for the **interactive cabin terminal**:
 - Shows the **LMYC club logo** plus a **ready / QR pairing** screen
 - **Wi-Fi as a client (STA)** — joins a configured LAN; it is **not** an access point
 - **BLE GATT peripheral** + on-screen QR (`lmyc://pair?...`) for the pairing bootstrap
-- Advertises as `LMYC-xxxx` (named, connectable, bondable). Android Settings can list it; iPhone Settings will not.
+- Advertises as `LMYC-xxxx`. The **complete local name is in the primary advertising packet** (the 128-bit LMYC UUID is only in the scan response). Android Settings often still hide LE-only devices — use the LMYC app **Find terminals**.
+- On-screen **DIAGNOSTICS** card: BLE status, MAC, connect count, last event, ADV layout, Wi-Fi / IP / RSSI, heap, SD, plus a **Reset BLE** button
 - **MicroSD (TF slot)** — mount FAT32 card (exFAT will not work)
 - Credentials live in `src/secrets.h` (gitignored). Copy `src/secrets.h.example`.
 
-NMEA, LE Secure Connections handshake, and booking-system talk are intentionally **not** included yet. The QR is scannable; the phone app that consumes it is next.
+NMEA, LE Secure Connections handshake, and booking-system talk are intentionally **not** included yet. Bench pairing is QR + BLE OOB via the Flutter app in `../mobile`.
 
 ## Prerequisites (macOS)
 
