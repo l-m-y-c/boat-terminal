@@ -188,9 +188,11 @@ static bool start_advertising(void)
     advData.setName(g_ble_name);
 
     /* Scan response: LMYC 128-bit service UUID (optional; name discovery
-     * must work even if scan responses are dropped). */
+     * must work even if scan responses are dropped).
+     * NimBLE 1.4: UUID goes on AdvertisementData via setCompleteServices,
+     * not addServiceUUID (that method is on NimBLEAdvertising only). */
     NimBLEAdvertisementData scanData;
-    scanData.addServiceUUID(NimBLEUUID(kLmycServiceUuid));
+    scanData.setCompleteServices(NimBLEUUID(kLmycServiceUuid));
 
     adv->setAdvertisementData(advData);
     adv->setScanResponseData(scanData);
