@@ -319,11 +319,18 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         g_rx_acc_len = 0;
         NimBLEDevice::stopAdvertising();
 
+        /* NimBLE 1.4 ble_gap_conn_desc has no att_mtu. Default ATT MTU
+         * is 23 until the client exchanges; onMTUChange updates g_mtu. */
+        g_mtu = 23;
         if (desc != nullptr) {
-            g_mtu = desc->att_mtu;
             format_addr(g_peer, sizeof(g_peer), &desc->peer_ota_addr);
+            if (g_server != nullptr) {
+                const uint16_t peer_mtu = g_server->getPeerMTU(desc->conn_handle);
+                if (peer_mtu >= 23) {
+                    g_mtu = peer_mtu;
+                }
+            }
         } else {
-            g_mtu = 23;
             snprintf(g_peer, sizeof(g_peer), "unknown");
         }
 
