@@ -61,11 +61,16 @@ static lv_obj_t *g_wifi_value = nullptr;
 static lv_obj_t *g_ip_value = nullptr;
 static lv_obj_t *g_ble_value = nullptr;
 static lv_obj_t *g_mac_value = nullptr;
+static lv_obj_t *g_peer_value = nullptr;
+static lv_obj_t *g_mtu_value = nullptr;
 static lv_obj_t *g_conn_value = nullptr;
 static lv_obj_t *g_event_value = nullptr;
+static lv_obj_t *g_rx_value = nullptr;
 static lv_obj_t *g_adv_value = nullptr;
 static lv_obj_t *g_heap_value = nullptr;
 static lv_obj_t *g_sd_value = nullptr;
+static lv_obj_t *g_hint_value = nullptr;
+static lv_obj_t *g_log_value = nullptr;
 static lv_timer_t *g_status_timer = nullptr;
 
 static String g_sd_summary;
@@ -126,7 +131,6 @@ static void init_sd_card(void)
         return;
     }
 
-    /* EXIO4 is active-low chip select. */
     expander->pinMode(kSdCsExpander, OUTPUT);
     expander->digitalWrite(kSdCsExpander, LOW);
     delay(20);
@@ -164,14 +168,20 @@ static void init_sd_card(void)
 
 static void update_status_labels(void)
 {
-    char conn[16];
+    char conn[24];
     char heap[24];
     char wifi[48];
+    char mtu[24];
 
-    snprintf(conn, sizeof(conn), "%lu",
-             static_cast<unsigned long>(pairing_connect_count()));
+    snprintf(conn, sizeof(conn), "%lu  R%lu W%lu",
+             static_cast<unsigned long>(pairing_connect_count()),
+             static_cast<unsigned long>(pairing_read_count()),
+             static_cast<unsigned long>(pairing_write_count()));
     snprintf(heap, sizeof(heap), "%lu KB",
              static_cast<unsigned long>(ESP.getFreeHeap() / 1024));
+    snprintf(mtu, sizeof(mtu), "%u  (%uB wr)",
+             static_cast<unsigned>(pairing_mtu()),
+             pairing_mtu() > 3 ? pairing_mtu() - 3 : 0);
 
     if (g_wifi_got_ip) {
         wifi_ap_record_t ap = {};
@@ -189,11 +199,16 @@ static void update_status_labels(void)
     set_label(g_ip_value, g_wifi_ip);
     set_label(g_ble_value, pairing_status());
     set_label(g_mac_value, pairing_mac());
+    set_label(g_peer_value, pairing_peer());
+    set_label(g_mtu_value, mtu);
     set_label(g_conn_value, conn);
     set_label(g_event_value, pairing_last_event());
+    set_label(g_rx_value, pairing_last_rx());
     set_label(g_adv_value, pairing_adv_layout());
     set_label(g_heap_value, heap);
     set_label(g_sd_value, g_sd_summary.c_str());
+    set_label(g_hint_value, pairing_hint());
+    set_label(g_log_value, pairing_event_log());
 }
 
 static void status_timer_cb(lv_timer_t * /*timer*/)
@@ -231,16 +246,16 @@ static lv_obj_t *add_kv_row(lv_obj_t *card, const char *key, lv_coord_t y, lv_ob
     lv_obj_t *k = lv_label_create(card);
     lv_label_set_text(k, key);
     lv_obj_set_style_text_color(k, lv_color_hex(0x8FA3B8), 0);
-    lv_obj_set_style_text_font(k, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(k, &lv_font_montserrat_12, 0);
     lv_obj_align(k, LV_ALIGN_TOP_LEFT, 0, y);
 
     lv_obj_t *v = lv_label_create(card);
     lv_label_set_text(v, "-");
     lv_obj_set_style_text_color(v, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(v, &lv_font_montserrat_16, 0);
-    lv_obj_align(v, LV_ALIGN_TOP_LEFT, 108, y);
+    lv_obj_set_style_text_font(v, &lv_font_montserrat_14, 0);
+    lv_obj_align(v, LV_ALIGN_TOP_LEFT, 88, y);
     lv_label_set_long_mode(v, LV_LABEL_LONG_CLIP);
-    lv_obj_set_width(v, 220);
+    lv_obj_set_width(v, 260);
     *value_out = v;
     return v;
 }
@@ -254,7 +269,7 @@ static void create_ui(void)
 
     lv_obj_t *logo = lv_img_create(scr);
     lv_img_set_src(logo, &lmyc_logo);
-    lv_img_set_zoom(logo, 128); /* 50% — pairing QR is the hero */
+    lv_img_set_zoom(logo, 128);
     lv_obj_align(logo, LV_ALIGN_TOP_LEFT, 20, 12);
 
     lv_obj_t *title = lv_label_create(scr);
@@ -264,13 +279,13 @@ static void create_ui(void)
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 140, 20);
 
     lv_obj_t *subtitle = lv_label_create(scr);
-    lv_label_set_text(subtitle, "Use the LMYC app → Find terminals  (not phone Settings)");
+    lv_label_set_text(subtitle, "Use the LMYC app -> Find terminals  (not phone Settings)");
     lv_obj_set_style_text_color(subtitle, lv_color_hex(0x8FA3B8), 0);
     lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_16, 0);
     lv_obj_align(subtitle, LV_ALIGN_TOP_LEFT, 140, 58);
 
-    lv_obj_t *qr_card = make_card(scr, "PAIR WITH PHONE", 360, 380);
-    lv_obj_align(qr_card, LV_ALIGN_BOTTOM_LEFT, 20, -16);
+    lv_obj_t *qr_card = make_card(scr, "PAIR WITH PHONE", 340, 388);
+    lv_obj_align(qr_card, LV_ALIGN_BOTTOM_LEFT, 16, -8);
 
     lv_obj_t *qr = lv_qrcode_create(qr_card, 220,
                                     lv_color_hex(0x0A1628),
@@ -285,31 +300,50 @@ static void create_ui(void)
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, 0);
 
-    lv_obj_t *status_card = make_card(scr, "DIAGNOSTICS", 380, 380);
-    lv_obj_align(status_card, LV_ALIGN_BOTTOM_RIGHT, -20, -16);
+    lv_obj_t *status_card = make_card(scr, "DIAGNOSTICS", 420, 388);
+    lv_obj_align(status_card, LV_ALIGN_BOTTOM_RIGHT, -16, -8);
 
     lv_obj_t *boat_value = nullptr;
     lv_obj_t *tid_value = nullptr;
     lv_obj_t *name_value = nullptr;
-    add_kv_row(status_card, "Boat", 26, &boat_value);
+    add_kv_row(status_card, "Boat", 22, &boat_value);
     set_label(boat_value, LMYC_BOAT_ID);
-    add_kv_row(status_card, "Terminal", 48, &tid_value);
+    add_kv_row(status_card, "Terminal", 40, &tid_value);
     set_label(tid_value, LMYC_TERMINAL_ID);
-    add_kv_row(status_card, "BLE name", 70, &name_value);
+    add_kv_row(status_card, "BLE name", 58, &name_value);
     set_label(name_value, pairing_ble_name());
-    add_kv_row(status_card, "BLE", 92, &g_ble_value);
-    add_kv_row(status_card, "MAC", 114, &g_mac_value);
-    add_kv_row(status_card, "Connects", 136, &g_conn_value);
-    add_kv_row(status_card, "Last", 158, &g_event_value);
-    add_kv_row(status_card, "ADV", 180, &g_adv_value);
-    add_kv_row(status_card, "Wi-Fi", 202, &g_wifi_value);
-    add_kv_row(status_card, "IP", 224, &g_ip_value);
-    add_kv_row(status_card, "Heap", 246, &g_heap_value);
-    add_kv_row(status_card, "SD", 268, &g_sd_value);
+    add_kv_row(status_card, "BLE", 76, &g_ble_value);
+    add_kv_row(status_card, "MAC", 94, &g_mac_value);
+    add_kv_row(status_card, "Peer", 112, &g_peer_value);
+    add_kv_row(status_card, "MTU", 130, &g_mtu_value);
+    add_kv_row(status_card, "Conn", 148, &g_conn_value);
+    add_kv_row(status_card, "Last", 166, &g_event_value);
+    add_kv_row(status_card, "Rx", 184, &g_rx_value);
+    add_kv_row(status_card, "ADV", 202, &g_adv_value);
+    add_kv_row(status_card, "Wi-Fi", 220, &g_wifi_value);
+    add_kv_row(status_card, "IP", 238, &g_ip_value);
+    add_kv_row(status_card, "Heap", 256, &g_heap_value);
+    add_kv_row(status_card, "SD", 274, &g_sd_value);
+
+    g_hint_value = lv_label_create(status_card);
+    lv_label_set_text(g_hint_value, "-");
+    lv_obj_set_style_text_color(g_hint_value, lv_color_hex(0xF0C674), 0);
+    lv_obj_set_style_text_font(g_hint_value, &lv_font_montserrat_12, 0);
+    lv_label_set_long_mode(g_hint_value, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_hint_value, 388);
+    lv_obj_align(g_hint_value, LV_ALIGN_TOP_LEFT, 0, 294);
+
+    g_log_value = lv_label_create(status_card);
+    lv_label_set_text(g_log_value, "-");
+    lv_obj_set_style_text_color(g_log_value, lv_color_hex(0x8FA3B8), 0);
+    lv_obj_set_style_text_font(g_log_value, &lv_font_montserrat_12, 0);
+    lv_label_set_long_mode(g_log_value, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_log_value, 250);
+    lv_obj_align(g_log_value, LV_ALIGN_BOTTOM_LEFT, 0, -2);
 
     lv_obj_t *reset_btn = lv_btn_create(status_card);
-    lv_obj_set_size(reset_btn, 120, 32);
-    lv_obj_align(reset_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_size(reset_btn, 110, 28);
+    lv_obj_align(reset_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
     lv_obj_set_style_bg_color(reset_btn, lv_color_hex(0x1E3A5F), 0);
     lv_obj_set_style_shadow_width(reset_btn, 0, 0);
     lv_obj_add_event_cb(reset_btn, on_reset_ble, LV_EVENT_CLICKED, nullptr);
@@ -318,14 +352,8 @@ static void create_ui(void)
     lv_obj_set_style_text_font(reset_lbl, &lv_font_montserrat_12, 0);
     lv_obj_center(reset_lbl);
 
-    lv_obj_t *note = lv_label_create(status_card);
-    lv_label_set_text(note, "Settings hide LE-only");
-    lv_obj_set_style_text_color(note, lv_color_hex(0x6B7C90), 0);
-    lv_obj_set_style_text_font(note, &lv_font_montserrat_12, 0);
-    lv_obj_align(note, LV_ALIGN_BOTTOM_RIGHT, 0, 4);
-
     update_status_labels();
-    g_status_timer = lv_timer_create(status_timer_cb, 1000, nullptr);
+    g_status_timer = lv_timer_create(status_timer_cb, 250, nullptr);
 }
 
 static void start_wifi_client(void)
@@ -352,7 +380,6 @@ static void start_wifi_client(void)
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    /* MIN_MODEM yields the radio to BLE advertising; NONE starved discovery. */
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
 #ifdef LMYC_HAS_COEX
     esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
