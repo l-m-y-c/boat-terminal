@@ -1,0 +1,48 @@
+name: Firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - firmware/**
+      - .github/workflows/firmware.yml
+  pull_request:
+    paths:
+      - firmware/**
+      - .github/workflows/firmware.yml
+
+jobs:
+  build:
+    name: pio run
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: firmware
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dummy Wi-Fi secrets for compile
+        run: cp src/secrets.h.example src/secrets.h
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            firmware/.pio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini', 'firmware/boards/**') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install -U platformio
+
+      - name: Compile firmware
+        run: pio run
