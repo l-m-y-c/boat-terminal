@@ -16,7 +16,8 @@ See `../docs/06-phone-app-and-pairing.md` and `../docs/08-user-flows.md`.
 - **Find terminals** — in-app BLE scan that does **not** require a QR first
 - Matches `LMYC-*` advertised name (name is in the primary ADV packet) plus the LMYC service UUID if present
 - Shows heard-device count vs LMYC hits (diagnostics)
-- GATT connect + OOB `PAIR <secret>` once a QR / URI is applied
+- GATT connect + raw 16-byte OOB write (from QR hex) once a QR / URI is applied
+  — fits default ATT MTU 23; the old `PAIR <hex>` text write was 37B and died on Android
 - Clear status UI (permissions → scanning → connecting → paired)
 
 **Do not use Android Settings → Bluetooth.** System Settings hide most LE-only peripherals. Use **Find terminals**.
@@ -35,10 +36,10 @@ Or from the repo root: `make phone-reinstall` after firmware/BLE changes.
 
 ```bash
 adb shell am start -a android.intent.action.VIEW \
-  -d "lmyc://pair?v=1&boat=BENCH-01&tid=WS7-001&ble=LMYC-D649&oob=test"
+  -d "lmyc://pair?v=1&boat=BENCH-01&tid=WS7-001&ble=LMYC-D649&oob=0123456789abcdef0123456789abcdef"
 ```
 
-Copy the live URI off the terminal serial log (`Pairing payload: lmyc://...`) — OOB rotates every boot.
+`oob` must be 32 hex chars (16 raw bytes). Copy the live URI off the terminal serial log (`Pairing payload: lmyc://...`) — OOB rotates every boot.
 
 ## Permissions
 

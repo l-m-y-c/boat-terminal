@@ -8,5 +8,8 @@ libdeps/
 # Local secrets (never commit Wi-Fi / API credentials)
 firmware/src/secrets.h
 
+# Local adb / flutter capture logs from bench pairing
+.grok-logs/
+
 # macOS
 .DS_Store

@@ -23,6 +23,8 @@
 static constexpr const char *kLmycServiceUuid = "6c6d7963-0001-4000-8000-000000000001";
 static constexpr const char *kLmycPayloadUuid = "6c6d7963-0001-4000-8000-000000000010";
 static constexpr const char *kLmycSessionUuid = "6c6d7963-0001-4000-8000-000000000020";
+/* Read/notify only — never written by the phone (avoids Android write-cache garbage). */
+static constexpr const char *kLmycStatusUuid = "6c6d7963-0001-4000-8000-000000000021";
 static constexpr size_t kEventLogLines = 5;
 static constexpr size_t kEventLineLen = 40;
 static constexpr size_t kRxAccMax = 80;
@@ -42,6 +44,7 @@ static char g_event_lines[kEventLogLines][kEventLineLen];
 static char g_event_log[kEventLogLines * kEventLineLen];
 static char g_rx_acc[kRxAccMax];
 static size_t g_rx_acc_len = 0;
+static char g_session_status[8] = "WAIT";
 static const char *g_status = g_status_buf;
 static bool g_ble_ok = false;
 static bool g_confirmed = false;
@@ -58,6 +61,7 @@ static uint8_t g_event_count = 0;
 static NimBLEServer *g_server = nullptr;
 static NimBLECharacteristic *g_payload_chr = nullptr;
 static NimBLECharacteristic *g_session_chr = nullptr;
+static NimBLECharacteristic *g_status_chr = nullptr;
 
 static void rebuild_event_log(void)
 {
@@ -224,7 +228,22 @@ static void describe_rx(const uint8_t *data, size_t n)
     }
 }
 
-static void apply_pair_result(NimBLECharacteristic *chr, bool ok, const char *how)
+static void set_session_status(const char *status)
+{
+    /* Clear first — char[8] passed to setValue can copy sizeof(buf), so a
+     * leftover 'T' from "WAIT" after writing "OK" became BLE payload "OK\\0T". */
+    memset(g_session_status, 0, sizeof(g_session_status));
+    snprintf(g_session_status, sizeof(g_session_status), "%s", status);
+    if (g_status_chr != nullptr) {
+        g_status_chr->setValue(reinterpret_cast<const uint8_t *>(g_session_status),
+                               strlen(g_session_status));
+        if (g_status_chr->getSubscribedCount() > 0) {
+            g_status_chr->notify();
+        }
+    }
+}
+
+static void apply_pair_result(bool ok, const char *how)
 {
     g_confirmed = ok;
     if (ok) {
@@ -232,26 +251,26 @@ static void apply_pair_result(NimBLECharacteristic *chr, bool ok, const char *ho
         char ev[48];
         snprintf(ev, sizeof(ev), "OOB OK (%s)", how);
         set_event(ev);
-        chr->setValue("OK");
+        set_session_status("OK");
         Serial.printf("BLE: OOB confirmed via %s - Paired\n", how);
     } else {
         set_status("OOB mismatch");
         char ev[48];
         snprintf(ev, sizeof(ev), "OOB FAIL (%s)", how);
         set_event(ev);
-        chr->setValue("FAIL");
+        set_session_status("FAIL");
         Serial.printf("BLE: OOB mismatch via %s\n", how);
     }
 }
 
-static bool try_handle_session_value(NimBLECharacteristic *chr, const uint8_t *data, size_t n)
+static bool try_handle_session_value(const uint8_t *data, size_t n)
 {
     if (n == 0) {
         return false;
     }
 
     if (n == 4 && memcmp(data, "PING", 4) == 0) {
-        chr->setValue("PONG");
+        set_session_status("PONG");
         set_event("PING");
         return true;
     }
@@ -264,8 +283,11 @@ static bool try_handle_session_value(NimBLECharacteristic *chr, const uint8_t *d
         }
     }
 
-    if (n == kPairingOobBytes && !printable) {
-        apply_pair_result(chr, oob_matches_raw(data, n), "raw16");
+    /* Phone sends raw 16-byte OOB (fits ATT MTU 23). Treat any exact-length
+     * 16-byte write as raw OOB — do not require non-printable bytes. A random
+     * secret can be all ASCII; the old !printable gate dropped those writes. */
+    if (n == kPairingOobBytes) {
+        apply_pair_result(oob_matches_raw(data, n), "raw16");
         return true;
     }
 
@@ -285,12 +307,12 @@ static bool try_handle_session_value(NimBLECharacteristic *chr, const uint8_t *d
             while (*offered == ' ') {
                 ++offered;
             }
-            apply_pair_result(chr, oob_matches_hex(offered), "PAIR");
+            apply_pair_result(oob_matches_hex(offered), "PAIR");
             return true;
         }
 
         if (n == (kPairingOobBytes * 2) && is_all_hex(text, n)) {
-            apply_pair_result(chr, oob_matches_hex(text), "hex32");
+            apply_pair_result(oob_matches_hex(text), "hex32");
             return true;
         }
 
@@ -303,7 +325,7 @@ static bool try_handle_session_value(NimBLECharacteristic *chr, const uint8_t *d
         return false;
     }
 
-    chr->setValue("ERR");
+    set_session_status("ERR");
     set_event("bad session write");
     return true;
 }
@@ -317,6 +339,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         g_got_payload_read = false;
         g_got_session_write = false;
         g_rx_acc_len = 0;
+        set_session_status("WAIT");
         NimBLEDevice::stopAdvertising();
 
         /* NimBLE 1.4 ble_gap_conn_desc has no att_mtu. Default ATT MTU
@@ -348,9 +371,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         g_confirmed = false;
         g_connected = false;
         g_rx_acc_len = 0;
-        if (g_session_chr != nullptr) {
-            g_session_chr->setValue("WAIT");
-        }
+        set_session_status("WAIT");
         set_status("Advertising");
         if (g_got_payload_read && !g_got_session_write) {
             set_event("disc - no PAIR write");
@@ -389,8 +410,9 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 class SessionCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic *chr) override
     {
-        std::string value = chr->getValue();
-        const auto *bytes = reinterpret_cast<const uint8_t *>(value.data());
+        /* Use length-aware accessors — OOB is binary and may contain 0x00. */
+        const NimBLEAttValue value = chr->getValue();
+        const uint8_t *bytes = value.data();
         const size_t n = value.size();
 
         g_write_count++;
@@ -411,7 +433,7 @@ class SessionCallbacks : public NimBLECharacteristicCallbacks {
         g_rx_acc_len += n;
 
         const bool handled = try_handle_session_value(
-            chr, reinterpret_cast<const uint8_t *>(g_rx_acc), g_rx_acc_len);
+            reinterpret_cast<const uint8_t *>(g_rx_acc), g_rx_acc_len);
         if (handled) {
             g_rx_acc_len = 0;
         } else {
@@ -422,13 +444,17 @@ class SessionCallbacks : public NimBLECharacteristicCallbacks {
             set_event(ev);
         }
     }
+};
 
+class StatusCallbacks : public NimBLECharacteristicCallbacks {
     void onRead(NimBLECharacteristic *chr) override
     {
         g_read_count++;
-        Serial.printf("BLE: session read -> %s\n", g_confirmed ? "OK" : "WAIT");
-        chr->setValue(g_confirmed ? "OK" : "WAIT");
-        set_event(g_confirmed ? "session read OK" : "session read WAIT");
+        chr->setValue(g_session_status);
+        Serial.printf("BLE: status read -> %s\n", g_session_status);
+        char ev[40];
+        snprintf(ev, sizeof(ev), "status read %s", g_session_status);
+        set_event(ev);
     }
 };
 
@@ -446,6 +472,7 @@ class PayloadCallbacks : public NimBLECharacteristicCallbacks {
 
 static ServerCallbacks g_server_cb;
 static SessionCallbacks g_session_cb;
+static StatusCallbacks g_status_cb;
 static PayloadCallbacks g_payload_cb;
 
 static bool start_advertising(void)
@@ -491,7 +518,7 @@ static bool start_ble_peripheral(void)
     dis->createCharacteristic("2A29", NIMBLE_PROPERTY::READ)->setValue("LMYC");
     dis->createCharacteristic("2A24", NIMBLE_PROPERTY::READ)->setValue("Boat Terminal");
     dis->createCharacteristic("2A25", NIMBLE_PROPERTY::READ)->setValue(LMYC_TERMINAL_ID);
-    dis->createCharacteristic("2A26", NIMBLE_PROPERTY::READ)->setValue("nimble-oob-v2");
+    dis->createCharacteristic("2A26", NIMBLE_PROPERTY::READ)->setValue("nimble-oob-v3");
     dis->start();
 
     NimBLEService *svc = g_server->createService(kLmycServiceUuid);
@@ -501,11 +528,18 @@ static bool start_ble_peripheral(void)
     g_payload_chr->setCallbacks(&g_payload_cb);
     g_payload_chr->setValue(g_payload);
 
+    /* Phone writes raw 16-byte OOB here. Do not use this char for status —
+     * Android read-after-write returns stale/truncated binary (seen as 4B "<"). */
     g_session_chr = svc->createCharacteristic(
         kLmycSessionUuid,
-        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+        NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
     g_session_chr->setCallbacks(&g_session_cb);
-    g_session_chr->setValue("WAIT");
+
+    g_status_chr = svc->createCharacteristic(
+        kLmycStatusUuid,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+    g_status_chr->setCallbacks(&g_status_cb);
+    set_session_status("WAIT");
 
     svc->start();
     return start_advertising();
@@ -522,7 +556,7 @@ void pairing_init(void)
     g_event_log[0] = '\0';
     g_ble_ok = start_ble_peripheral();
     Serial.printf("Pairing payload: %s\n", g_payload);
-    Serial.println("BLE: session write accepts raw 16-byte OOB, 32 hex, or PAIR <hex>");
+    Serial.println("BLE: session WRITE raw16/hex; status READ/NOTIFY …000021");
 }
 
 void pairing_restart_advertising(void)
@@ -536,9 +570,7 @@ void pairing_restart_advertising(void)
     snprintf(g_peer, sizeof(g_peer), "-");
     snprintf(g_last_rx, sizeof(g_last_rx), "none");
     g_mtu = 23;
-    if (g_session_chr != nullptr) {
-        g_session_chr->setValue("WAIT");
-    }
+    set_session_status("WAIT");
     NimBLEDevice::stopAdvertising();
     if (start_advertising()) {
         set_event("adv restarted");

@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
@@ -101,6 +101,8 @@ class _HomePageState extends State<HomePage> {
       Guid('6c6d7963-0001-4000-8000-000000000010');
   static final Guid kLmycSessionChr =
       Guid('6c6d7963-0001-4000-8000-000000000020');
+  static final Guid kLmycStatusChr =
+      Guid('6c6d7963-0001-4000-8000-000000000021');
 
   @override
   void initState() {
@@ -383,6 +385,7 @@ class _HomePageState extends State<HomePage> {
       });
 
       BluetoothCharacteristic? sessionChr;
+      BluetoothCharacteristic? statusChr;
       BluetoothCharacteristic? payloadChr;
 
       for (final s in services) {
@@ -391,6 +394,7 @@ class _HomePageState extends State<HomePage> {
           for (final c in s.characteristics) {
             debugPrint('  char: ${c.uuid}');
             if (c.uuid == kLmycSessionChr) sessionChr = c;
+            if (c.uuid == kLmycStatusChr) statusChr = c;
             if (c.uuid == kLmycPayloadChr) payloadChr = c;
           }
         }
@@ -400,6 +404,13 @@ class _HomePageState extends State<HomePage> {
         try {
           final payload = await payloadChr.read();
           debugPrint('payload bytes: ${payload.length}');
+          // Bench payload is the live lmyc:// URI (includes current oob=).
+          // Prefer it over a stale QR after terminal reboot.
+          final fromPayload = _oobFromPayloadBytes(payload);
+          if (fromPayload != null) {
+            _oob = fromPayload;
+            debugPrint('OOB from payload URI (${fromPayload.length} hex chars)');
+          }
         } catch (e) {
           debugPrint('payload read: $e');
         }
@@ -415,6 +426,16 @@ class _HomePageState extends State<HomePage> {
         return;
       }
 
+      if (statusChr == null) {
+        setState(() {
+          _blePhase = BlePhase.failed;
+          _bleDetail =
+              'Terminal firmware is too old (no status char …000021).\n'
+              'Run: make flash   then rescan QR and pair again.';
+        });
+        return;
+      }
+
       if (_oob == null) {
         setState(() {
           _blePhase = BlePhase.idle;
@@ -425,12 +446,66 @@ class _HomePageState extends State<HomePage> {
         return;
       }
 
-      final cmd = 'PAIR $_oob';
-      await sessionChr.write(utf8.encode(cmd), withoutResponse: false);
+      // Default ATT MTU is 23 → max write payload 20 bytes. Firmware accepts
+      // a raw 16-byte OOB write on session; status comes from …000021.
+      final oobBytes = _oobBytesFromHex(_oob!);
+      if (oobBytes == null) {
+        setState(() {
+          _blePhase = BlePhase.failed;
+          _bleDetail =
+              'OOB from QR is not 32 hex chars (got ${_oob!.length}). Rescan QR.';
+        });
+        return;
+      }
 
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      final replyBytes = await sessionChr.read();
-      final reply = utf8.decode(replyBytes).trim();
+      try {
+        await device.clearGattCache();
+      } catch (e) {
+        debugPrint('clearGattCache: $e');
+      }
+
+      final statusCompleter = Completer<String>();
+      StreamSubscription<List<int>>? notifySub;
+      try {
+        await statusChr.setNotifyValue(true);
+        notifySub = statusChr.onValueReceived.listen((bytes) {
+          final text = _sessionReplyFromBytes(bytes);
+          debugPrint('status notify: ${bytes.length}B raw=$bytes text="$text"');
+          if (_isSessionStatus(text) && !statusCompleter.isCompleted) {
+            statusCompleter.complete(text);
+          }
+        });
+      } catch (e) {
+        debugPrint('status notify enable failed: $e');
+      }
+
+      debugPrint('session write raw OOB: ${oobBytes.length} bytes');
+      await sessionChr.write(oobBytes, withoutResponse: false);
+
+      String reply = '';
+      try {
+        reply = await statusCompleter.future.timeout(
+          const Duration(milliseconds: 2000),
+        );
+      } on TimeoutException {
+        for (var attempt = 0; attempt < 8; attempt++) {
+          await Future<void>.delayed(
+            Duration(milliseconds: attempt == 0 ? 200 : 150),
+          );
+          final replyBytes = await statusChr.read();
+          reply = _sessionReplyFromBytes(replyBytes);
+          debugPrint(
+            'status read #$attempt: ${replyBytes.length}B '
+            'raw=$replyBytes text="$reply"',
+          );
+          if (_isSessionStatus(reply)) break;
+        }
+      } finally {
+        await notifySub?.cancel();
+        try {
+          await statusChr.setNotifyValue(false);
+        } catch (_) {}
+      }
 
       if (!mounted) return;
 
@@ -448,11 +523,12 @@ class _HomePageState extends State<HomePage> {
           ),
         );
       } else {
+        final shown = _isSessionStatus(reply) ? reply : '(no status yet)';
         setState(() {
           _blePhase = BlePhase.failed;
-          _sessionReply = reply;
+          _sessionReply = shown;
           _bleDetail =
-              'Terminal rejected OOB (reply: $reply).\n'
+              'Terminal rejected OOB (status: $shown).\n'
               'Rescan the QR — OOB rotates on terminal reboot.';
         });
       }
@@ -494,6 +570,47 @@ class _HomePageState extends State<HomePage> {
     if (value == null || value.isEmpty) return '—';
     if (value.length <= max) return value;
     return '${value.substring(0, max)}…';
+  }
+
+  /// Decode QR `oob=` (32 hex chars) to the 16 raw bytes the session char expects.
+  static Uint8List? _oobBytesFromHex(String hex) {
+    final cleaned = hex.trim();
+    if (cleaned.length != 32) return null;
+    final out = Uint8List(16);
+    for (var i = 0; i < 16; i++) {
+      final byte = int.tryParse(cleaned.substring(i * 2, i * 2 + 2), radix: 16);
+      if (byte == null) return null;
+      out[i] = byte;
+    }
+    return out;
+  }
+
+  /// Session replies are ASCII (OK/FAIL/WAIT/ERR). Stop at NUL — NimBLE may
+  /// ship a fixed-size buffer (e.g. "OK\\0T..." from a previous "WAIT").
+  static String _sessionReplyFromBytes(List<int> bytes) {
+    final out = StringBuffer();
+    for (final b in bytes) {
+      if (b == 0) break;
+      if (b >= 32 && b <= 126) out.writeCharCode(b);
+    }
+    return out.toString().trim();
+  }
+
+  static bool _isSessionStatus(String text) =>
+      text == 'OK' ||
+      text == 'FAIL' ||
+      text == 'ERR' ||
+      text == 'WAIT' ||
+      text == 'PONG';
+
+  /// Pull `oob=` from the terminal payload characteristic (lmyc:// URI bytes).
+  static String? _oobFromPayloadBytes(List<int> bytes) {
+    final text = _sessionReplyFromBytes(bytes);
+    final uri = Uri.tryParse(text);
+    if (uri == null || uri.scheme != 'lmyc') return null;
+    final oob = uri.queryParameters['oob'];
+    if (oob == null || oob.length != 32) return null;
+    return oob;
   }
 
   Color get _phaseColor {
