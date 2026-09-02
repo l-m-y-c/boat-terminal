@@ -19,16 +19,26 @@
 9. Review results, including firmware update practicality and real-world pairing experience
 10. Decide on wider rollout only after the pilot has answered the hard questions
 
-## What This Repository Will Hold
+## On the bench now (2026-09)
 
-If the project continues:
+Hardware is here and QR + BLE pairing works. Software work no longer waits on the club go/no-go for *listening* and phone UX.
+
+Follow **[17 – Android Boat / BoatLink Roadmap](17-android-boat-roadmap.md)**:
+
+- Slice A — NMEA simulator + sentence console + TCP 10110 (no boat wire)
+- Slice B — SoftAP gateway so Navionics can subscribe
+- Slice C — gated phone GNSS, local only
+- Later slices — real 0183 listen, SD log, snapshots, isolated N2K listen
+
+Writing onto a live backbone, N2K install, and fleet rollout still require the Board items above.
+
+## What This Repository Will Hold
 
 - Firmware source
 - Phone companion source
 - Hardware notes and per-boat installation records
 - Decision log and risk register
-
-For now the repository remains a **proposal** so the membership can decide whether the idea is worth the careful work required to do it properly.
+- The BoatLink protocol and slice plan in doc 17
 
 ---
 
