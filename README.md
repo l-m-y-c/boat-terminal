@@ -74,6 +74,7 @@ The system may still listen to waypoint and autopilot data and can push high-qua
 | [14 – Prototype Hardware](docs/14-prototype-hardware.md) | Ordered 7″ board + getting started guide |
 | [15 – Useful Resources](docs/15-useful-resources.md) | Curated NMEA guides and related projects |
 | [16 – Related Projects: Tritium](docs/16-related-projects-tritium.md) | Deep dive into tritium.co.uk ESP32 marine projects |
+| [17 – Android Boat / BoatLink Roadmap](docs/17-android-boat-roadmap.md) | Phone-as-computer plan, protocol, and Grok Build slices |
 
 ---
 
@@ -87,6 +88,8 @@ The system may still listen to waypoint and autopilot data and can push high-qua
 See [04 – Hardware](docs/04-hardware.md) and [14 – Prototype Hardware](docs/14-prototype-hardware.md) for details.
 
 **Prototype software (this repo):** firmware for the 7″ ESP32-S3 terminal (`firmware/`) and an Android companion (`mobile/`). Bench pairing is QR + BLE OOB. **Use the app’s Find terminals** — Android Settings hide most LE-only devices. After a pull: `make pair-test`, then rescan the QR (OOB rotates every boot).
+
+**Next build:** [17 – Android Boat / BoatLink](docs/17-android-boat-roadmap.md) — NMEA tap, Wi-Fi gateway, gated phone GNSS. Mirror the bus, not the pixels.
 
 NMEA bus safety, pairing security, and firmware ownership remain required items before any boat is modified.
 
