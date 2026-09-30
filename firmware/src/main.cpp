@@ -48,6 +48,7 @@ extern "C" int lwip_hook_ip6_input(struct pbuf *p, struct netif *inp)
 #include "hub_http.h"
 #include "snapshot.h"
 #include "inject.h"
+#include "maint_store.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -218,6 +219,7 @@ static void init_sd_card(void)
     g_sd_summary = String(type_name) + "  " + String(mb) + " MB";
     g_sd_ready = true;
     Serial.printf("SD: %s\n", g_sd_summary.c_str());
+    maint_store_begin();
 }
 
 static void apply_pages(void)

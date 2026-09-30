@@ -92,6 +92,7 @@ firmware/
 │   ├── hub_http.*          # GET /  POST /snapshot  POST /inject
 │   ├── snapshot.*          # 800×480 JPEG for the Chart page
 │   ├── inject.*            # Phone GNSS, armed only from the 7″
+│   ├── maint_store.*       # This boat's maintenance book on the TF card
 │   ├── lmyc_logo.c / .h    # Logo as LVGL RGB565+A image
 │   ├── lvgl_v8_port.*      # Official LVGL port
 │   ├── lv_conf.h
@@ -111,6 +112,10 @@ The terminal runs **APSTA**: SoftAP `LMYC-<boat>` (password `AP_PASSWORD` in `se
 | `http://192.168.4.1/` | How-to page |
 | `POST /snapshot` | 800×480 JPEG, ≤220 KB, 1 fps. Show with **Chart** on the helm |
 | `POST /inject` | Phone GNSS RMC/GGA — only if the 7″ **GNSS LOCAL** button is armed |
+| `GET /maintenance` | This boat's maintenance book on the TF card (no cell required) |
+| `POST /maintenance` | File a pending item (`title`, `category`, `priority`, `description`) |
+| `GET /maintenance/item?id=` | One `item.json` |
+| `GET` or `POST /maintenance/photo?id=&n=` | JPEG `n` (1–5), up to 500 KB |
 
 No RS485 TX. Sim still provides depth/wind when GNSS is LOCAL.
 
@@ -139,7 +144,7 @@ The screen shows the STA SSID, connect status, IP, and RSSI. The SoftAP address 
 
 ## MicroSD
 
-The Waveshare TF slot is **SPI** (GPIO 11/12/13) with chip-select on the **CH422G expander EXIO4**. Format the card **FAT32**. The status card lists the first few files at `/`.
+The Waveshare TF slot is **SPI** (GPIO 11/12/13) with chip-select on the **CH422G expander EXIO4**. Format the card **FAT32**. The status card lists the first few files at `/`. After a successful mount the firmware creates `/maint` and serves this boat's maintenance book on `GET /maintenance`. See [doc 18](../docs/18-maintenance-handoff-and-auth.md).
 
 ## Regenerating the logo C array
 

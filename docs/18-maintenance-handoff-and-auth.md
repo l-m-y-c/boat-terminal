@@ -134,7 +134,7 @@ The terminal still must not advertise occupancy or a member name in BLE advertis
 
 **This repo**
 
-1. On-card store and local HTTP read, so a phone on the SoftAP can list this boat's book with no cell service.
+1. On-card store and local HTTP read, so a phone on the SoftAP can list this boat's book with no cell service. Started: `firmware/src/maint_store.*`, `GET`/`POST /maintenance`, and the phone's Maintenance book page. A photo can be posted to `/maintenance/photo`. The page does not send photos yet, and nothing in this step posts to lmyc.ca.
 2. Phone screen to read that list and file a pending item, photos included, onto the card.
 3. Waveshare list of open items and one photo at a time.
 4. Bearer-token client, once lmyc.ca has the routes above, including upload of `sync: pending` items and download of club-side edits.

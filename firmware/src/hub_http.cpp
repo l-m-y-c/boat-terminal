@@ -1,10 +1,13 @@
 #include "hub_http.h"
 
 #include "inject.h"
+#include "maint_store.h"
 #include "nmea.h"
 #include "pairing.h"
 #include "snapshot.h"
 #include "gateway.h"
+
+#include <SD.h>
 
 #include <Arduino.h>
 #include <esp_http_server.h>
@@ -34,6 +37,8 @@ static const char kIndexHtml[] =
     "<li>TCP <code>192.168.4.1:10110</code> (or UDP 10110 / 2000)</li></ol>"
     "<p>POST JPEG to <code>/snapshot</code> (800×480, ≤220 KB). "
     "POST NMEA to <code>/inject</code> only when the 7″ shows GNSS LOCAL.</p>"
+    "<p>This boat's maintenance book is <code>GET /maintenance</code>. "
+    "It is on the card and does not need cell service.</p>"
     "</body></html>";
 
 static esp_err_t get_root(httpd_req_t *req)
@@ -144,6 +149,213 @@ static esp_err_t post_inject(httpd_req_t *req)
     return httpd_resp_sendstr(req, resp);
 }
 
+static bool query_id(httpd_req_t *req, char *id, size_t cap)
+{
+    char query[80];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+        return false;
+    }
+    if (httpd_query_key_value(query, "id", id, cap) != ESP_OK) {
+        return false;
+    }
+    return maint_id_ok(id);
+}
+
+static esp_err_t send_sd_file(httpd_req_t *req, const char *path)
+{
+    File in = SD.open(path, FILE_READ);
+    if (!in) {
+        return ESP_FAIL;
+    }
+    char buf[512];
+    while (in.available()) {
+        const int n = in.read(reinterpret_cast<uint8_t *>(buf), sizeof(buf));
+        if (n <= 0) {
+            break;
+        }
+        if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) {
+            in.close();
+            return ESP_FAIL;
+        }
+    }
+    in.close();
+    return ESP_OK;
+}
+
+static esp_err_t get_maintenance(httpd_req_t *req)
+{
+    if (!maint_store_ready()) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no card");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr_chunk(req, "[");
+    bool first = true;
+    if (maint_store_list_start()) {
+        MaintItem item;
+        while (maint_store_list_next(&item)) {
+            if (!first) {
+                httpd_resp_sendstr_chunk(req, ",");
+            }
+            char path[56];
+            snprintf(path, sizeof(path), "/maint/%s/item.json", item.id);
+            if (send_sd_file(req, path) != ESP_OK) {
+                maint_store_list_end();
+                return ESP_FAIL;
+            }
+            first = false;
+        }
+        maint_store_list_end();
+    }
+    httpd_resp_sendstr_chunk(req, "]");
+    return httpd_resp_sendstr_chunk(req, nullptr);
+}
+
+static esp_err_t get_maintenance_item(httpd_req_t *req)
+{
+    char id[kMaintIdHex + 1];
+    MaintItem item;
+    if (!query_id(req, id, sizeof(id)) || !maint_store_load(id, &item)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no item");
+        return ESP_FAIL;
+    }
+    char path[56];
+    snprintf(path, sizeof(path), "/maint/%s/item.json", id);
+    httpd_resp_set_type(req, "application/json");
+    if (send_sd_file(req, path) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no item");
+        return ESP_FAIL;
+    }
+    return httpd_resp_send_chunk(req, nullptr, 0);
+}
+
+static esp_err_t get_maintenance_photo(httpd_req_t *req)
+{
+    char id[kMaintIdHex + 1];
+    char query[80];
+    char nbuf[8];
+    if (!query_id(req, id, sizeof(id)) ||
+        httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "n", nbuf, sizeof(nbuf)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "id and n");
+        return ESP_FAIL;
+    }
+    const unsigned n = static_cast<unsigned>(strtoul(nbuf, nullptr, 10));
+    char path[56];
+    if (n == 0 || n > kMaintPhotoMax ||
+        !maint_store_photo_path(id, static_cast<uint8_t>(n), path, sizeof(path))) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no photo");
+        return ESP_FAIL;
+    }
+    File in = SD.open(path, FILE_READ);
+    if (!in) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no photo");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "image/jpeg");
+    char buf[1024];
+    while (in.available()) {
+        const int got = in.read(reinterpret_cast<uint8_t *>(buf), sizeof(buf));
+        if (got <= 0) {
+            break;
+        }
+        if (httpd_resp_send_chunk(req, buf, got) != ESP_OK) {
+            in.close();
+            return ESP_FAIL;
+        }
+    }
+    in.close();
+    return httpd_resp_send_chunk(req, nullptr, 0);
+}
+
+static esp_err_t post_maintenance(httpd_req_t *req)
+{
+    if (!maint_store_ready()) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no card");
+        return ESP_FAIL;
+    }
+    if (req->content_len == 0 || req->content_len > 4096) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body size");
+        return ESP_FAIL;
+    }
+    char *body = static_cast<char *>(malloc(req->content_len + 1));
+    if (body == nullptr) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    size_t got = 0;
+    while (got < req->content_len) {
+        const int r = httpd_req_recv(req, body + got, req->content_len - got);
+        if (r <= 0) {
+            free(body);
+            httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "recv");
+            return ESP_FAIL;
+        }
+        got += static_cast<size_t>(r);
+    }
+    body[got] = '\0';
+    MaintItem item;
+    const bool parsed = maint_item_from_json(body, &item);
+    free(body);
+    if (!parsed || !maint_store_create(&item)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "title, category, priority");
+        return ESP_FAIL;
+    }
+    char resp[96];
+    snprintf(resp, sizeof(resp), "{\"id\":\"%s\",\"sync\":\"pending\"}\n", item.id);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, resp);
+}
+
+static esp_err_t post_maintenance_photo(httpd_req_t *req)
+{
+    char id[kMaintIdHex + 1];
+    char query[80];
+    char nbuf[8];
+    if (!maint_store_ready() || !query_id(req, id, sizeof(id)) ||
+        httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "n", nbuf, sizeof(nbuf)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "id and n");
+        return ESP_FAIL;
+    }
+    const unsigned nphoto = static_cast<unsigned>(strtoul(nbuf, nullptr, 10));
+    if (nphoto == 0 || nphoto > kMaintPhotoMax || req->content_len == 0 ||
+        req->content_len > kMaintPhotoBytesMax) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "photo size or index");
+        return ESP_FAIL;
+    }
+    if (!maint_store_photo_begin(id, static_cast<uint8_t>(nphoto))) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no item");
+        return ESP_FAIL;
+    }
+    uint8_t buf[1024];
+    size_t got = 0;
+    while (got < req->content_len) {
+        size_t want = req->content_len - got;
+        if (want > sizeof(buf)) {
+            want = sizeof(buf);
+        }
+        const int r = httpd_req_recv(req, reinterpret_cast<char *>(buf), want);
+        if (r <= 0) {
+            maint_store_photo_abort();
+            httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "recv");
+            return ESP_FAIL;
+        }
+        if (!maint_store_photo_write(buf, static_cast<size_t>(r))) {
+            maint_store_photo_abort();
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        got += static_cast<size_t>(r);
+    }
+    if (!maint_store_photo_finish()) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "text/plain");
+    return httpd_resp_sendstr(req, "OK\n");
+}
+
 void hub_http_init(void)
 {
     g_httpd = nullptr;
@@ -157,7 +369,7 @@ void hub_http_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
     cfg.lru_purge_enable = true;
-    cfg.max_uri_handlers = 8;
+    cfg.max_uri_handlers = 12;
     cfg.stack_size = 8192;
     cfg.recv_wait_timeout = 15;
     if (httpd_start(&g_httpd, &cfg) != ESP_OK) {
@@ -177,9 +389,29 @@ void hub_http_start(void)
     static httpd_uri_t inj = {
         .uri = "/inject", .method = HTTP_POST, .handler = post_inject,
         .user_ctx = nullptr};
+    static httpd_uri_t maint = {
+        .uri = "/maintenance", .method = HTTP_GET, .handler = get_maintenance,
+        .user_ctx = nullptr};
+    static httpd_uri_t maint_post = {
+        .uri = "/maintenance", .method = HTTP_POST, .handler = post_maintenance,
+        .user_ctx = nullptr};
+    static httpd_uri_t maint_item = {
+        .uri = "/maintenance/item", .method = HTTP_GET, .handler = get_maintenance_item,
+        .user_ctx = nullptr};
+    static httpd_uri_t maint_photo = {
+        .uri = "/maintenance/photo", .method = HTTP_GET, .handler = get_maintenance_photo,
+        .user_ctx = nullptr};
+    static httpd_uri_t maint_photo_post = {
+        .uri = "/maintenance/photo", .method = HTTP_POST, .handler = post_maintenance_photo,
+        .user_ctx = nullptr};
     httpd_register_uri_handler(g_httpd, &root);
     httpd_register_uri_handler(g_httpd, &status);
     httpd_register_uri_handler(g_httpd, &snap);
     httpd_register_uri_handler(g_httpd, &inj);
-    Serial.println("hub_http: :80  GET /  POST /snapshot  POST /inject");
+    httpd_register_uri_handler(g_httpd, &maint);
+    httpd_register_uri_handler(g_httpd, &maint_post);
+    httpd_register_uri_handler(g_httpd, &maint_item);
+    httpd_register_uri_handler(g_httpd, &maint_photo);
+    httpd_register_uri_handler(g_httpd, &maint_photo_post);
+    Serial.println("hub_http: :80  GET /  GET /maintenance  POST /snapshot  POST /inject");
 }
