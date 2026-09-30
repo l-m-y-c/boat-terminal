@@ -25,6 +25,8 @@ static constexpr const char *kLmycPayloadUuid = "6c6d7963-0001-4000-8000-0000000
 static constexpr const char *kLmycSessionUuid = "6c6d7963-0001-4000-8000-000000000020";
 /* Read/notify only — never written by the phone (avoids Android write-cache garbage). */
 static constexpr const char *kLmycStatusUuid = "6c6d7963-0001-4000-8000-000000000021";
+/* One NMEA sentence per notify. Drop on BLE if longer than ATT payload. */
+static constexpr const char *kLmycNmeaUuid = "6c6d7963-0001-4000-8000-000000000030";
 static constexpr size_t kEventLogLines = 5;
 static constexpr size_t kEventLineLen = 40;
 static constexpr size_t kRxAccMax = 80;
@@ -62,6 +64,9 @@ static NimBLEServer *g_server = nullptr;
 static NimBLECharacteristic *g_payload_chr = nullptr;
 static NimBLECharacteristic *g_session_chr = nullptr;
 static NimBLECharacteristic *g_status_chr = nullptr;
+static NimBLECharacteristic *g_nmea_chr = nullptr;
+static uint32_t g_nmea_window_ms = 0;
+static uint8_t g_nmea_window_count = 0;
 
 static void rebuild_event_log(void)
 {
@@ -518,7 +523,7 @@ static bool start_ble_peripheral(void)
     dis->createCharacteristic("2A29", NIMBLE_PROPERTY::READ)->setValue("LMYC");
     dis->createCharacteristic("2A24", NIMBLE_PROPERTY::READ)->setValue("Boat Terminal");
     dis->createCharacteristic("2A25", NIMBLE_PROPERTY::READ)->setValue(LMYC_TERMINAL_ID);
-    dis->createCharacteristic("2A26", NIMBLE_PROPERTY::READ)->setValue("nimble-oob-v3");
+    dis->createCharacteristic("2A26", NIMBLE_PROPERTY::READ)->setValue("boatlink-v1");
     dis->start();
 
     NimBLEService *svc = g_server->createService(kLmycServiceUuid);
@@ -541,6 +546,11 @@ static bool start_ble_peripheral(void)
     g_status_chr->setCallbacks(&g_status_cb);
     set_session_status("WAIT");
 
+    g_nmea_chr = svc->createCharacteristic(
+        kLmycNmeaUuid,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+    g_nmea_chr->setValue("");
+
     svc->start();
     return start_advertising();
 }
@@ -556,7 +566,7 @@ void pairing_init(void)
     g_event_log[0] = '\0';
     g_ble_ok = start_ble_peripheral();
     Serial.printf("Pairing payload: %s\n", g_payload);
-    Serial.println("BLE: session WRITE raw16/hex; status READ/NOTIFY …000021");
+    Serial.println("BLE: session …000020; status …000021; NMEA notify …000030");
 }
 
 void pairing_restart_advertising(void)
@@ -597,6 +607,37 @@ const char *pairing_event_log(void)
     return g_event_log[0] != '\0' ? g_event_log : "t+0s boot";
 }
 uint16_t pairing_mtu(void) { return g_mtu; }
+
+void pairing_nmea_notify(const char *sentence)
+{
+    if (g_nmea_chr == nullptr || sentence == nullptr || sentence[0] == '\0') {
+        return;
+    }
+    if (!g_connected || g_nmea_chr->getSubscribedCount() == 0) {
+        return;
+    }
+
+    /* Rate-limit ~10 notifies/sec (sim bursts 4 lines once per second). */
+    const uint32_t now = millis();
+    if (g_nmea_window_ms == 0 || (now - g_nmea_window_ms) >= 1000) {
+        g_nmea_window_ms = now;
+        g_nmea_window_count = 0;
+    }
+    if (g_nmea_window_count >= 10) {
+        return;
+    }
+
+    const size_t len = strlen(sentence);
+    const uint16_t max_payload = (g_mtu > 3) ? static_cast<uint16_t>(g_mtu - 3) : 20;
+    if (len > max_payload) {
+        /* Still delivered on TCP gateway; BLE ATT cannot carry this line. */
+        return;
+    }
+
+    g_nmea_chr->setValue(reinterpret_cast<const uint8_t *>(sentence), len);
+    g_nmea_chr->notify();
+    ++g_nmea_window_count;
+}
 uint32_t pairing_connect_count(void) { return g_connect_count; }
 uint32_t pairing_write_count(void) { return g_write_count; }
 uint32_t pairing_read_count(void) { return g_read_count; }

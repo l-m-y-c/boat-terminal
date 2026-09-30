@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'boatlink.dart';
+import 'nmea_console.dart';
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const LmycApp());
@@ -885,24 +888,63 @@ class _HomePageState extends State<HomePage> {
                 Card(
                   color: const Color(0xFF00B4A6).withValues(alpha: 0.08),
                   elevation: 0,
-                  child: const Padding(
-                    padding: EdgeInsets.all(20),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        const Text(
                           'Bench pairing complete',
                           style: TextStyle(
                             fontWeight: FontWeight.w600,
                             fontSize: 16,
                           ),
                         ),
-                        SizedBox(height: 8),
-                        Text(
-                          'The phone proved it scanned this terminal’s QR '
-                          '(OOB match). Next: booking token, LE Secure '
-                          'Connections, and member tools.',
+                        const SizedBox(height: 8),
+                        const Text(
+                          'OOB match confirmed. Open Sentences for the live '
+                          'NMEA tap (BLE …000030), or TCP :10110 using the '
+                          'IP on the terminal DIAGNOSTICS card.',
                           style: TextStyle(height: 1.4, color: Colors.black87),
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: _device == null
+                                ? null
+                                : () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute<void>(
+                                        builder: (_) => NmeaConsolePage(
+                                          device: _device!,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                            icon: const Icon(Icons.ssid_chart),
+                            label: const Text('Sentences'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF00B4A6),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => const BoatLinkPage(
+                                    suggestedIp: '192.168.4.1',
+                                  ),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.router_outlined),
+                            label: const Text('Navionics / snapshot'),
+                          ),
                         ),
                       ],
                     ),

@@ -18,6 +18,7 @@ See `../docs/06-phone-app-and-pairing.md` and `../docs/08-user-flows.md`.
 - Shows heard-device count vs LMYC hits (diagnostics)
 - GATT connect + raw 16-byte OOB write (from QR hex) once a QR / URI is applied
   — fits default ATT MTU 23; the old `PAIR <hex>` text write was 37B and died on Android
+- After pair: **Sentences** console (BLE `…000030` notify + optional TCP `:10110`)
 - Clear status UI (permissions → scanning → connecting → paired)
 
 **Do not use Android Settings → Bluetooth.** System Settings hide most LE-only peripherals. Use **Find terminals**.

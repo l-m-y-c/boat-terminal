@@ -38,3 +38,6 @@ bool pairing_ble_ok(void);
 bool pairing_is_confirmed(void);
 void pairing_set_status(const char *status);
 void pairing_restart_advertising(void);
+
+/* BLE NMEA tap (…000030). Drops oversize sentences when ATT payload < len. */
+void pairing_nmea_notify(const char *sentence);

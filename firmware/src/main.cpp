@@ -40,11 +40,22 @@ extern "C" int lwip_hook_ip6_input(struct pbuf *p, struct netif *inp)
 #include "lvgl_v8_port.h"
 #include "lmyc_logo.h"
 #include "pairing.h"
+#include "nmea.h"
+#include "nmea_io.h"
+#include "nmea_sim.h"
+#include "nmea_state.h"
+#include "gateway.h"
+#include "hub_http.h"
+#include "snapshot.h"
+#include "inject.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
 #error "Copy src/secrets.h.example to src/secrets.h and set WIFI_SSID / WIFI_PASSWORD"
+#endif
+#ifndef AP_PASSWORD
+#define AP_PASSWORD "lmycboat"
 #endif
 
 using namespace esp_panel::drivers;
@@ -69,9 +80,39 @@ static lv_obj_t *g_rx_value = nullptr;
 static lv_obj_t *g_adv_value = nullptr;
 static lv_obj_t *g_heap_value = nullptr;
 static lv_obj_t *g_sd_value = nullptr;
+static lv_obj_t *g_nmea_value = nullptr;
 static lv_obj_t *g_hint_value = nullptr;
 static lv_obj_t *g_log_value = nullptr;
+
+static lv_obj_t *g_page_pair = nullptr;
+static lv_obj_t *g_page_helm = nullptr;
+static lv_obj_t *g_hdr_subtitle = nullptr;
+static lv_obj_t *g_chip_fix = nullptr;
+static lv_obj_t *g_chip_fix_lbl = nullptr;
+static lv_obj_t *g_chip_link = nullptr;
+static lv_obj_t *g_chip_link_lbl = nullptr;
+static lv_obj_t *g_tile_depth = nullptr;
+static lv_obj_t *g_tile_sog = nullptr;
+static lv_obj_t *g_tile_cog = nullptr;
+static lv_obj_t *g_tile_wind = nullptr;
+static lv_obj_t *g_tile_wind_sub = nullptr;
+static lv_obj_t *g_talker_list = nullptr;
+static lv_obj_t *g_helm_nmea = nullptr;
+static lv_obj_t *g_helm_tcp = nullptr;
+static lv_obj_t *g_helm_ip = nullptr;
+static lv_obj_t *g_helm_peer = nullptr;
+static lv_obj_t *g_helm_ap = nullptr;
+static lv_obj_t *g_gnss_btn_lbl = nullptr;
+static lv_obj_t *g_page_chart = nullptr;
+static lv_obj_t *g_chart_img = nullptr;
 static lv_timer_t *g_status_timer = nullptr;
+static bool g_gateway_started = false;
+static bool g_showing_helm = false;
+static bool g_force_qr = false;
+static bool g_showing_chart = false;
+static uint32_t g_snap_seen = 0;
+static char g_ap_ssid[24] = "LMYC-BOAT";
+static char g_ap_ip[16] = "192.168.4.1";
 
 static String g_sd_summary;
 static bool g_sd_ready = false;
@@ -101,14 +142,27 @@ static void wifi_event_handler(void * /*arg*/, esp_event_base_t event_base,
         if (g_wifi_backoff_ms < 16000) {
             g_wifi_backoff_ms *= 2;
         }
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
+        snprintf(g_wifi_line, sizeof(g_wifi_line), "AP %s", g_ap_ssid);
+        Serial.printf("Wi-Fi AP %s  %s\n", g_ap_ssid, g_ap_ip);
+        if (!g_gateway_started) {
+            gateway_begin();
+            hub_http_start();
+            g_gateway_started = true;
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         auto *event = static_cast<ip_event_got_ip_t *>(event_data);
         snprintf(g_wifi_ip, sizeof(g_wifi_ip), IPSTR, IP2STR(&event->ip_info.ip));
         g_wifi_got_ip = true;
         g_wifi_want_reconnect = false;
         g_wifi_backoff_ms = 1000;
-        snprintf(g_wifi_line, sizeof(g_wifi_line), "Connected (client)");
-        Serial.printf("Wi-Fi got IP %s\n", g_wifi_ip);
+        snprintf(g_wifi_line, sizeof(g_wifi_line), "STA+AP");
+        Serial.printf("Wi-Fi STA IP %s  AP %s\n", g_wifi_ip, g_ap_ip);
+        if (!g_gateway_started) {
+            gateway_begin();
+            hub_http_start();
+            g_gateway_started = true;
+        }
     }
 }
 
@@ -166,12 +220,212 @@ static void init_sd_card(void)
     Serial.printf("SD: %s\n", g_sd_summary.c_str());
 }
 
+static void apply_pages(void)
+{
+    const bool helm = pairing_is_confirmed() && !g_force_qr;
+    if (g_page_pair == nullptr || g_page_helm == nullptr) {
+        return;
+    }
+    if (g_page_chart != nullptr) {
+        if (g_showing_chart && snapshot_has_image()) {
+            lv_obj_add_flag(g_page_pair, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(g_page_helm, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(g_page_chart, LV_OBJ_FLAG_HIDDEN);
+            set_label(g_hdr_subtitle, "Chart snapshot  ·  tap Helm to return");
+            g_showing_helm = false;
+            return;
+        }
+        lv_obj_add_flag(g_page_chart, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (helm) {
+        lv_obj_add_flag(g_page_pair, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(g_page_helm, LV_OBJ_FLAG_HIDDEN);
+        set_label(g_hdr_subtitle, LMYC_BOAT_ID "  ·  live instruments");
+    } else {
+        lv_obj_add_flag(g_page_helm, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(g_page_pair, LV_OBJ_FLAG_HIDDEN);
+        set_label(g_hdr_subtitle, "Scan QR in the LMYC app  ·  not phone Settings");
+    }
+    g_showing_helm = helm;
+}
+
+static void on_reset_ble(lv_event_t * /*e*/)
+{
+    g_force_qr = false;
+    pairing_restart_advertising();
+    apply_pages();
+}
+
+static void on_show_qr(lv_event_t * /*e*/)
+{
+    g_force_qr = true;
+    apply_pages();
+}
+
+static void on_show_helm(lv_event_t * /*e*/)
+{
+    g_force_qr = false;
+    g_showing_chart = false;
+    apply_pages();
+}
+
+static void on_toggle_gnss(lv_event_t * /*e*/)
+{
+    const bool next = !inject_local_armed();
+    inject_set_local(next);
+    nmea_sim_set_emit_gnss(!next);
+}
+
+static void on_show_chart(lv_event_t * /*e*/)
+{
+    if (!snapshot_has_image()) {
+        return;
+    }
+    g_showing_chart = true;
+    apply_pages();
+}
+
+static void on_hide_chart(lv_event_t * /*e*/)
+{
+    g_showing_chart = false;
+    apply_pages();
+}
+
+static void style_chip(lv_obj_t *chip, lv_obj_t *lbl, uint32_t bg, const char *text)
+{
+    lv_obj_set_style_bg_color(chip, lv_color_hex(bg), 0);
+    lv_label_set_text(lbl, text);
+}
+
+static void update_wifi_line(char *wifi, size_t cap)
+{
+    if (g_wifi_got_ip) {
+        wifi_ap_record_t ap = {};
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            g_wifi_rssi = ap.rssi;
+            snprintf(wifi, cap, "Up  %d dBm", static_cast<int>(ap.rssi));
+            return;
+        }
+    }
+    snprintf(wifi, cap, "%s", g_wifi_line);
+}
+
+static void update_helm_labels(void)
+{
+    const NmeaInstruments *inst = nmea_state_instruments();
+    char buf[48];
+
+    if (inst->have_depth) {
+        snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(inst->depth_m));
+    } else {
+        snprintf(buf, sizeof(buf), "—");
+    }
+    set_label(g_tile_depth, buf);
+
+    if (inst->have_sog) {
+        snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(inst->sog_kn));
+    } else {
+        snprintf(buf, sizeof(buf), "—");
+    }
+    set_label(g_tile_sog, buf);
+
+    if (inst->have_cog) {
+        snprintf(buf, sizeof(buf), "%.0f", static_cast<double>(inst->cog_deg));
+    } else {
+        snprintf(buf, sizeof(buf), "—");
+    }
+    set_label(g_tile_cog, buf);
+
+    if (inst->have_wind) {
+        snprintf(buf, sizeof(buf), "%.0f", static_cast<double>(inst->aws_kn));
+        set_label(g_tile_wind, buf);
+        snprintf(buf, sizeof(buf), "%+.0f° AWA", static_cast<double>(inst->awa_deg));
+        set_label(g_tile_wind_sub, buf);
+    } else {
+        set_label(g_tile_wind, "—");
+        set_label(g_tile_wind_sub, "apparent");
+    }
+
+    char talkers[192] = "";
+    const uint32_t now = millis();
+    for (size_t i = 0; i < nmea_state_talker_count(); ++i) {
+        const NmeaTalkerInfo *t = nmea_state_talker(i);
+        if (t == nullptr) {
+            continue;
+        }
+        const uint32_t age_s = (now - t->last_ms) / 1000UL;
+        char row[64];
+        snprintf(row, sizeof(row), "%s  %s  %lus  %lu\n",
+                 t->id, t->formatters[0] ? t->formatters : "—",
+                 static_cast<unsigned long>(age_s),
+                 static_cast<unsigned long>(t->sentences));
+        strncat(talkers, row, sizeof(talkers) - strlen(talkers) - 1);
+    }
+    if (talkers[0] == '\0') {
+        strncpy(talkers, "Waiting for sentences…", sizeof(talkers) - 1);
+    }
+    set_label(g_talker_list, talkers);
+
+    snprintf(buf, sizeof(buf), "%lu good  /  %lu bad",
+             static_cast<unsigned long>(nmea_good_count()),
+             static_cast<unsigned long>(nmea_bad_count()));
+    set_label(g_helm_nmea, buf);
+    snprintf(buf, sizeof(buf), "TCP 10110  ·  %lu client",
+             static_cast<unsigned long>(gateway_client_count()));
+    set_label(g_helm_tcp, buf);
+    char ip_line[40];
+    if (g_wifi_got_ip) {
+        snprintf(ip_line, sizeof(ip_line), "STA %s", g_wifi_ip);
+    } else {
+        snprintf(ip_line, sizeof(ip_line), "STA —");
+    }
+    set_label(g_helm_ip, ip_line);
+    char ap_line[40];
+    snprintf(ap_line, sizeof(ap_line), "AP %s", g_ap_ip);
+    set_label(g_helm_ap, ap_line);
+    set_label(g_helm_peer, pairing_peer());
+    if (g_gnss_btn_lbl != nullptr) {
+        lv_label_set_text(g_gnss_btn_lbl,
+                          inject_local_armed() ? "GNSS LOCAL" : "GNSS off");
+    }
+
+    if (snapshot_has_image() && snapshot_generation() != g_snap_seen &&
+        g_chart_img != nullptr && snapshot_dsc() != nullptr) {
+        g_snap_seen = snapshot_generation();
+        lv_img_set_src(g_chart_img, snapshot_dsc());
+    }
+}
+
 static void update_status_labels(void)
 {
+    if (!pairing_is_confirmed()) {
+        g_force_qr = false;
+    }
+    apply_pages();
+
+    if (inject_local_armed()) {
+        style_chip(g_chip_fix, g_chip_fix_lbl, 0x6B5420, "FIX: PHONE");
+    } else if (nmea_sim_enabled()) {
+        style_chip(g_chip_fix, g_chip_fix_lbl, 0x6B5420, "FIX: SIM");
+    } else {
+        style_chip(g_chip_fix, g_chip_fix_lbl, 0x1E4D3A, "FIX: BOAT");
+    }
+    if (pairing_is_confirmed()) {
+        style_chip(g_chip_link, g_chip_link_lbl, 0x0E5C55, "PAIRED");
+    } else {
+        style_chip(g_chip_link, g_chip_link_lbl, 0x1E3A5F, pairing_status());
+    }
+
+    if (g_showing_helm) {
+        update_helm_labels();
+        return;
+    }
+
     char conn[24];
     char heap[24];
     char wifi[48];
     char mtu[24];
+    char nmea[48];
 
     snprintf(conn, sizeof(conn), "%lu  R%lu W%lu",
              static_cast<unsigned long>(pairing_connect_count()),
@@ -182,18 +436,12 @@ static void update_status_labels(void)
     snprintf(mtu, sizeof(mtu), "%u  (%uB wr)",
              static_cast<unsigned>(pairing_mtu()),
              pairing_mtu() > 3 ? pairing_mtu() - 3 : 0);
-
-    if (g_wifi_got_ip) {
-        wifi_ap_record_t ap = {};
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-            g_wifi_rssi = ap.rssi;
-            snprintf(wifi, sizeof(wifi), "Up  %d dBm", static_cast<int>(ap.rssi));
-        } else {
-            snprintf(wifi, sizeof(wifi), "%s", g_wifi_line);
-        }
-    } else {
-        snprintf(wifi, sizeof(wifi), "%s", g_wifi_line);
-    }
+    snprintf(nmea, sizeof(nmea), "%lug/%lub %s TCP:%lu",
+             static_cast<unsigned long>(nmea_good_count()),
+             static_cast<unsigned long>(nmea_bad_count()),
+             nmea_sim_enabled() ? "FIX:SIM" : "live",
+             static_cast<unsigned long>(gateway_client_count()));
+    update_wifi_line(wifi, sizeof(wifi));
 
     set_label(g_wifi_value, wifi);
     set_label(g_ip_value, g_wifi_ip);
@@ -207,18 +455,13 @@ static void update_status_labels(void)
     set_label(g_adv_value, pairing_adv_layout());
     set_label(g_heap_value, heap);
     set_label(g_sd_value, g_sd_summary.c_str());
+    set_label(g_nmea_value, nmea);
     set_label(g_hint_value, pairing_hint());
     set_label(g_log_value, pairing_event_log());
 }
 
 static void status_timer_cb(lv_timer_t * /*timer*/)
 {
-    update_status_labels();
-}
-
-static void on_reset_ble(lv_event_t * /*e*/)
-{
-    pairing_restart_advertising();
     update_status_labels();
 }
 
@@ -229,7 +472,7 @@ static lv_obj_t *make_card(lv_obj_t *parent, const char *title, lv_coord_t w, lv
     lv_obj_set_style_bg_color(card, lv_color_hex(0x12243A), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(card, 0, 0);
-    lv_obj_set_style_radius(card, 12, 0);
+    lv_obj_set_style_radius(card, 14, 0);
     lv_obj_set_style_pad_all(card, 16, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -260,32 +503,84 @@ static lv_obj_t *add_kv_row(lv_obj_t *card, const char *key, lv_coord_t y, lv_ob
     return v;
 }
 
-static void create_ui(void)
+static lv_obj_t *make_chip(lv_obj_t *parent, lv_obj_t **lbl_out, uint32_t bg)
 {
-    lv_obj_t *scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x0A1628), 0);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *chip = lv_obj_create(parent);
+    lv_obj_set_size(chip, LV_SIZE_CONTENT, 32);
+    lv_obj_set_style_bg_color(chip, lv_color_hex(bg), 0);
+    lv_obj_set_style_bg_opa(chip, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(chip, 16, 0);
+    lv_obj_set_style_border_width(chip, 0, 0);
+    lv_obj_set_style_pad_hor(chip, 14, 0);
+    lv_obj_set_style_pad_ver(chip, 6, 0);
+    lv_obj_clear_flag(chip, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *logo = lv_img_create(scr);
-    lv_img_set_src(logo, &lmyc_logo);
-    lv_img_set_zoom(logo, 128);
-    lv_obj_align(logo, LV_ALIGN_TOP_LEFT, 20, 12);
+    lv_obj_t *lbl = lv_label_create(chip);
+    lv_label_set_text(lbl, "—");
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_12, 0);
+    lv_obj_center(lbl);
+    *lbl_out = lbl;
+    return chip;
+}
 
-    lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, "LMYC Boat Terminal");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 140, 20);
+static lv_obj_t *make_tile(lv_obj_t *parent, const char *caption, const char *unit,
+                          lv_coord_t x, lv_obj_t **value_out, lv_obj_t **sub_out)
+{
+    lv_obj_t *tile = lv_obj_create(parent);
+    lv_obj_set_size(tile, 184, 168);
+    lv_obj_set_pos(tile, x, 0);
+    lv_obj_set_style_bg_color(tile, lv_color_hex(0x12243A), 0);
+    lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(tile, 16, 0);
+    lv_obj_set_style_border_width(tile, 0, 0);
+    lv_obj_set_style_pad_all(tile, 14, 0);
+    lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *subtitle = lv_label_create(scr);
-    lv_label_set_text(subtitle, "Use the LMYC app -> Find terminals  (not phone Settings)");
-    lv_obj_set_style_text_color(subtitle, lv_color_hex(0x8FA3B8), 0);
-    lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_16, 0);
-    lv_obj_align(subtitle, LV_ALIGN_TOP_LEFT, 140, 58);
+    lv_obj_t *cap = lv_label_create(tile);
+    lv_label_set_text(cap, caption);
+    lv_obj_set_style_text_color(cap, lv_color_hex(0x8FA3B8), 0);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, 0);
+    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    lv_obj_t *qr_card = make_card(scr, "PAIR WITH PHONE", 340, 388);
-    lv_obj_align(qr_card, LV_ALIGN_BOTTOM_LEFT, 16, -8);
+    lv_obj_t *val = lv_label_create(tile);
+    lv_label_set_text(val, "—");
+    lv_obj_set_style_text_color(val, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(val, &lv_font_montserrat_48, 0);
+    lv_obj_align(val, LV_ALIGN_LEFT_MID, 0, 4);
+    *value_out = val;
+
+    lv_obj_t *un = lv_label_create(tile);
+    lv_label_set_text(un, unit);
+    lv_obj_set_style_text_color(un, lv_color_hex(0x00B4A6), 0);
+    lv_obj_set_style_text_font(un, &lv_font_montserrat_16, 0);
+    lv_obj_align(un, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    if (sub_out != nullptr) {
+        *sub_out = un;
+    }
+    return tile;
+}
+
+static lv_obj_t *make_ghost_btn(lv_obj_t *parent, const char *text,
+                               lv_event_cb_t cb, lv_coord_t w)
+{
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, w, 36);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x1E3A5F), 0);
+    lv_obj_set_style_radius(btn, 10, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_center(lbl);
+    return btn;
+}
+
+static void build_pair_page(lv_obj_t *parent)
+{
+    lv_obj_t *qr_card = make_card(parent, "PAIR WITH PHONE", 340, 380);
+    lv_obj_align(qr_card, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t *qr = lv_qrcode_create(qr_card, 220,
                                     lv_color_hex(0x0A1628),
@@ -295,13 +590,16 @@ static void create_ui(void)
     lv_obj_align(qr, LV_ALIGN_TOP_MID, 0, 28);
 
     lv_obj_t *hint = lv_label_create(qr_card);
-    lv_label_set_text(hint, "Scan QR in the LMYC app (or paste the URI)");
+    lv_label_set_text(hint, "Scan in the LMYC app (or paste the URI)");
     lv_obj_set_style_text_color(hint, lv_color_hex(0x6B7C90), 0);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -36);
 
-    lv_obj_t *status_card = make_card(scr, "DIAGNOSTICS", 420, 388);
-    lv_obj_align(status_card, LV_ALIGN_BOTTOM_RIGHT, -16, -8);
+    lv_obj_t *helm_btn = make_ghost_btn(qr_card, "Instruments", on_show_helm, 160);
+    lv_obj_align(helm_btn, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    lv_obj_t *status_card = make_card(parent, "DIAGNOSTICS", 420, 380);
+    lv_obj_align(status_card, LV_ALIGN_RIGHT_MID, 0, 0);
 
     lv_obj_t *boat_value = nullptr;
     lv_obj_t *tid_value = nullptr;
@@ -324,6 +622,7 @@ static void create_ui(void)
     add_kv_row(status_card, "IP", 238, &g_ip_value);
     add_kv_row(status_card, "Heap", 256, &g_heap_value);
     add_kv_row(status_card, "SD", 274, &g_sd_value);
+    add_kv_row(status_card, "NMEA", 292, &g_nmea_value);
 
     g_hint_value = lv_label_create(status_card);
     lv_label_set_text(g_hint_value, "-");
@@ -331,7 +630,7 @@ static void create_ui(void)
     lv_obj_set_style_text_font(g_hint_value, &lv_font_montserrat_12, 0);
     lv_label_set_long_mode(g_hint_value, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(g_hint_value, 388);
-    lv_obj_align(g_hint_value, LV_ALIGN_TOP_LEFT, 0, 294);
+    lv_obj_align(g_hint_value, LV_ALIGN_TOP_LEFT, 0, 312);
 
     g_log_value = lv_label_create(status_card);
     lv_label_set_text(g_log_value, "-");
@@ -341,27 +640,161 @@ static void create_ui(void)
     lv_obj_set_width(g_log_value, 250);
     lv_obj_align(g_log_value, LV_ALIGN_BOTTOM_LEFT, 0, -2);
 
-    lv_obj_t *reset_btn = lv_btn_create(status_card);
-    lv_obj_set_size(reset_btn, 110, 28);
+    lv_obj_t *reset_btn = make_ghost_btn(status_card, "Reset BLE", on_reset_ble, 110);
     lv_obj_align(reset_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_set_style_bg_color(reset_btn, lv_color_hex(0x1E3A5F), 0);
-    lv_obj_set_style_shadow_width(reset_btn, 0, 0);
-    lv_obj_add_event_cb(reset_btn, on_reset_ble, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *reset_lbl = lv_label_create(reset_btn);
-    lv_label_set_text(reset_lbl, "Reset BLE");
-    lv_obj_set_style_text_font(reset_lbl, &lv_font_montserrat_12, 0);
-    lv_obj_center(reset_lbl);
+}
+
+static void build_helm_page(lv_obj_t *parent)
+{
+    make_tile(parent, "DEPTH", "metres", 0, &g_tile_depth, nullptr);
+    make_tile(parent, "SPEED", "knots SOG", 196, &g_tile_sog, nullptr);
+    make_tile(parent, "COURSE", "degrees COG", 392, &g_tile_cog, nullptr);
+    make_tile(parent, "WIND", "kn AWS", 588, &g_tile_wind, &g_tile_wind_sub);
+
+    lv_obj_t *talk = make_card(parent, "NMEA TALKERS", 480, 196);
+    lv_obj_align(talk, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+    lv_obj_t *hdr = lv_label_create(talk);
+    lv_label_set_text(hdr, "ID    sentences              age    count");
+    lv_obj_set_style_text_color(hdr, lv_color_hex(0x5C7080), 0);
+    lv_obj_set_style_text_font(hdr, &lv_font_montserrat_12, 0);
+    lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 26);
+
+    g_talker_list = lv_label_create(talk);
+    lv_label_set_text(g_talker_list, "Waiting for sentences…");
+    lv_obj_set_style_text_color(g_talker_list, lv_color_hex(0xE8F0F7), 0);
+    lv_obj_set_style_text_font(g_talker_list, &lv_font_montserrat_16, 0);
+    lv_label_set_long_mode(g_talker_list, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_talker_list, 448);
+    lv_obj_align(g_talker_list, LV_ALIGN_TOP_LEFT, 0, 48);
+
+    lv_obj_t *link = make_card(parent, "LINK", 284, 196);
+    lv_obj_align(link, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+
+    g_helm_nmea = lv_label_create(link);
+    lv_label_set_text(g_helm_nmea, "0 good  /  0 bad");
+    lv_obj_set_style_text_color(g_helm_nmea, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(g_helm_nmea, &lv_font_montserrat_16, 0);
+    lv_obj_align(g_helm_nmea, LV_ALIGN_TOP_LEFT, 0, 28);
+
+    g_helm_tcp = lv_label_create(link);
+    lv_label_set_text(g_helm_tcp, "TCP 10110  ·  0 client");
+    lv_obj_set_style_text_color(g_helm_tcp, lv_color_hex(0x8FA3B8), 0);
+    lv_obj_set_style_text_font(g_helm_tcp, &lv_font_montserrat_14, 0);
+    lv_obj_align(g_helm_tcp, LV_ALIGN_TOP_LEFT, 0, 54);
+
+    g_helm_ip = lv_label_create(link);
+    lv_label_set_text(g_helm_ip, "STA —");
+    lv_obj_set_style_text_color(g_helm_ip, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(g_helm_ip, &lv_font_montserrat_14, 0);
+    lv_obj_align(g_helm_ip, LV_ALIGN_TOP_LEFT, 0, 78);
+
+    g_helm_ap = lv_label_create(link);
+    lv_label_set_text(g_helm_ap, "AP 192.168.4.1");
+    lv_obj_set_style_text_color(g_helm_ap, lv_color_hex(0x00B4A6), 0);
+    lv_obj_set_style_text_font(g_helm_ap, &lv_font_montserrat_14, 0);
+    lv_obj_align(g_helm_ap, LV_ALIGN_TOP_LEFT, 0, 98);
+
+    g_helm_peer = lv_label_create(link);
+    lv_label_set_text(g_helm_peer, "phone —");
+    lv_obj_set_style_text_color(g_helm_peer, lv_color_hex(0x8FA3B8), 0);
+    lv_obj_set_style_text_font(g_helm_peer, &lv_font_montserrat_12, 0);
+    lv_obj_align(g_helm_peer, LV_ALIGN_TOP_LEFT, 0, 118);
+
+    lv_obj_t *gnss_btn = make_ghost_btn(link, "GNSS off", on_toggle_gnss, 128);
+    lv_obj_align(gnss_btn, LV_ALIGN_BOTTOM_LEFT, 0, -40);
+    g_gnss_btn_lbl = lv_obj_get_child(gnss_btn, 0);
+
+    lv_obj_t *chart_btn = make_ghost_btn(link, "Chart", on_show_chart, 120);
+    lv_obj_align(chart_btn, LV_ALIGN_BOTTOM_RIGHT, 0, -40);
+
+    lv_obj_t *qr_btn = make_ghost_btn(link, "Show QR", on_show_qr, 120);
+    lv_obj_align(qr_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_t *rst = make_ghost_btn(link, "Reset BLE", on_reset_ble, 120);
+    lv_obj_align(rst, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+}
+
+static void create_ui(void)
+{
+    lv_obj_t *scr = lv_scr_act();
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x071422), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *logo = lv_img_create(scr);
+    lv_img_set_src(logo, &lmyc_logo);
+    lv_img_set_zoom(logo, 128);
+    lv_obj_align(logo, LV_ALIGN_TOP_LEFT, 16, 8);
+
+    lv_obj_t *title = lv_label_create(scr);
+    lv_label_set_text(title, "LMYC Boat Terminal");
+    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 128, 10);
+
+    g_hdr_subtitle = lv_label_create(scr);
+    lv_label_set_text(g_hdr_subtitle, "Scan QR in the LMYC app  ·  not phone Settings");
+    lv_obj_set_style_text_color(g_hdr_subtitle, lv_color_hex(0x8FA3B8), 0);
+    lv_obj_set_style_text_font(g_hdr_subtitle, &lv_font_montserrat_14, 0);
+    lv_obj_align(g_hdr_subtitle, LV_ALIGN_TOP_LEFT, 128, 46);
+
+    g_chip_fix = make_chip(scr, &g_chip_fix_lbl, 0x6B5420);
+    lv_obj_align(g_chip_fix, LV_ALIGN_TOP_RIGHT, -16, 14);
+    g_chip_link = make_chip(scr, &g_chip_link_lbl, 0x1E3A5F);
+    lv_obj_align(g_chip_link, LV_ALIGN_TOP_RIGHT, -130, 14);
+
+    g_page_pair = lv_obj_create(scr);
+    lv_obj_set_size(g_page_pair, 768, 392);
+    lv_obj_align(g_page_pair, LV_ALIGN_BOTTOM_MID, 0, -8);
+    lv_obj_set_style_bg_opa(g_page_pair, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(g_page_pair, 0, 0);
+    lv_obj_set_style_pad_all(g_page_pair, 0, 0);
+    lv_obj_clear_flag(g_page_pair, LV_OBJ_FLAG_SCROLLABLE);
+    build_pair_page(g_page_pair);
+
+    g_page_helm = lv_obj_create(scr);
+    lv_obj_set_size(g_page_helm, 768, 392);
+    lv_obj_align(g_page_helm, LV_ALIGN_BOTTOM_MID, 0, -8);
+    lv_obj_set_style_bg_opa(g_page_helm, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(g_page_helm, 0, 0);
+    lv_obj_set_style_pad_all(g_page_helm, 0, 0);
+    lv_obj_clear_flag(g_page_helm, LV_OBJ_FLAG_SCROLLABLE);
+    build_helm_page(g_page_helm);
+    lv_obj_add_flag(g_page_helm, LV_OBJ_FLAG_HIDDEN);
+
+    g_page_chart = lv_obj_create(scr);
+    lv_obj_set_size(g_page_chart, 800, 400);
+    lv_obj_align(g_page_chart, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(g_page_chart, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(g_page_chart, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_page_chart, 0, 0);
+    lv_obj_set_style_pad_all(g_page_chart, 0, 0);
+    lv_obj_clear_flag(g_page_chart, LV_OBJ_FLAG_SCROLLABLE);
+    g_chart_img = lv_img_create(g_page_chart);
+    lv_obj_center(g_chart_img);
+    lv_obj_t *back = make_ghost_btn(g_page_chart, "Helm", on_hide_chart, 120);
+    lv_obj_align(back, LV_ALIGN_TOP_RIGHT, -16, 8);
+    lv_obj_add_flag(g_page_chart, LV_OBJ_FLAG_HIDDEN);
 
     update_status_labels();
     g_status_timer = lv_timer_create(status_timer_cb, 250, nullptr);
 }
 
+static void on_nmea_sentence(const char *sentence, size_t /*len*/, void * /*ctx*/)
+{
+    nmea_state_note(sentence);
+    gateway_send_sentence(sentence);
+    pairing_nmea_notify(sentence);
+}
+
 static void start_wifi_client(void)
 {
-    Serial.printf("Wi-Fi: joining SSID '%s' as a client...\n", WIFI_SSID);
+    snprintf(g_ap_ssid, sizeof(g_ap_ssid), "LMYC-%s", LMYC_BOAT_ID);
+    Serial.printf("Wi-Fi: AP '%s' + STA '%s'\n", g_ap_ssid, WIFI_SSID);
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_ap();
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -371,15 +804,23 @@ static void start_wifi_client(void)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, nullptr, nullptr));
 
-    wifi_config_t wifi_config = {};
-    strncpy(reinterpret_cast<char *>(wifi_config.sta.ssid), WIFI_SSID,
-            sizeof(wifi_config.sta.ssid));
-    strncpy(reinterpret_cast<char *>(wifi_config.sta.password), WIFI_PASSWORD,
-            sizeof(wifi_config.sta.password));
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    wifi_config_t ap = {};
+    strncpy(reinterpret_cast<char *>(ap.ap.ssid), g_ap_ssid, sizeof(ap.ap.ssid));
+    ap.ap.ssid_len = static_cast<uint8_t>(strlen(g_ap_ssid));
+    strncpy(reinterpret_cast<char *>(ap.ap.password), AP_PASSWORD, sizeof(ap.ap.password));
+    ap.ap.max_connection = 4;
+    ap.ap.channel = 6;
+    ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    wifi_config_t sta = {};
+    strncpy(reinterpret_cast<char *>(sta.sta.ssid), WIFI_SSID, sizeof(sta.sta.ssid));
+    strncpy(reinterpret_cast<char *>(sta.sta.password), WIFI_PASSWORD,
+            sizeof(sta.sta.password));
+    sta.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
 #ifdef LMYC_HAS_COEX
     esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
@@ -418,6 +859,15 @@ void setup()
     lvgl_port_init(g_board->getLCD(), g_board->getTouch());
 
     init_sd_card();
+    nmea_init();
+    nmea_state_init();
+    nmea_io_init();
+    nmea_sim_init();
+    inject_init();
+    snapshot_init();
+    gateway_init();
+    hub_http_init();
+    nmea_set_sink(on_nmea_sentence, nullptr);
     pairing_init();
     start_wifi_client();
 
@@ -426,6 +876,7 @@ void setup()
     lvgl_port_unlock();
 
     Serial.println("UI ready. BLE name is in the primary ADV packet; scan in the LMYC app.");
+    Serial.println("NMEA sim on (FIX: SIM) — RMC/GGA/DPT/MWV @ 1 Hz until a real talker appears.");
 }
 
 void loop()
@@ -436,5 +887,12 @@ void loop()
         Serial.println("Wi-Fi: reconnect (backoff)");
         esp_wifi_connect();
     }
-    delay(200);
+
+    nmea_io_poll();
+    if (nmea_sim_enabled() && nmea_io_quiet()) {
+        nmea_sim_poll();
+    }
+    gateway_poll();
+
+    delay(20);
 }
