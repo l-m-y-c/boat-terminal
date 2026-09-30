@@ -16,7 +16,7 @@ These items need input from members, the Board, and technical volunteers. Severa
 ## Product & Experience
 
 4. Is a 4.3" screen large enough, or should we standardise on 7"?
-5. How important is a fully native phone app versus a good Progressive Web App?
+5. The companion is the Flutter app in `mobile/`. A website-only flow remains for members at home. Login is shared. See [18](18-maintenance-handoff-and-auth.md).
 6. Should the terminal show the member’s name while paired, or simply “Booked”?
 7. Do we want light digital checklists in the first version?
 

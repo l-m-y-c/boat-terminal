@@ -75,6 +75,7 @@ The system may still listen to waypoint and autopilot data and can push high-qua
 | [15 – Useful Resources](docs/15-useful-resources.md) | Curated NMEA guides and related projects |
 | [16 – Related Projects: Tritium](docs/16-related-projects-tritium.md) | Deep dive into tritium.co.uk ESP32 marine projects |
 | [17 – Android Boat / BoatLink Roadmap](docs/17-android-boat-roadmap.md) | Phone-as-computer plan, protocol, and Grok Build slices |
+| [18 – Maintenance handoff & login](docs/18-maintenance-handoff-and-auth.md) | Agreed member loop: phone, Waveshare, lmyc.ca, on-boat copy |
 
 ---
 
@@ -87,9 +88,11 @@ The system may still listen to waypoint and autopilot data and can push high-qua
 
 See [04 – Hardware](docs/04-hardware.md) and [14 – Prototype Hardware](docs/14-prototype-hardware.md) for details.
 
-**Prototype software (this repo):** firmware for the 7″ ESP32-S3 terminal (`firmware/`) and an Android companion (`mobile/`). Bench pairing is QR + BLE OOB. **Use the app’s Find terminals** — Android Settings hide most LE-only devices. After a pull: `make pair-test`, then rescan the QR (OOB rotates every boot).
+**Prototype software (this repo):** firmware for the 7″ ESP32-S3 terminal (`firmware/`) and an Android companion (`mobile/`). Bench pairing is QR + BLE OOB. **Use the app’s Find terminals** — Android Settings hide most LE-only devices. After a pull: `make pair-test`, then rescan the QR (OOB rotates every boot). The bench also speaks BoatLink: simulated NMEA on TCP 10110, a SoftAP, and chart snapshots. See `firmware/README.md`.
 
-**Next build:** [17 – Android Boat / BoatLink](docs/17-android-boat-roadmap.md) — NMEA tap, Wi-Fi gateway, gated phone GNSS. Mirror the bus, not the pixels.
+**Member-facing roadmap:** [18 – Maintenance handoff & login](docs/18-maintenance-handoff-and-auth.md). The phone, the Waveshare, and lmyc.ca share one member login. The boat's TF card keeps this boat's maintenance book, photos included, so the next crew can read it with no cell service. The 13.3″ E-Ink is a separate project that shows pictures the phone sends.
+
+**Instrument roadmap:** [17 – Android Boat / BoatLink](docs/17-android-boat-roadmap.md). Mirror the bus, not the pixels. Real RS485 listen is still ahead.
 
 NMEA bus safety, pairing security, and firmware ownership remain required items before any boat is modified.
 

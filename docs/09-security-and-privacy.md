@@ -50,23 +50,32 @@ This reduces the risk that the system could help a thief identify unoccupied boa
 
 ## Data Stored on the Terminal
 
-**Allowed**
-- Current pairing state (display name, expiry) — volatile
-- Recent instrument values — volatile
-- Short local queue of hours or issue notes awaiting upload
-- Device configuration (NMEA settings, brightness, device identity)
+The TF card is this boat's maintenance book. That rule was agreed on 2026-09-30 and is specified in [18 – Maintenance handoff](18-maintenance-handoff-and-auth.md). It replaces the earlier "short queue, no photos" note for this one kind of data.
 
-**Not stored long-term**
-- Member passwords or account credentials
-- Full booking history
+**On the TF card (this sailboat only)**
+- Maintenance items: title, description, category, priority, status, dates, reporter display name, leader notes
+- Photos of those problems, as JPEGs
+- A sync cursor and the list of items still waiting to upload
+
+**Volatile, or configuration only**
+- Current pairing state (display name, expiry)
+- Recent instrument values
+- Device configuration (NMEA settings, brightness, device identity, boat id)
+
+**Not stored**
+- Member passwords, OAuth access tokens, or refresh tokens
+- Other people's bookings
+- Other boats' maintenance books
 - Precise track logs
-- Photos
+
+The book is readable on the Waveshare with no phone. A new report is attributed to a member only while a boarding pass is paired. The phone carries pending items to lmyc.ca. The terminal does not hold a member session across crews.
 
 ## Privacy Considerations
 
 - The system does not continuously track boat location for the club
 - Position data shown on the terminal stays local unless the member chooses to share it
-- Issue reports and hour logs are associated with the booking and flow into existing club processes
+- Issue reports are this boat's operational record. They stay on the card and flow to the club's maintenance list when a paired phone has a signal
+- BLE advertising still must not reveal occupancy or a member name. See above.
 
 ## Physical Security
 
@@ -81,6 +90,6 @@ This reduces the risk that the system could help a thief identify unoccupied boa
 | Phone lost or dead | Instruments continue; manual check-out via existing web process remains possible |
 | Backend unreachable | Previously issued token still works until its natural expiry; new pairings cannot be started |
 | Token expires mid-sail | Booking status may clear; **instrument display is unaffected** |
-| Terminal power loss | Returns to unpaired state on reboot; no sensitive data retained |
+| Terminal power loss | Returns to unpaired state on reboot. Member tokens were never on the device. This boat's maintenance book remains on the TF card |
 | Spoofed BLE device in marina | Phone rejects it because terminal identity cannot be verified |
 | NMEA interface fault | Terminal drops off the bus cleanly; other instruments continue (see NMEA safety requirements) |

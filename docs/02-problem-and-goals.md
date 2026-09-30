@@ -30,7 +30,7 @@ The primary purpose is to serve the **co-operative**:
    Engine hours, fuel, crew, destination, and free-text notes can be captured easily and associated with the booking.
 
 3. **Effortless maintenance reporting**  
-   Problems noticed while on board can be recorded with a photo and short description and flow into the club’s existing tracking.
+   Problems noticed while on board can be recorded with a photo and short description. The boat keeps a copy, including the photos, so the next member can read it with no cell service. The same report posts to the club's existing maintenance list when a phone has a signal. See [18 – Maintenance handoff](18-maintenance-handoff-and-auth.md).
 
 4. **Boat knowledge that stays with the boat**  
    Quick reference pages (systems overview, quirks, location of gear, starting procedures, etc.) reduce reliance on tribal knowledge.

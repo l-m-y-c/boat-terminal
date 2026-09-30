@@ -19,18 +19,22 @@
 9. Review results, including firmware update practicality and real-world pairing experience
 10. Decide on wider rollout only after the pilot has answered the hard questions
 
-## On the bench now (2026-09)
+## On the bench (2026-09)
 
-Hardware is here and QR + BLE pairing works. Software work no longer waits on the club go/no-go for *listening* and phone UX.
-
-Follow **[17 – Android Boat / BoatLink Roadmap](17-android-boat-roadmap.md)**:
-
-- Slice A — NMEA simulator + sentence console + TCP 10110 (no boat wire)
-- Slice B — SoftAP gateway so Navionics can subscribe
-- Slice C — gated phone GNSS, local only
-- Later slices — real 0183 listen, SD log, snapshots, isolated N2K listen
+Hardware is here and QR + BLE pairing works. The firmware runs the BoatLink bench from [17](17-android-boat-roadmap.md): NMEA simulator, sentence console, TCP 10110, SoftAP, chart snapshots, and phone GNSS that the 7″ must arm. Real RS485 listen is still ahead.
 
 Writing onto a live backbone, N2K install, and fleet rollout still require the Board items above.
+
+## Agreed next (2026-09-30)
+
+Member priority is the maintenance loop in **[18 – Maintenance handoff & login](18-maintenance-handoff-and-auth.md)**:
+
+1. This boat's maintenance book on the TF card, photos included, readable with no cell service.
+2. Phone login via OAuth 2.0 authorization code + PKCE against the existing lmyc.ca users.
+3. A JSON API on lmyc.ca that wraps the maintenance form the club already uses.
+4. The phone carries pending reports up and club-side edits down. The terminal does not hold member tokens.
+
+The 13.3″ E-Ink stays a separate project. It shows pictures the phone sends.
 
 ## What This Repository Will Hold
 
@@ -39,6 +43,7 @@ Writing onto a live backbone, N2K install, and fleet rollout still require the B
 - Hardware notes and per-boat installation records
 - Decision log and risk register
 - The BoatLink protocol and slice plan in doc 17
+- The maintenance handoff, login, and on-boat copy in doc 18
 
 ---
 

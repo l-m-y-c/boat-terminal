@@ -1,7 +1,8 @@
 # 17 – Android Boat / BoatLink Roadmap
 
-**Status:** bench pairing works (QR + BLE OOB). This document is the build plan for the next layer.
-**Audience:** humans and Grok Build. Prefer this file over chat history when implementing.
+**Status:** bench pairing works (QR + BLE OOB). BoatLink slices through the SoftAP gateway, TCP 10110, snapshots, and gated phone GNSS are in the firmware. Real RS485 listen is not.
+**Audience:** humans and Grok Build. Prefer this file over chat history when implementing the instrument path.
+**Member-facing work** (login, maintenance, the on-boat copy) is [18 – Maintenance handoff](18-maintenance-handoff-and-auth.md), not this file. The 13.3″ E-Ink is a separate project.
 **Related:** [03 architecture](03-system-architecture.md), [05 NMEA](05-nmea-connectivity.md), [06 pairing](06-phone-app-and-pairing.md), [16 Tritium](16-related-projects-tritium.md).
 
 ---
@@ -10,15 +11,15 @@
 
 The phone is the computer. The Waveshare is the boat’s I/O hub: it aggregates NMEA, shows glanceable instruments, and (after pairing) opens a Wi-Fi data plane to the member’s apps. It is not a tiny Android tablet and it is not a chartplotter.
 
-## Current repo state (2026-09-02)
+## Current repo state (2026-09-30)
 
 | Piece | What exists | What does not |
 |-------|-------------|----------------|
 | Hardware | Waveshare ESP32-S3-Touch-LCD-7, 800×480 RGB + GT911, CAN + RS485 headers, TF slot, Wi-Fi + BLE 5 | Galvanic isolation, 12 V path, enclosure |
-| Firmware | LVGL v8 ready/QR UI, NimBLE peripheral, OOB pairing, Wi-Fi **STA only**, SD FAT32, diagnostics card | NMEA parser, SoftAP, TCP/UDP gateway, instrument pages, JPEG ingest |
-| BLE GATT | Service `6c6d7963-0001-4000-8000-000000000001`. Payload read `…000010`, session WRITE `…000020` (raw 16-byte OOB), status READ/NOTIFY `…000021` | NMEA notify, inject write, control plane beyond PING |
-| Mobile | Flutter Android, `lmyc://` deep link, Find terminals, raw16 OOB write | Sentence console, Wi-Fi client to gateway, GPS formatter |
-| Safety docs | Isolation + “instruments survive pairing expiry” are hard requirements | No live bus code yet — keep it that way until Slice C is gated |
+| Firmware | LVGL v8 QR + helm, NimBLE peripheral, OOB pairing, **APSTA** SoftAP, SD FAT32, NMEA sim + parser, TCP/UDP 10110, `POST /snapshot`, gated `POST /inject` | Real RS485 listen, maintenance book on the card |
+| BLE GATT | Service `6c6d7963-0001-4000-8000-000000000001`. Payload read `…000010`, session WRITE `…000020` (raw 16-byte OOB), status READ/NOTIFY `…000021`, NMEA notify `…000030` | Inject write on BLE (inject is HTTP, and only when the 7″ arms LOCAL) |
+| Mobile | Flutter Android, `lmyc://` deep link, Find terminals, raw16 OOB write, sentence console, BoatLink page (TCP, snapshot, GNSS) | Member login, maintenance UI |
+| Safety docs | Isolation + “instruments survive pairing expiry” are hard requirements | No live bus code yet — keep it that way |
 
 Known constraints the next code must respect:
 

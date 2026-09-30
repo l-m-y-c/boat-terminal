@@ -8,7 +8,7 @@ The boat terminal adds a local, always-available companion on the vessel itself.
 
 ### Responsibilities of the Phone
 
-- Authenticate the member against the existing LMYC booking system
+- Authenticate the member against lmyc.ca (OAuth 2.0 authorization code + PKCE, same WordPress user as the website). See [18](18-maintenance-handoff-and-auth.md)
 - Show current bookings and support check-in when the member arrives at the boat
 - Perform the secure pairing ceremony with the boat terminal
 - Upload any observations, engine hours, or notes the member chooses to share
@@ -96,9 +96,18 @@ Watch the terminal **DIAGNOSTICS** card: `Advertising` → `Connected` → `Pair
 - Light pre-departure or post-sail checklist
 
 **Later possibilities**
-- Deeper integration with existing maintenance items
+- Bookings through the same member token
 - Offline chart support
 - Weather overlays
+
+## Maintenance book on the boat
+
+The phone is the courier for [the on-card maintenance book](18-maintenance-handoff-and-auth.md).
+
+- While the phone still has coverage it fetches a short-lived boarding pass for this member and this boat. Pairing in a bay with no signal uses that pass. It does not call home again.
+- Photos and item text move between the phone and the terminal over the SoftAP, not over BLE.
+- The phone posts pending items to lmyc.ca with the member's bearer token, and writes club-side edits back onto the card.
+- The terminal never receives the member's refresh token.
 
 ## Offline Behaviour
 

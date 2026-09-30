@@ -59,11 +59,12 @@ This is **not** a live moving-map chartplotter. It is a persistent, high-quality
 
 ## 4. Member Notices Something Worth Reporting
 
-1. Opens the companion on their phone (preferred) or uses a simple form on the 7″ terminal.
-2. Adds a short note and optional photo.
-3. The information is automatically associated with the current boat and booking.
-4. It flows into the club’s existing maintenance tracking when connectivity is available.
-5. The **13.3″ E-Ink** status board can be updated to reflect the new open item so the next user sees it immediately.
+1. Opens the companion on their phone, or uses the form on the 7″ terminal.
+2. Adds a short note. Photos are taken on the phone, converted to JPEG, and stored on the boat's card with the note.
+3. The boat is the terminal they are paired to. Category and priority match the lmyc.ca form.
+4. The note is on the card immediately, including with no cell service.
+5. The phone posts it to the club's maintenance list when it next has a signal, and stores the website id on the card so a retry does not file it twice.
+6. The next person can read it on the 7″, or on their phone over the terminal's Wi-Fi, with no coverage. See [18](18-maintenance-handoff-and-auth.md).
 
 ---
 
@@ -91,12 +92,14 @@ This is **not** a live moving-map chartplotter. It is a persistent, high-quality
 
 ---
 
-## 7. Phone Unavailable or Dead
+## 7. Phone Unavailable, or No Cell Coverage
 
-- The **7″ terminal** continues to show live instrument data and any locally cached boat reference information.
-- The **13.3″ E-Ink** continues to hold its last status / overview image.
-- Booking and check-out can continue through the existing web process.
-- Pairing is a convenience that enhances the experience; it is not a requirement to use the boat.
+- The **7″ terminal** continues to show live instrument data.
+- This boat's maintenance book, including photos, stays readable on the 7″. It does not need the phone or a signal.
+- A phone that already fetched a boarding pass can still pair and add a report. The report waits on the card until some phone can reach lmyc.ca.
+- The **13.3″ E-Ink** is a separate display. It holds the last picture the phone sent it.
+- Booking and check-out can continue through the website when a signal exists.
+- Using the boat does not require pairing. Pairing attributes new notes to the member.
 
 ---
 

@@ -75,20 +75,22 @@
   At typical club boat speeds (5–7 kn) and the ranges shown on overview maps, this is entirely practical.
 - Can be mounted in the cabin or in a 3D-printed / sealed outdoor enclosure with a substantial lithium battery (EE02 supports battery operation)
 
-### 4. Club Backend
+### 4. Club Backend (lmyc.ca)
 
-- Existing or lightly extended LMYC booking / membership system
-- Issues short-lived pairing tokens when a booking becomes active
-- Receives check-in, check-out, engine hours, and issue reports
-- Source of truth for “who currently has this boat”
+- WordPress and MemberPress stay the membership system. The phone logs in with OAuth 2.0 authorization code + PKCE against those same users. The website keeps its cookie login.
+- The terminal is a device bound to one sailboat id. It is not an OAuth client and it does not store member tokens.
+- The TF card on the Waveshare is this boat's copy of the maintenance book, photos included. lmyc.ca is the club's copy. The phone carries changes between them.
+- Details, field names, and the build order are in [18 – Maintenance handoff](18-maintenance-handoff-and-auth.md).
+
+### 5. E-Ink board
+
+The 13.3″ panel is a separate project. It displays pictures the phone sends. It is not part of login, pairing, or the maintenance book.
 
 ## Design Principles
 
 1. **Phone is the powerhouse and primary UI** – maps, accounts, photos, complex interaction
 2. **Serve the co-operative first** – logbook, maintenance, boat knowledge, clean handovers
-3. **Two complementary on-boat displays**:
-   - Fast colour touch for interaction
-   - Large low-power E-Ink for persistent, glanceable information
+3. **The 7″ is the boat's interactive terminal.** The large E-Ink is a separate project that shows pictures the phone sends.
 4. **Pairing is temporary** – tied to the booking window (QR is the preferred bootstrap)
 5. **Offline-first and pairing-independent for instruments** – live NMEA display continues even if the token expires
 6. **Bus safety first** – any NMEA 2000 connection uses a galvanically isolated interface with clean failure behaviour
@@ -101,14 +103,15 @@
 |------|--------|-------------|------|
 | Depth, wind, speed, battery, etc. | Boat instruments | 7" terminal | NMEA direct (isolated) |
 | Waypoint / autopilot status | Existing plotter / autopilot | 7" terminal (awareness) | NMEA listen |
-| Booking status | Club backend | Both displays + Phone | Via phone after QR pairing |
-| Log entries & issues | Phone or 7" terminal | Club backend | Cellular |
-| Map / route overview images | Phone | 13.3" E-Ink | Wi-Fi push (on demand or 30–60 s) |
-| Pairing token | Club backend | Phone → 7" terminal | QR + BLE (LE Secure Connections) |
+| Booking status | lmyc.ca | Phone, and the 7″ while paired | Via the phone after pairing |
+| This boat's maintenance book, including photos | TF card on the 7″ | Next member, on screen or via phone on the SoftAP | Local. No cell required |
+| Maintenance edits made at home | lmyc.ca | TF card | Phone courier, when it has a signal |
+| New reports filed on board | Phone or 7″, then the TF card | lmyc.ca | Phone courier, bearer token |
+| Map / route overview images | Phone | 13.3" E-Ink | Separate project. Wi-Fi image push |
+| Boarding pass | lmyc.ca, fetched while the phone has coverage | 7″ terminal | QR + BLE. Checked locally |
 
-## Why the Dual-Display Split Works
+## Why the split works
 
-- The **7" colour touch** gives the interaction speed people expect for check-in, logbook, and live instruments.
-- The **13.3" E-Ink** gives a large, sunlight-readable surface that can hold useful information (including map context) for long periods while drawing almost no power.
-- The **phone** keeps the expensive, power-hungry, complex work.
-- Update rates of 30–60 seconds (or pure on-demand) are well matched to the speeds and ranges typical of club sailing.
+- The **phone** keeps accounts, photos, charts, and the network path to lmyc.ca.
+- The **7" colour touch** is on the boat: instruments, the maintenance book, and pairing. Its TF card holds the book when nobody has a signal.
+- The **13.3" E-Ink**, as a separate project, can hold a picture the phone pushed (a route overview, a status board) and draw almost nothing while that picture sits there.
