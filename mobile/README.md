@@ -19,7 +19,7 @@ See `../docs/06-phone-app-and-pairing.md` and `../docs/08-user-flows.md`.
 - GATT connect + raw 16-byte OOB write (from QR hex) once a QR / URI is applied
   — fits default ATT MTU 23; the old `PAIR <hex>` text write was 37B and died on Android
 - After pair: **Sentences** console (BLE `…000030` notify + optional TCP `:10110`)
-- **Maintenance book** reads and files items on the terminal TF card (`GET`/`POST /maintenance` on the SoftAP). It does not post to lmyc.ca yet.
+- **Maintenance book** reads and files items, including up to five JPEGs, on the terminal TF card. Club API stays blank until lmyc.ca has the JSON route; a blank field leaves every item `pending`.
 - Clear status UI (permissions → scanning → connecting → paired)
 
 **Do not use Android Settings → Bluetooth.** System Settings hide most LE-only peripherals. Use **Find terminals**.
@@ -43,12 +43,23 @@ adb shell am start -a android.intent.action.VIEW \
 
 `oob` must be 32 hex chars (16 raw bytes). Copy the live URI off the terminal serial log (`Pairing payload: lmyc://...`) — OOB rotates every boot.
 
+### Without the Waveshare
+
+The board can stay at the shop. From the repo root, on a computer joined to the same Wi-Fi as the phone:
+
+```bash
+python3 tools/maint_card_server.py
+```
+
+In the app, open **Maintenance book** on the home screen (pairing can wait). Set **Terminal IP** to the printed `host:port` (no `http://`). File a note, attach a photo, and tap the row to see it. Leave **Club API** blank to confirm the copy stays pending. Paste the printed `http://…` URL into **Club API** and tap **Sync with club**. Pending notes go up, and a newer club edit comes back onto the card. The stand-in does not contact lmyc.ca.
+
 ## Permissions
 
 On first connect the app requests:
 
 - `BLUETOOTH_SCAN` / `BLUETOOTH_CONNECT` (Android 12+)
 - Location (only required for BLE scan on Android 11 and older)
+- Camera, when a maintenance photo is taken in the app
 
 ## Next steps
 

@@ -12,6 +12,7 @@
 #include <cstring>
 
 static bool parse_string_field(const char *json, const char *key, char *out, size_t cap);
+static uint32_t parse_u32_field(const char *json, const char *key);
 
 static bool g_ready = false;
 static File g_list_dir;
@@ -60,6 +61,14 @@ bool maint_priority_ok(const char *priority)
     return priority != nullptr &&
            (strcmp(priority, "critical") == 0 || strcmp(priority, "high") == 0 ||
             strcmp(priority, "medium") == 0 || strcmp(priority, "low") == 0);
+}
+
+bool maint_status_ok(const char *status)
+{
+    return status != nullptr &&
+           (strcmp(status, "reported") == 0 || strcmp(status, "in-progress") == 0 ||
+            strcmp(status, "scheduled") == 0 || strcmp(status, "completed") == 0 ||
+            strcmp(status, "future-wishlist") == 0);
 }
 
 static bool item_dir(const char *id, char *out, size_t cap)
@@ -258,6 +267,111 @@ bool maint_store_create(MaintItem *item)
     snprintf(item->sync_state, sizeof(item->sync_state), "pending");
     item->photo_count = 0;
     return maint_store_save(item);
+}
+
+bool maint_club_item_from_json(const char *json, MaintItem *out)
+{
+    if (!maint_item_from_json(json, out)) {
+        return false;
+    }
+    out->wp_id = parse_u32_field(json, "wp_id");
+    out->sailboat_id = parse_u32_field(json, "sailboat_id");
+    parse_string_field(json, "status", out->status, sizeof(out->status));
+    if (out->wp_id == 0) {
+        return false;
+    }
+    return out->status[0] == '\0' || maint_status_ok(out->status);
+}
+
+static void copy_field(char *dst, size_t cap, const char *src)
+{
+    snprintf(dst, cap, "%s", src != nullptr ? src : "");
+}
+
+bool maint_store_reconcile(const MaintItem *incoming, char *out_id, size_t id_cap,
+                           const char **action)
+{
+    if (!g_ready || incoming == nullptr || out_id == nullptr || id_cap < kMaintIdHex + 1 ||
+        incoming->wp_id == 0 || incoming->title[0] == '\0' ||
+        !maint_category_ok(incoming->category) || !maint_priority_ok(incoming->priority)) {
+        return false;
+    }
+    if (incoming->status[0] != '\0' && !maint_status_ok(incoming->status)) {
+        return false;
+    }
+
+    char found[kMaintIdHex + 1] = "";
+    if (maint_store_list_start()) {
+        MaintItem item;
+        while (maint_store_list_next(&item)) {
+            if (item.wp_id == incoming->wp_id) {
+                copy_field(found, sizeof(found), item.id);
+                break;
+            }
+        }
+        maint_store_list_end();
+    }
+
+    if (found[0] == '\0') {
+        MaintItem item = *incoming;
+        new_id(item.id);
+        if (item.sailboat_id == 0) {
+            item.sailboat_id = LMYC_SAILBOAT_ID;
+        }
+        if (!maint_status_ok(item.status)) {
+            copy_field(item.status, sizeof(item.status), "reported");
+        }
+        copy_field(item.sync_state, sizeof(item.sync_state), "synced");
+        item.photo_count = 0;
+        if (item.created[0] == '\0') {
+            copy_field(item.created, sizeof(item.created), item.modified);
+        }
+        if (!maint_store_save(&item)) {
+            return false;
+        }
+        copy_field(out_id, id_cap, item.id);
+        if (action != nullptr) {
+            *action = "added";
+        }
+        return true;
+    }
+
+    MaintItem current;
+    if (!maint_store_load(found, &current)) {
+        return false;
+    }
+    copy_field(out_id, id_cap, current.id);
+    if (strcmp(current.sync_state, "pending") == 0) {
+        if (action != nullptr) {
+            *action = "skipped";
+        }
+        return true;
+    }
+    if (incoming->modified[0] == '\0' ||
+        strcmp(incoming->modified, current.modified) <= 0) {
+        if (action != nullptr) {
+            *action = "kept";
+        }
+        return true;
+    }
+
+    copy_field(current.title, sizeof(current.title), incoming->title);
+    copy_field(current.description, sizeof(current.description), incoming->description);
+    copy_field(current.category, sizeof(current.category), incoming->category);
+    copy_field(current.priority, sizeof(current.priority), incoming->priority);
+    copy_field(current.reporter, sizeof(current.reporter), incoming->reporter);
+    copy_field(current.modified, sizeof(current.modified), incoming->modified);
+    if (maint_status_ok(incoming->status)) {
+        copy_field(current.status, sizeof(current.status), incoming->status);
+    }
+    copy_field(current.sync_state, sizeof(current.sync_state), "synced");
+    if (!maint_store_save(&current)) {
+        return false;
+    }
+    if (action != nullptr) {
+        *action = "updated";
+    }
+    return true;
 }
 
 static const char *find_key(const char *json, const char *key)

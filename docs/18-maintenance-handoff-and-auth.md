@@ -134,10 +134,10 @@ The terminal still must not advertise occupancy or a member name in BLE advertis
 
 **This repo**
 
-1. On-card store and local HTTP read, so a phone on the SoftAP can list this boat's book with no cell service. Started: `firmware/src/maint_store.*`, `GET`/`POST /maintenance`, and the phone's Maintenance book page. A photo can be posted to `/maintenance/photo`. The page does not send photos yet, and nothing in this step posts to lmyc.ca.
-2. Phone screen to read that list and file a pending item, photos included, onto the card.
-3. Waveshare list of open items and one photo at a time.
-4. Bearer-token client, once lmyc.ca has the routes above, including upload of `sync: pending` items and download of club-side edits.
+1. On-card store and local HTTP. In this repo: `firmware/src/maint_store.*`, `GET`/`POST /maintenance`, `GET`/`POST /maintenance/photo`, and `POST /maintenance/ack`. The ack route writes `wp_id` and sets `sync` to `synced` after the club JSON API accepts the item. The terminal still does not call lmyc.ca.
+2. Phone screen reads that list and files a pending item with up to five JPEGs (long edge about 2000 px, under 500 KB) onto the card. A blank Club API field does not open a connection, so the items stay `pending`. `tools/maint_card_server.py` speaks the same routes on a computer, for a phone test while the Waveshare is not on the bench.
+3. Waveshare list of open items, then one photo large enough to recognize the part. Helm **Book** opens the list. A row decodes the JPEG onto the full screen; **Back** returns to the list and **Next photo** steps through that item. Compiled with the rest of the firmware. Not flashed yet.
+4. Bearer-token client for those JSON routes. The phone uploads `sync: pending` items, then downloads club edits. `POST /maintenance/reconcile` writes an edit onto the card when the website `modified` time is newer, and leaves a still-pending boat note alone. A blank Club API field does not open a connection. The live lmyc.ca routes are still waiting on the site owner. The stand-in answers both directions.
 5. Boarding pass check in the existing QR + BLE handshake.
 
 **lmyc.ca** (the existing maintenance PHP, not a new site)

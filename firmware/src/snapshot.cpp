@@ -13,6 +13,9 @@ static lv_img_dsc_t g_dsc = {};
 static bool g_have = false;
 static uint32_t g_loaded_ms = 0;
 static uint32_t g_generation = 0;
+static int g_off_x = 0;
+static int g_off_y = 0;
+static uint8_t *g_pool = nullptr;
 
 struct JpegSrc {
     const uint8_t *data;
@@ -63,10 +66,12 @@ static UINT jpeg_out(JDEC * /*jd*/, void *bitmap, JRECT *rect)
             const uint8_t r = rgb[i++];
             const uint8_t g = rgb[i++];
             const uint8_t b = rgb[i++];
-            if (x < 0 || x >= kSnapshotWidth) {
+            const int dx = x + g_off_x;
+            const int dy = y + g_off_y;
+            if (dx < 0 || dy < 0 || dx >= kSnapshotWidth || dy >= kSnapshotHeight) {
                 continue;
             }
-            g_pixels[y * kSnapshotWidth + x] =
+            g_pixels[dy * kSnapshotWidth + dx] =
                 static_cast<uint16_t>(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
         }
     }
@@ -75,7 +80,12 @@ static UINT jpeg_out(JDEC * /*jd*/, void *bitmap, JRECT *rect)
 
 bool snapshot_load_jpeg(const uint8_t *jpeg, size_t len)
 {
-    if (jpeg == nullptr || len < 32 || len > kSnapshotJpegMax) {
+    return snapshot_load_jpeg_limited(jpeg, len, kSnapshotJpegMax);
+}
+
+bool snapshot_load_jpeg_limited(const uint8_t *jpeg, size_t len, size_t limit)
+{
+    if (jpeg == nullptr || len < 32 || len > limit) {
         return false;
     }
     if (g_pixels == nullptr) {
@@ -93,10 +103,20 @@ bool snapshot_load_jpeg(const uint8_t *jpeg, size_t len)
         memset(g_pixels, 0, kSnapshotWidth * kSnapshotHeight * sizeof(uint16_t));
     }
 
-    uint8_t pool[4096];
+    if (g_pool == nullptr) {
+        g_pool = static_cast<uint8_t *>(
+            heap_caps_malloc(16384, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (g_pool == nullptr) {
+            g_pool = static_cast<uint8_t *>(malloc(16384));
+        }
+        if (g_pool == nullptr) {
+            Serial.println("snapshot: no jpeg pool");
+            return false;
+        }
+    }
     JDEC jd = {};
     JpegSrc src{jpeg, len, 0};
-    if (jd_prepare(&jd, jpeg_in, pool, sizeof(pool), &src) != JDR_OK) {
+    if (jd_prepare(&jd, jpeg_in, g_pool, 16384, &src) != JDR_OK) {
         Serial.println("snapshot: jd_prepare failed");
         return false;
     }
@@ -108,6 +128,14 @@ bool snapshot_load_jpeg(const uint8_t *jpeg, size_t len)
         ++scale;
         w >>= 1;
         h >>= 1;
+    }
+    g_off_x = (static_cast<int>(kSnapshotWidth) - static_cast<int>(w)) / 2;
+    g_off_y = (static_cast<int>(kSnapshotHeight) - static_cast<int>(h)) / 2;
+    if (g_off_x < 0) {
+        g_off_x = 0;
+    }
+    if (g_off_y < 0) {
+        g_off_y = 0;
     }
 
     memset(g_pixels, 0, kSnapshotWidth * kSnapshotHeight * sizeof(uint16_t));

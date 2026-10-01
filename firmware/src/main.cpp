@@ -49,6 +49,7 @@ extern "C" int lwip_hook_ip6_input(struct pbuf *p, struct netif *inp)
 #include "snapshot.h"
 #include "inject.h"
 #include "maint_store.h"
+#include "maint_ui.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -111,6 +112,10 @@ static bool g_gateway_started = false;
 static bool g_showing_helm = false;
 static bool g_force_qr = false;
 static bool g_showing_chart = false;
+static lv_obj_t *g_chart_next = nullptr;
+static lv_obj_t *g_page_book = nullptr;
+static bool g_showing_book = false;
+static bool g_chart_from_book = false;
 static uint32_t g_snap_seen = 0;
 static char g_ap_ssid[24] = "LMYC-BOAT";
 static char g_ap_ip[16] = "192.168.4.1";
@@ -232,12 +237,39 @@ static void apply_pages(void)
         if (g_showing_chart && snapshot_has_image()) {
             lv_obj_add_flag(g_page_pair, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(g_page_helm, LV_OBJ_FLAG_HIDDEN);
+            if (g_page_book != nullptr) {
+                lv_obj_add_flag(g_page_book, LV_OBJ_FLAG_HIDDEN);
+            }
             lv_obj_clear_flag(g_page_chart, LV_OBJ_FLAG_HIDDEN);
-            set_label(g_hdr_subtitle, "Chart snapshot  ·  tap Helm to return");
+            if (g_chart_from_book) {
+                set_label(g_hdr_subtitle, maint_ui_caption());
+                if (g_chart_next != nullptr) {
+                    lv_obj_clear_flag(g_chart_next, LV_OBJ_FLAG_HIDDEN);
+                }
+            } else {
+                set_label(g_hdr_subtitle, "Chart snapshot  ·  tap Back to return");
+                if (g_chart_next != nullptr) {
+                    lv_obj_add_flag(g_chart_next, LV_OBJ_FLAG_HIDDEN);
+                }
+            }
             g_showing_helm = false;
             return;
         }
         lv_obj_add_flag(g_page_chart, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (g_chart_next != nullptr) {
+        lv_obj_add_flag(g_chart_next, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (g_showing_book && g_page_book != nullptr) {
+        lv_obj_add_flag(g_page_pair, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(g_page_helm, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(g_page_book, LV_OBJ_FLAG_HIDDEN);
+        set_label(g_hdr_subtitle, "Open maintenance  ·  tap a row to see the photo");
+        g_showing_helm = false;
+        return;
+    }
+    if (g_page_book != nullptr) {
+        lv_obj_add_flag(g_page_book, LV_OBJ_FLAG_HIDDEN);
     }
     if (helm) {
         lv_obj_add_flag(g_page_pair, LV_OBJ_FLAG_HIDDEN);
@@ -268,7 +300,31 @@ static void on_show_helm(lv_event_t * /*e*/)
 {
     g_force_qr = false;
     g_showing_chart = false;
+    g_showing_book = false;
+    g_chart_from_book = false;
     apply_pages();
+}
+
+static void on_show_book(lv_event_t * /*e*/)
+{
+    g_showing_chart = false;
+    g_chart_from_book = false;
+    g_showing_book = true;
+    maint_ui_reload();
+    apply_pages();
+}
+
+static void on_book_photo(void)
+{
+    g_showing_book = false;
+    g_chart_from_book = true;
+    g_showing_chart = true;
+    apply_pages();
+}
+
+static void on_next_book_photo(lv_event_t * /*e*/)
+{
+    maint_ui_next_photo();
 }
 
 static void on_toggle_gnss(lv_event_t * /*e*/)
@@ -283,6 +339,8 @@ static void on_show_chart(lv_event_t * /*e*/)
     if (!snapshot_has_image()) {
         return;
     }
+    g_chart_from_book = false;
+    g_showing_book = false;
     g_showing_chart = true;
     apply_pages();
 }
@@ -290,6 +348,10 @@ static void on_show_chart(lv_event_t * /*e*/)
 static void on_hide_chart(lv_event_t * /*e*/)
 {
     g_showing_chart = false;
+    if (g_chart_from_book) {
+        g_chart_from_book = false;
+        g_showing_book = true;
+    }
     apply_pages();
 }
 
@@ -712,8 +774,8 @@ static void build_helm_page(lv_obj_t *parent)
 
     lv_obj_t *qr_btn = make_ghost_btn(link, "Show QR", on_show_qr, 120);
     lv_obj_align(qr_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    lv_obj_t *rst = make_ghost_btn(link, "Reset BLE", on_reset_ble, 120);
-    lv_obj_align(rst, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_t *book_btn = make_ghost_btn(link, "Book", on_show_book, 120);
+    lv_obj_align(book_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 }
 
 static void create_ui(void)
@@ -774,9 +836,22 @@ static void create_ui(void)
     lv_obj_clear_flag(g_page_chart, LV_OBJ_FLAG_SCROLLABLE);
     g_chart_img = lv_img_create(g_page_chart);
     lv_obj_center(g_chart_img);
-    lv_obj_t *back = make_ghost_btn(g_page_chart, "Helm", on_hide_chart, 120);
+    lv_obj_t *back = make_ghost_btn(g_page_chart, "Back", on_hide_chart, 120);
     lv_obj_align(back, LV_ALIGN_TOP_RIGHT, -16, 8);
+    g_chart_next = make_ghost_btn(g_page_chart, "Next photo", on_next_book_photo, 140);
+    lv_obj_align(g_chart_next, LV_ALIGN_TOP_RIGHT, -148, 8);
+    lv_obj_add_flag(g_chart_next, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(g_page_chart, LV_OBJ_FLAG_HIDDEN);
+
+    g_page_book = lv_obj_create(scr);
+    lv_obj_set_size(g_page_book, 768, 392);
+    lv_obj_align(g_page_book, LV_ALIGN_BOTTOM_MID, 0, -8);
+    lv_obj_set_style_bg_opa(g_page_book, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(g_page_book, 0, 0);
+    lv_obj_set_style_pad_all(g_page_book, 0, 0);
+    lv_obj_clear_flag(g_page_book, LV_OBJ_FLAG_SCROLLABLE);
+    maint_ui_build(g_page_book, on_show_helm, on_book_photo);
+    lv_obj_add_flag(g_page_book, LV_OBJ_FLAG_HIDDEN);
 
     update_status_labels();
     g_status_timer = lv_timer_create(status_timer_cb, 250, nullptr);

@@ -947,28 +947,29 @@ class _HomePageState extends State<HomePage> {
                             label: const Text('Navionics / snapshot'),
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                  builder: (_) => const MaintenanceBookPage(
-                                    suggestedIp: '192.168.4.1',
-                                  ),
-                                ),
-                              );
-                            },
-                            icon: const Icon(Icons.build_outlined),
-                            label: const Text('Maintenance book'),
-                          ),
-                        ),
                       ],
                     ),
                   ),
                 ),
               ],
+
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const MaintenanceBookPage(
+                          suggestedIp: '192.168.4.1',
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.build_outlined),
+                  label: const Text('Maintenance book'),
+                ),
+              ),
 
               const SizedBox(height: 24),
               Text(

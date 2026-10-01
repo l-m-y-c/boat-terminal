@@ -13,3 +13,7 @@ firmware/src/secrets.h
 
 # macOS
 .DS_Store
+
+# Stand-in server bytecode
+__pycache__/
+*.pyc

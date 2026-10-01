@@ -66,4 +66,14 @@ bool maint_store_photo_path(const char *id, uint8_t n, char *out, size_t cap);
 
 bool maint_category_ok(const char *category);
 bool maint_priority_ok(const char *priority);
+bool maint_status_ok(const char *status);
 bool maint_id_ok(const char *id);
+
+/* Club JSON for one item: wp_id, title, category, priority, and optional
+ * status, description, reporter, created, modified, sailboat_id. */
+bool maint_club_item_from_json(const char *json, MaintItem *out);
+
+/* Website modified time wins. A pending boat note is left as skipped.
+ * action is added, updated, kept, or skipped. out_id receives the card id. */
+bool maint_store_reconcile(const MaintItem *incoming, char *out_id, size_t id_cap,
+                           const char **action);

@@ -89,10 +89,11 @@ firmware/
 │   ├── nmea_state.*        # Latest fix / depth / wind for the helm
 │   ├── nmea_io.*           # UART/RS485 (sim-only until slice-d)
 │   ├── gateway.*           # TCP/UDP 10110
-│   ├── hub_http.*          # GET /  POST /snapshot  POST /inject
-│   ├── snapshot.*          # 800×480 JPEG for the Chart page
+│   ├── hub_http.*          # GET /  POST /snapshot  POST /inject  /maintenance
+│   ├── snapshot.*          # 800×480 JPEG for the Chart page and book photos
 │   ├── inject.*            # Phone GNSS, armed only from the 7″
 │   ├── maint_store.*       # This boat's maintenance book on the TF card
+│   ├── maint_ui.*          # Open-item list; a row opens the photo full screen
 │   ├── lmyc_logo.c / .h    # Logo as LVGL RGB565+A image
 │   ├── lvgl_v8_port.*      # Official LVGL port
 │   ├── lv_conf.h
@@ -115,7 +116,11 @@ The terminal runs **APSTA**: SoftAP `LMYC-<boat>` (password `AP_PASSWORD` in `se
 | `GET /maintenance` | This boat's maintenance book on the TF card (no cell required) |
 | `POST /maintenance` | File a pending item (`title`, `category`, `priority`, `description`) |
 | `GET /maintenance/item?id=` | One `item.json` |
-| `GET` or `POST /maintenance/photo?id=&n=` | JPEG `n` (1–5), up to 500 KB |
+| `GET` or `POST /maintenance/photo?id=&n=` | JPEG `n` (1–5), up to 500 KB. The phone keeps the long edge near 2000 px |
+| `POST /maintenance/ack?id=` | JSON `{"wp_id":N}` after the club accepts the item. Sets `sync` to `synced` |
+| `POST /maintenance/reconcile` | Apply one club edit. The website `modified` time wins. A pending boat note is left unchanged |
+
+Helm **Book** lists open items (completed and future-wishlist are skipped). Tap a row to decode that JPEG onto the chart page, full screen. **Back** returns to the list. The chart snapshot and the book share one canvas: opening a maintenance photo replaces the chart image until the next snapshot arrives.
 
 No RS485 TX. Sim still provides depth/wind when GNSS is LOCAL.
 

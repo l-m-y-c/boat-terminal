@@ -49,11 +49,12 @@ static esp_err_t get_root(httpd_req_t *req)
 
 static esp_err_t get_status(httpd_req_t *req)
 {
-    char json[256];
+    char json[320];
     snprintf(json, sizeof(json),
-             "{\"boat\":\"%s\",\"tcp\":%lu,\"nmea_good\":%lu,\"nmea_bad\":%lu,"
+             "{\"boat\":\"%s\",\"sailboat_id\":%lu,\"tcp\":%lu,\"nmea_good\":%lu,\"nmea_bad\":%lu,"
              "\"inject_local\":%s,\"snapshot\":%s}\n",
              LMYC_BOAT_ID,
+             static_cast<unsigned long>(LMYC_SAILBOAT_ID),
              static_cast<unsigned long>(gateway_client_count()),
              static_cast<unsigned long>(nmea_good_count()),
              static_cast<unsigned long>(nmea_bad_count()),
@@ -356,6 +357,109 @@ static esp_err_t post_maintenance_photo(httpd_req_t *req)
     return httpd_resp_sendstr(req, "OK\n");
 }
 
+/* Phone calls this only after the club JSON API returns a WordPress id. */
+static esp_err_t post_maintenance_ack(httpd_req_t *req)
+{
+    char id[kMaintIdHex + 1];
+    if (!maint_store_ready() || !query_id(req, id, sizeof(id))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "id");
+        return ESP_FAIL;
+    }
+    if (req->content_len == 0 || req->content_len > 256) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body");
+        return ESP_FAIL;
+    }
+    char body[257];
+    size_t got = 0;
+    while (got < req->content_len) {
+        const int r = httpd_req_recv(req, body + got, req->content_len - got);
+        if (r <= 0) {
+            httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "recv");
+            return ESP_FAIL;
+        }
+        got += static_cast<size_t>(r);
+    }
+    body[got] = '\0';
+    const char *key = strstr(body, "\"wp_id\"");
+    uint32_t wp_id = 0;
+    if (key != nullptr) {
+        key += 7;
+        while (*key == ' ' || *key == '\t' || *key == ':') {
+            ++key;
+        }
+        wp_id = static_cast<uint32_t>(strtoul(key, nullptr, 10));
+    }
+    if (wp_id == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "wp_id");
+        return ESP_FAIL;
+    }
+    MaintItem item;
+    if (!maint_store_load(id, &item)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no item");
+        return ESP_FAIL;
+    }
+    item.wp_id = wp_id;
+    snprintf(item.sync_state, sizeof(item.sync_state), "synced");
+    if (!maint_store_save(&item)) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    char resp[96];
+    snprintf(resp, sizeof(resp),
+             "{\"id\":\"%s\",\"wp_id\":%lu,\"sync\":\"synced\"}\n",
+             item.id, static_cast<unsigned long>(wp_id));
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, resp);
+}
+
+/* A club edit. The website's modified time wins. Pending boat notes stay. */
+static esp_err_t post_maintenance_reconcile(httpd_req_t *req)
+{
+    if (!maint_store_ready()) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no card");
+        return ESP_FAIL;
+    }
+    if (req->content_len == 0 || req->content_len > 8192) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body size");
+        return ESP_FAIL;
+    }
+    char *body = static_cast<char *>(malloc(req->content_len + 1));
+    if (body == nullptr) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    size_t got = 0;
+    while (got < req->content_len) {
+        const int r = httpd_req_recv(req, body + got, req->content_len - got);
+        if (r <= 0) {
+            free(body);
+            httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "recv");
+            return ESP_FAIL;
+        }
+        got += static_cast<size_t>(r);
+    }
+    body[got] = '\0';
+    MaintItem incoming;
+    const bool parsed = maint_club_item_from_json(body, &incoming);
+    free(body);
+    if (!parsed) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "wp_id, title, category, priority");
+        return ESP_FAIL;
+    }
+    char id[kMaintIdHex + 1];
+    const char *action = "kept";
+    if (!maint_store_reconcile(&incoming, id, sizeof(id), &action)) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    char resp[128];
+    snprintf(resp, sizeof(resp),
+             "{\"action\":\"%s\",\"id\":\"%s\",\"wp_id\":%lu}\n",
+             action, id, static_cast<unsigned long>(incoming.wp_id));
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, resp);
+}
+
 void hub_http_init(void)
 {
     g_httpd = nullptr;
@@ -369,7 +473,7 @@ void hub_http_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
     cfg.lru_purge_enable = true;
-    cfg.max_uri_handlers = 12;
+    cfg.max_uri_handlers = 16;
     cfg.stack_size = 8192;
     cfg.recv_wait_timeout = 15;
     if (httpd_start(&g_httpd, &cfg) != ESP_OK) {
@@ -404,6 +508,12 @@ void hub_http_start(void)
     static httpd_uri_t maint_photo_post = {
         .uri = "/maintenance/photo", .method = HTTP_POST, .handler = post_maintenance_photo,
         .user_ctx = nullptr};
+    static httpd_uri_t maint_ack = {
+        .uri = "/maintenance/ack", .method = HTTP_POST, .handler = post_maintenance_ack,
+        .user_ctx = nullptr};
+    static httpd_uri_t maint_reconcile = {
+        .uri = "/maintenance/reconcile", .method = HTTP_POST,
+        .handler = post_maintenance_reconcile, .user_ctx = nullptr};
     httpd_register_uri_handler(g_httpd, &root);
     httpd_register_uri_handler(g_httpd, &status);
     httpd_register_uri_handler(g_httpd, &snap);
@@ -413,5 +523,7 @@ void hub_http_start(void)
     httpd_register_uri_handler(g_httpd, &maint_item);
     httpd_register_uri_handler(g_httpd, &maint_photo);
     httpd_register_uri_handler(g_httpd, &maint_photo_post);
+    httpd_register_uri_handler(g_httpd, &maint_ack);
+    httpd_register_uri_handler(g_httpd, &maint_reconcile);
     Serial.println("hub_http: :80  GET /  GET /maintenance  POST /snapshot  POST /inject");
 }
