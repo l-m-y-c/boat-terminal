@@ -15,6 +15,7 @@ static bool parse_string_field(const char *json, const char *key, char *out, siz
 static uint32_t parse_u32_field(const char *json, const char *key);
 
 static bool g_ready = false;
+static uint32_t g_generation = 0;
 static File g_list_dir;
 static File g_photo;
 static char g_photo_tmp[48];
@@ -23,6 +24,7 @@ static char g_photo_id[kMaintIdHex + 1];
 static uint8_t g_photo_n = 0;
 
 bool maint_store_ready(void) { return g_ready; }
+uint32_t maint_store_generation(void) { return g_generation; }
 
 bool maint_id_ok(const char *id)
 {
@@ -234,6 +236,7 @@ bool maint_store_save(const MaintItem *item)
         SD.remove(tmp);
         return false;
     }
+    ++g_generation;
     return true;
 }
 

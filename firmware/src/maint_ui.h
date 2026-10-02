@@ -20,6 +20,9 @@ const char *maint_ui_item_title(void);
 void maint_ui_show_list(void);
 void maint_ui_toggle_debug(void);
 void maint_ui_next_photo(void);
+/* Next open report, wrapping to the first. No-op on the list, with the
+ * reader open, or when the card has fewer than two open reports. */
+void maint_ui_next_report(void);
 /* Header line while a book photo is almost full screen. */
 const char *maint_ui_caption(void);
 /* Note for the photo on screen. Empty when that photo has none. */

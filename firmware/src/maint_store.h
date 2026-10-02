@@ -42,6 +42,9 @@ struct MaintItem {
 /* Call after SD.begin() succeeds. Creates /maint. */
 bool maint_store_begin(void);
 bool maint_store_ready(void);
+/* Increases after a successful item.json write. Unchanged while the book
+ * on the card is the same. */
+uint32_t maint_store_generation(void);
 
 /* Copy the text fields the phone posts. Does not create an id. */
 bool maint_item_from_json(const char *json, MaintItem *out);

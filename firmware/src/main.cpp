@@ -2,7 +2,8 @@
  * LMYC Boat Terminal — cabin status + pairing bootstrap
  *
  * Hardware: Waveshare ESP32-S3-Touch-LCD-7
- *  - Ready screen: club logo + QR. Status and Home stay on the top bar.
+ *  - Ready screen: club logo on the left half, pairing QR on the right.
+ *    Status icons and Home stay on the top bar. The QR parks after pairing.
  *    Screen actions park on a right-hand rail behind a pull tab.
  *  - Status: Wi-Fi as a *client* (STA) + BLE advertise
  *
@@ -106,6 +107,11 @@ static constexpr lv_coord_t kContentH = 480 - kTopH;
 /* Snapshot is 800×480. Fit its height into the content page. */
 static constexpr uint16_t kSnapFitZoom =
     static_cast<uint16_t>((static_cast<int>(kContentH) * 256) / 480);
+/* 200×213 logo. 352 draws about 275×293 from the widget's top-left. */
+static constexpr uint16_t kLogoZoom = 352;
+static constexpr lv_coord_t kQrPlate = 348;
+static constexpr lv_coord_t kQrSize = 316;
+static constexpr lv_coord_t kStatusChip = 40;
 
 static Screen g_screen = Screen::Home;
 static lv_obj_t *g_page_home = nullptr;
@@ -140,11 +146,19 @@ static constexpr lv_coord_t kCrumbDetailsW = 82;
 static constexpr lv_coord_t kCrumbPhotoX = 724;
 static constexpr lv_coord_t kCrumbPhotoW = 68;
 static lv_obj_t *g_home_status = nullptr;
+static lv_obj_t *g_qr_plate = nullptr;
+static lv_obj_t *g_qr_hint = nullptr;
 static lv_obj_t *g_chart_empty = nullptr;
 static lv_obj_t *g_chip_fix = nullptr;
-static lv_obj_t *g_chip_fix_lbl = nullptr;
 static lv_obj_t *g_chip_link = nullptr;
-static lv_obj_t *g_chip_link_lbl = nullptr;
+static lv_obj_t *g_chip_qr = nullptr;
+static lv_obj_t *g_status_pop = nullptr;
+static lv_obj_t *g_status_pop_lbl = nullptr;
+static char g_fix_msg[48] = "FIX: SIM";
+static char g_link_msg[64] = "Advertising";
+static int g_status_open = 0;
+static bool g_qr_hold = false;
+static bool g_pair_seen = false;
 static lv_obj_t *g_tile_depth = nullptr;
 static lv_obj_t *g_tile_sog = nullptr;
 static lv_obj_t *g_tile_cog = nullptr;
@@ -156,6 +170,8 @@ static lv_obj_t *g_helm_tcp = nullptr;
 static lv_obj_t *g_helm_ip = nullptr;
 static lv_obj_t *g_helm_peer = nullptr;
 static lv_obj_t *g_helm_ap = nullptr;
+static lv_obj_t *g_helm_talk = nullptr;
+static lv_obj_t *g_helm_link = nullptr;
 static lv_obj_t *g_gnss_btn_lbl = nullptr;
 static lv_obj_t *g_page_chart = nullptr;
 static lv_obj_t *g_photo_pane = nullptr;
@@ -296,6 +312,8 @@ static void init_sd_card(void)
 }
 
 static void refresh_chrome(void);
+static void hide_status_pop(void);
+static void apply_home_qr(void);
 static void set_rail_open(bool open);
 static void set_photo_full(bool full);
 static void reset_to_photo_pane(void);
@@ -364,12 +382,28 @@ static void apply_pages(void)
     refresh_chrome();
 }
 
+static void hide_status_pop(void)
+{
+    g_status_open = 0;
+    if (g_status_pop != nullptr) {
+        lv_obj_add_flag(g_status_pop, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void hide_helm_subs(void)
+{
+    hide_page(g_helm_talk);
+    hide_page(g_helm_link);
+}
+
 static void go(Screen screen)
 {
     if (screen != Screen::Charts) {
         g_chart_from_book = false;
     }
     g_screen = screen;
+    hide_status_pop();
+    hide_helm_subs();
     set_rail_open(false);
     set_photo_full(false);
     if (screen == Screen::Reports) {
@@ -549,10 +583,11 @@ static void refresh_chrome(void)
     show_obj(g_chart_next, g_screen == Screen::Charts && g_chart_from_book);
 }
 
-static void style_chip(lv_obj_t *chip, lv_obj_t *lbl, uint32_t bg, const char *text)
+static void paint_chip(lv_obj_t *chip, uint32_t bg)
 {
-    lv_obj_set_style_bg_color(chip, lv_color_hex(bg), 0);
-    lv_label_set_text(lbl, text);
+    if (chip != nullptr) {
+        lv_obj_set_style_bg_color(chip, lv_color_hex(bg), 0);
+    }
 }
 
 static void update_wifi_line(char *wifi, size_t cap)
@@ -604,7 +639,7 @@ static void update_helm_labels(void)
         set_label(g_tile_wind_sub, "apparent");
     }
 
-    char talkers[192] = "";
+    char talkers[640] = "";
     const uint32_t now = millis();
     for (size_t i = 0; i < nmea_state_talker_count(); ++i) {
         const NmeaTalkerInfo *t = nmea_state_talker(i);
@@ -612,7 +647,7 @@ static void update_helm_labels(void)
             continue;
         }
         const uint32_t age_s = (now - t->last_ms) / 1000UL;
-        char row[64];
+        char row[80];
         snprintf(row, sizeof(row), "%s  %s  %lus  %lu\n",
                  t->id, t->formatters[0] ? t->formatters : "—",
                  static_cast<unsigned long>(age_s),
@@ -620,7 +655,7 @@ static void update_helm_labels(void)
         strncat(talkers, row, sizeof(talkers) - strlen(talkers) - 1);
     }
     if (talkers[0] == '\0') {
-        strncpy(talkers, "Waiting for sentences…", sizeof(talkers) - 1);
+        strncpy(talkers, "Waiting for sentences...", sizeof(talkers) - 1);
     }
     set_label(g_talker_list, talkers);
 
@@ -628,14 +663,14 @@ static void update_helm_labels(void)
              static_cast<unsigned long>(nmea_good_count()),
              static_cast<unsigned long>(nmea_bad_count()));
     set_label(g_helm_nmea, buf);
-    snprintf(buf, sizeof(buf), "TCP 10110  ·  %lu client",
+    snprintf(buf, sizeof(buf), "TCP 10110 - %lu client",
              static_cast<unsigned long>(gateway_client_count()));
     set_label(g_helm_tcp, buf);
     char ip_line[40];
     if (g_wifi_got_ip) {
         snprintf(ip_line, sizeof(ip_line), "STA %s", g_wifi_ip);
     } else {
-        snprintf(ip_line, sizeof(ip_line), "STA —");
+        snprintf(ip_line, sizeof(ip_line), "STA --");
     }
     set_label(g_helm_ip, ip_line);
     char ap_line[40];
@@ -654,11 +689,27 @@ static void update_home_status(void)
 {
     char line[64];
     if (pairing_is_confirmed()) {
-        snprintf(line, sizeof(line), "%s   ·   Paired", LMYC_BOAT_ID);
+        snprintf(line, sizeof(line), "Paired\n%s", LMYC_BOAT_ID);
     } else {
-        snprintf(line, sizeof(line), "%s   ·   Ready to pair", LMYC_BOAT_ID);
+        snprintf(line, sizeof(line), "%s", LMYC_BOAT_ID);
     }
     set_label(g_home_status, line);
+}
+
+/* The large code is the boot secret. It stays up while advertising, parks
+ * once the phone is paired, and comes back only while g_qr_hold is set. */
+static void apply_home_qr(void)
+{
+    const bool paired = pairing_is_confirmed();
+    if (!paired || !g_pair_seen) {
+        g_qr_hold = false;
+    }
+    g_pair_seen = paired;
+    const bool show = !paired || g_qr_hold;
+    show_obj(g_qr_plate, show);
+    show_obj(g_qr_hint, show);
+    show_obj(g_home_status, paired && !show);
+    paint_chip(g_chip_qr, show ? 0x0E5C55 : 0x1E3A5F);
 }
 
 static void update_status_labels(void)
@@ -666,19 +717,33 @@ static void update_status_labels(void)
     apply_pages();
 
     if (inject_local_armed()) {
-        style_chip(g_chip_fix, g_chip_fix_lbl, 0x6B5420, "FIX: PHONE");
+        snprintf(g_fix_msg, sizeof(g_fix_msg), "FIX: PHONE");
+        paint_chip(g_chip_fix, 0x6B5420);
     } else if (nmea_sim_enabled()) {
-        style_chip(g_chip_fix, g_chip_fix_lbl, 0x6B5420, "FIX: SIM");
+        snprintf(g_fix_msg, sizeof(g_fix_msg), "FIX: SIM");
+        paint_chip(g_chip_fix, 0x6B5420);
     } else {
-        style_chip(g_chip_fix, g_chip_fix_lbl, 0x1E4D3A, "FIX: BOAT");
+        snprintf(g_fix_msg, sizeof(g_fix_msg), "FIX: BOAT");
+        paint_chip(g_chip_fix, 0x1E4D3A);
     }
+    const char *link = pairing_status();
     if (pairing_is_confirmed()) {
-        style_chip(g_chip_link, g_chip_link_lbl, 0x0E5C55, "PAIRED");
+        snprintf(g_link_msg, sizeof(g_link_msg), "Paired");
+        paint_chip(g_chip_link, 0x0E5C55);
+    } else if (strcmp(link, "Advertising") == 0) {
+        snprintf(g_link_msg, sizeof(g_link_msg), "Advertising - scan the code to pair");
+        paint_chip(g_chip_link, 0x1E3A5F);
     } else {
-        style_chip(g_chip_link, g_chip_link_lbl, 0x1E3A5F, pairing_status());
+        snprintf(g_link_msg, sizeof(g_link_msg), "%s", link);
+        const bool bad = strcmp(link, "OOB mismatch") == 0 || strcmp(link, "ADV failed") == 0;
+        paint_chip(g_chip_link, bad ? 0x6B5420 : 0x1E3A5F);
     }
-    if (g_screen == Screen::Home) {
-        update_home_status();
+    update_home_status();
+    apply_home_qr();
+    if (g_status_open == 1) {
+        set_label(g_status_pop_lbl, g_fix_msg);
+    } else if (g_status_open == 2) {
+        set_label(g_status_pop_lbl, g_link_msg);
     }
 
     char http_last[80];
@@ -799,61 +864,60 @@ static lv_obj_t *add_kv_row(lv_obj_t *card, const char *key, lv_coord_t y, lv_ob
     return v;
 }
 
-static lv_obj_t *make_chip(lv_obj_t *parent, lv_obj_t **lbl_out, uint32_t bg, lv_coord_t w)
+static lv_obj_t *make_icon_chip(lv_obj_t *parent, uint32_t bg, const char *icon, lv_event_cb_t cb)
 {
     lv_obj_t *chip = lv_obj_create(parent);
-    lv_obj_set_size(chip, w, 32);
+    lv_obj_set_size(chip, kStatusChip, kStatusChip);
     lv_obj_set_style_bg_color(chip, lv_color_hex(bg), 0);
     lv_obj_set_style_bg_opa(chip, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(chip, 16, 0);
+    lv_obj_set_style_radius(chip, 12, 0);
     lv_obj_set_style_border_width(chip, 0, 0);
     lv_obj_set_style_pad_all(chip, 0, 0);
+    lv_obj_set_style_shadow_width(chip, 0, 0);
     lv_obj_clear_flag(chip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(chip, cb, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *lbl = lv_label_create(chip);
-    lv_label_set_text(lbl, "—");
-    lv_obj_set_width(lbl, w - 16);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(lbl, icon);
     lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
     lv_obj_center(lbl);
-    *lbl_out = lbl;
     return chip;
 }
 
 static lv_obj_t *make_tile(lv_obj_t *parent, const char *caption, const char *unit,
-                          lv_coord_t x, lv_coord_t w, lv_obj_t **value_out, lv_obj_t **sub_out)
+                          lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
+                          lv_obj_t **value_out, lv_obj_t **sub_out)
 {
     lv_obj_t *tile = lv_obj_create(parent);
-    lv_obj_set_size(tile, w, 168);
-    lv_obj_set_pos(tile, x, 0);
+    lv_obj_set_size(tile, w, h);
+    lv_obj_set_pos(tile, x, y);
     lv_obj_set_style_bg_color(tile, lv_color_hex(0x12243A), 0);
     lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(tile, 16, 0);
     lv_obj_set_style_border_width(tile, 0, 0);
-    lv_obj_set_style_pad_all(tile, 10, 0);
+    lv_obj_set_style_pad_all(tile, 14, 0);
     lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(tile, on_dismiss_rail, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *cap = lv_label_create(tile);
     lv_label_set_text(cap, caption);
     lv_obj_set_style_text_color(cap, lv_color_hex(0x8FA3B8), 0);
-    lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, 0);
-    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_16, 0);
+    lv_obj_align(cap, LV_ALIGN_TOP_MID, 0, 0);
 
     lv_obj_t *val = lv_label_create(tile);
     lv_label_set_text(val, "—");
     lv_obj_set_style_text_color(val, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(val, &lv_font_montserrat_48, 0);
-    lv_obj_align(val, LV_ALIGN_LEFT_MID, 0, 4);
+    lv_obj_align(val, LV_ALIGN_CENTER, 0, 6);
     *value_out = val;
 
     lv_obj_t *un = lv_label_create(tile);
     lv_label_set_text(un, unit);
     lv_obj_set_style_text_color(un, lv_color_hex(0x00B4A6), 0);
     lv_obj_set_style_text_font(un, &lv_font_montserrat_16, 0);
-    lv_obj_align(un, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_align(un, LV_ALIGN_BOTTOM_MID, 0, 0);
     if (sub_out != nullptr) {
         *sub_out = un;
     }
@@ -937,43 +1001,55 @@ static lv_obj_t *make_crumb_btn(lv_obj_t *parent, const char *text, lv_event_cb_
 
 static void build_home(lv_obj_t *parent)
 {
+    /* VIRTUAL anchors the zoom at this corner. REAL mode shifts a zoomed
+     * image toward the bottom-right of its box, which put the badge under
+     * the QR. */
     lv_obj_t *logo = lv_img_create(parent);
     lv_img_set_src(logo, &lmyc_logo);
+    lv_img_set_size_mode(logo, LV_IMG_SIZE_MODE_VIRTUAL);
     lv_img_set_pivot(logo, 0, 0);
-    lv_img_set_zoom(logo, 168);
-    lv_obj_set_pos(logo, 28, 0);
+    lv_img_set_zoom(logo, kLogoZoom);
+    lv_obj_set_pos(logo, 12, 8);
     lv_obj_clear_flag(logo, LV_OBJ_FLAG_CLICKABLE);
 
-    g_home_status = lv_label_create(parent);
-    lv_label_set_text(g_home_status, LMYC_BOAT_ID);
-    lv_obj_set_width(g_home_status, 360);
-    lv_obj_set_style_text_align(g_home_status, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_style_text_color(g_home_status, lv_color_hex(0xE8F0F7), 0);
-    lv_obj_set_style_text_font(g_home_status, &lv_font_montserrat_16, 0);
-    lv_obj_set_pos(g_home_status, 28, 148);
-
-    lv_obj_t *plate = lv_obj_create(parent);
-    lv_obj_set_size(plate, 230, 230);
-    lv_obj_set_pos(plate, 28, 178);
-    lv_obj_set_style_bg_color(plate, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_opa(plate, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(plate, 18, 0);
-    lv_obj_set_style_border_width(plate, 0, 0);
-    lv_obj_set_style_shadow_width(plate, 0, 0);
-    lv_obj_clear_flag(plate, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(plate, on_dismiss_rail, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *qr = lv_qrcode_create(plate, 200, lv_color_hex(0x071422), lv_color_hex(0xFFFFFF));
+    const lv_coord_t qr_x = kContentW - 16 - kQrPlate;
+    g_qr_plate = lv_obj_create(parent);
+    lv_obj_set_size(g_qr_plate, kQrPlate, kQrPlate);
+    lv_obj_set_pos(g_qr_plate, qr_x, 23);
+    lv_obj_set_style_bg_color(g_qr_plate, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(g_qr_plate, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(g_qr_plate, 18, 0);
+    lv_obj_set_style_border_width(g_qr_plate, 0, 0);
+    lv_obj_set_style_pad_all(g_qr_plate, 0, 0);
+    lv_obj_set_style_shadow_width(g_qr_plate, 0, 0);
+    lv_obj_clear_flag(g_qr_plate, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(g_qr_plate, on_dismiss_rail, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *qr = lv_qrcode_create(g_qr_plate, kQrSize, lv_color_hex(0x071422),
+                                    lv_color_hex(0xFFFFFF));
     const char *payload = pairing_payload();
     lv_qrcode_update(qr, payload, strlen(payload));
     lv_obj_center(qr);
     lv_obj_clear_flag(qr, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t *hint = lv_label_create(parent);
-    lv_label_set_text(hint, "Scan in the LMYC app");
-    lv_obj_set_width(hint, 280);
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x8FA3B8), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, 0);
-    lv_obj_set_pos(hint, 276, 270);
+    g_qr_hint = lv_label_create(parent);
+    lv_label_set_text(g_qr_hint, "Scan in the LMYC app");
+    lv_obj_set_width(g_qr_hint, kQrPlate);
+    lv_obj_set_style_text_align(g_qr_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(g_qr_hint, lv_color_hex(0x8FA3B8), 0);
+    lv_obj_set_style_text_font(g_qr_hint, &lv_font_montserrat_16, 0);
+    lv_obj_set_pos(g_qr_hint, qr_x, 23 + kQrPlate + 8);
+    lv_obj_clear_flag(g_qr_hint, LV_OBJ_FLAG_CLICKABLE);
+
+    g_home_status = lv_label_create(parent);
+    lv_label_set_text(g_home_status, LMYC_BOAT_ID);
+    lv_obj_set_width(g_home_status, kQrPlate);
+    lv_label_set_long_mode(g_home_status, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(g_home_status, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(g_home_status, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(g_home_status, &lv_font_montserrat_22, 0);
+    lv_obj_set_pos(g_home_status, qr_x, 168);
+    lv_obj_add_flag(g_home_status, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(g_home_status, LV_OBJ_FLAG_CLICKABLE);
 }
 
 static void build_diag_page(lv_obj_t *parent)
@@ -1024,64 +1100,103 @@ static void build_diag_page(lv_obj_t *parent)
     lv_obj_align(g_log_value, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 }
 
+static void open_helm_sub(lv_obj_t *page)
+{
+    hide_helm_subs();
+    show_page(page);
+    if (page != nullptr) {
+        lv_obj_move_foreground(page);
+    }
+    set_rail_open(false);
+    hide_status_pop();
+}
+
+static void on_helm_talk(lv_event_t * /*e*/) { open_helm_sub(g_helm_talk); }
+static void on_helm_link(lv_event_t * /*e*/) { open_helm_sub(g_helm_link); }
+static void on_helm_sub_close(lv_event_t * /*e*/) { hide_helm_subs(); }
+
+static lv_obj_t *make_helm_sub(lv_obj_t *parent, const char *title)
+{
+    lv_obj_t *page = lv_obj_create(parent);
+    lv_obj_set_size(page, kContentW, kContentH);
+    lv_obj_set_pos(page, 0, 0);
+    lv_obj_set_style_bg_color(page, lv_color_hex(0x071422), 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(page, 0, 0);
+    lv_obj_set_style_radius(page, 0, 0);
+    lv_obj_set_style_pad_all(page, 0, 0);
+    lv_obj_set_style_shadow_width(page, 0, 0);
+    lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(page, on_dismiss_rail, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *heading = lv_label_create(page);
+    lv_label_set_text(heading, title);
+    lv_obj_set_style_text_color(heading, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(heading, &lv_font_montserrat_20, 0);
+    lv_obj_set_pos(heading, 16, 14);
+    lv_obj_clear_flag(heading, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *close = make_ghost_btn(page, "Close", on_helm_sub_close, 100);
+    lv_obj_set_pos(close, kContentW - 16 - 100, 10);
+    return page;
+}
+
+static lv_obj_t *helm_line(lv_obj_t *parent, const char *text, uint32_t color, lv_coord_t y,
+                           const lv_font_t *font)
+{
+    lv_obj_t *lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_width(lbl, kContentW - 32);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);
+    lv_obj_set_style_text_font(lbl, font, 0);
+    lv_obj_set_pos(lbl, 16, y);
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    return lbl;
+}
+
 static void build_helm_page(lv_obj_t *parent)
 {
-    make_tile(parent, "DEPTH", "metres", 10, 178, &g_tile_depth, nullptr);
-    make_tile(parent, "SPEED", "knots SOG", 196, 178, &g_tile_sog, nullptr);
-    make_tile(parent, "COURSE", "degrees COG", 382, 178, &g_tile_cog, nullptr);
-    make_tile(parent, "WIND", "kn AWS", 568, 178, &g_tile_wind, &g_tile_wind_sub);
+    /* Tiles fill the page. The icons sit in the empty corner of Speed and
+     * each opens an overlay that covers the tiles. */
+    constexpr lv_coord_t gap = 8;
+    constexpr lv_coord_t margin = 8;
+    const lv_coord_t tile_w = (kContentW - margin * 2 - gap) / 2;
+    const lv_coord_t tile_h = (kContentH - margin * 2 - gap) / 2;
 
-    lv_obj_t *talk = make_card(parent, "NMEA TALKERS", 480, 234);
-    lv_obj_set_pos(talk, 10, 180);
+    make_tile(parent, "DEPTH", "metres", margin, margin, tile_w, tile_h, &g_tile_depth,
+              nullptr);
+    make_tile(parent, "SPEED", "knots SOG", margin + tile_w + gap, margin, tile_w, tile_h,
+              &g_tile_sog, nullptr);
+    make_tile(parent, "COURSE", "degrees COG", margin, margin + tile_h + gap, tile_w, tile_h,
+              &g_tile_cog, nullptr);
+    make_tile(parent, "WIND", "kn AWS", margin + tile_w + gap, margin + tile_h + gap, tile_w,
+              tile_h, &g_tile_wind, &g_tile_wind_sub);
 
-    lv_obj_t *hdr = lv_label_create(talk);
-    lv_label_set_text(hdr, "ID    sentences         age   count");
-    lv_obj_set_width(hdr, 440);
-    lv_label_set_long_mode(hdr, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_color(hdr, lv_color_hex(0x5C7080), 0);
-    lv_obj_set_style_text_font(hdr, &lv_font_montserrat_12, 0);
-    lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 26);
+    const lv_coord_t icon_y = 16;
+    const lv_coord_t link_x = kContentW - 16 - kStatusChip;
+    const lv_coord_t talk_x = link_x - 8 - kStatusChip;
+    lv_obj_t *talk_btn = make_icon_chip(parent, 0x1E3A5F, LV_SYMBOL_LIST, on_helm_talk);
+    lv_obj_set_pos(talk_btn, talk_x, icon_y);
+    lv_obj_set_style_bg_color(talk_btn, lv_color_hex(0x1B4064), LV_STATE_PRESSED);
+    lv_obj_t *link_btn = make_icon_chip(parent, 0x1E3A5F, LV_SYMBOL_WIFI, on_helm_link);
+    lv_obj_set_pos(link_btn, link_x, icon_y);
+    lv_obj_set_style_bg_color(link_btn, lv_color_hex(0x1B4064), LV_STATE_PRESSED);
 
-    g_talker_list = lv_label_create(talk);
-    lv_label_set_text(g_talker_list, "Waiting for sentences…");
-    lv_obj_set_style_text_color(g_talker_list, lv_color_hex(0xE8F0F7), 0);
-    lv_obj_set_style_text_font(g_talker_list, &lv_font_montserrat_16, 0);
-    lv_label_set_long_mode(g_talker_list, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(g_talker_list, 440);
-    lv_obj_align(g_talker_list, LV_ALIGN_TOP_LEFT, 0, 48);
+    g_helm_talk = make_helm_sub(parent, "NMEA talkers");
+    helm_line(g_helm_talk, "ID      sentence      age      n", 0x8FA3B8, 64,
+              &lv_font_montserrat_14);
+    g_talker_list = helm_line(g_helm_talk, "Waiting for sentences...", 0xE8F0F7, 92,
+                              &lv_font_montserrat_16);
 
-    lv_obj_t *link = make_card(parent, "LINK", 248, 234);
-    lv_obj_set_pos(link, 498, 180);
-
-    g_helm_nmea = lv_label_create(link);
-    lv_label_set_text(g_helm_nmea, "0 good  /  0 bad");
-    lv_obj_set_style_text_color(g_helm_nmea, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(g_helm_nmea, &lv_font_montserrat_16, 0);
-    lv_obj_align(g_helm_nmea, LV_ALIGN_TOP_LEFT, 0, 28);
-
-    g_helm_tcp = lv_label_create(link);
-    lv_label_set_text(g_helm_tcp, "TCP 10110  ·  0 client");
-    lv_obj_set_style_text_color(g_helm_tcp, lv_color_hex(0x8FA3B8), 0);
-    lv_obj_set_style_text_font(g_helm_tcp, &lv_font_montserrat_14, 0);
-    lv_obj_align(g_helm_tcp, LV_ALIGN_TOP_LEFT, 0, 54);
-
-    g_helm_ip = lv_label_create(link);
-    lv_label_set_text(g_helm_ip, "STA —");
-    lv_obj_set_style_text_color(g_helm_ip, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(g_helm_ip, &lv_font_montserrat_14, 0);
-    lv_obj_align(g_helm_ip, LV_ALIGN_TOP_LEFT, 0, 78);
-
-    g_helm_ap = lv_label_create(link);
-    lv_label_set_text(g_helm_ap, "AP 192.168.4.1");
-    lv_obj_set_style_text_color(g_helm_ap, lv_color_hex(0x00B4A6), 0);
-    lv_obj_set_style_text_font(g_helm_ap, &lv_font_montserrat_14, 0);
-    lv_obj_align(g_helm_ap, LV_ALIGN_TOP_LEFT, 0, 98);
-
-    g_helm_peer = lv_label_create(link);
-    lv_label_set_text(g_helm_peer, "phone —");
-    lv_obj_set_style_text_color(g_helm_peer, lv_color_hex(0x8FA3B8), 0);
-    lv_obj_set_style_text_font(g_helm_peer, &lv_font_montserrat_12, 0);
-    lv_obj_align(g_helm_peer, LV_ALIGN_TOP_LEFT, 0, 118);
+    g_helm_link = make_helm_sub(parent, "Link");
+    g_helm_nmea = helm_line(g_helm_link, "0 good  /  0 bad", 0xFFFFFF, 72, &lv_font_montserrat_20);
+    g_helm_tcp = helm_line(g_helm_link, "TCP 10110 - 0 client", 0x8FA3B8, 128,
+                           &lv_font_montserrat_20);
+    g_helm_ip = helm_line(g_helm_link, "STA --", 0xFFFFFF, 184, &lv_font_montserrat_20);
+    g_helm_ap = helm_line(g_helm_link, "AP 192.168.4.1", 0x00B4A6, 240, &lv_font_montserrat_20);
+    g_helm_peer = helm_line(g_helm_link, "phone --", 0x8FA3B8, 296, &lv_font_montserrat_20);
 }
 
 static void place_content(lv_obj_t *page)
@@ -1408,7 +1523,11 @@ static void on_screen_gesture(lv_event_t * /*e*/)
     if (dir == LV_DIR_LEFT) {
         set_rail_open(true);
     } else if (dir == LV_DIR_RIGHT) {
-        set_rail_open(false);
+        if (g_rail_open) {
+            set_rail_open(false);
+        } else if (g_screen == Screen::Reports) {
+            maint_ui_next_report();
+        }
     }
     lv_indev_wait_release(indev);
 }
@@ -1420,12 +1539,14 @@ static void on_chart_gesture(lv_event_t *e)
         return;
     }
     const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-    if (g_chart_from_book && g_photo_full && (dir == LV_DIR_LEFT || dir == LV_DIR_RIGHT)) {
-        slide_panes(dir);
-    } else if (dir == LV_DIR_LEFT) {
+    if (dir == LV_DIR_LEFT) {
         set_rail_open(true);
     } else if (dir == LV_DIR_RIGHT) {
-        set_rail_open(false);
+        if (g_rail_open) {
+            set_rail_open(false);
+        } else if (g_chart_from_book && g_photo_full) {
+            slide_panes(LV_DIR_RIGHT);
+        }
     }
     lv_indev_wait_release(indev);
     (void)e;
@@ -1434,11 +1555,63 @@ static void on_chart_gesture(lv_event_t *e)
 static void on_dismiss_rail(lv_event_t * /*e*/)
 {
     set_rail_open(false);
+    hide_status_pop();
 }
 
 static void dismiss_rail(void)
 {
     set_rail_open(false);
+    hide_status_pop();
+}
+
+static void show_status_pop(int which, const char *text)
+{
+    if (g_status_pop == nullptr || g_status_pop_lbl == nullptr) {
+        return;
+    }
+    if (g_status_open == which) {
+        hide_status_pop();
+        return;
+    }
+    g_status_open = which;
+    lv_label_set_text(g_status_pop_lbl, text);
+    lv_obj_set_pos(g_status_pop, 8, kTopH + 8);
+    lv_obj_clear_flag(g_status_pop, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(g_status_pop);
+}
+
+static void on_status_pop(lv_event_t * /*e*/)
+{
+    hide_status_pop();
+}
+
+static void on_fix_chip(lv_event_t * /*e*/)
+{
+    show_status_pop(1, g_fix_msg);
+}
+
+static void on_link_chip(lv_event_t * /*e*/)
+{
+    show_status_pop(2, g_link_msg);
+}
+
+static void on_qr_chip(lv_event_t * /*e*/)
+{
+    if (!pairing_is_confirmed()) {
+        if (g_screen != Screen::Home) {
+            go(Screen::Home);
+        }
+        show_status_pop(3, "Scan this code in the LMYC app");
+        return;
+    }
+    hide_status_pop();
+    if (g_screen != Screen::Home) {
+        g_qr_hold = true;
+        go(Screen::Home);
+    } else {
+        g_qr_hold = !g_qr_hold;
+    }
+    apply_home_qr();
 }
 
 static void on_ear(lv_event_t * /*e*/)
@@ -1494,7 +1667,7 @@ static void create_ui(void)
     lv_obj_set_style_text_font(g_chart_empty, &lv_font_montserrat_20, 0);
     lv_obj_center(g_chart_empty);
     g_photo_hint = lv_label_create(g_photo_pane);
-    lv_label_set_text(g_photo_hint, "Swipe for the note");
+    lv_label_set_text(g_photo_hint, "Swipe right for the note");
     lv_obj_set_style_text_color(g_photo_hint, lv_color_hex(0xE8F0F7), 0);
     lv_obj_set_style_text_font(g_photo_hint, &lv_font_montserrat_14, 0);
     lv_obj_set_style_bg_color(g_photo_hint, lv_color_hex(0x000000), 0);
@@ -1531,7 +1704,7 @@ static void create_ui(void)
     lv_label_set_text(g_note_body, "No note for this photo");
     lv_obj_align(g_note_body, LV_ALIGN_CENTER, 0, 12);
     lv_obj_t *note_hint = lv_label_create(g_note_pane);
-    lv_label_set_text(note_hint, "Swipe for the photo");
+    lv_label_set_text(note_hint, "Swipe right for the photo");
     lv_obj_set_style_text_color(note_hint, lv_color_hex(0x8FA3B8), 0);
     lv_obj_set_style_text_font(note_hint, &lv_font_montserrat_14, 0);
     lv_obj_align(note_hint, LV_ALIGN_BOTTOM_MID, 0, -28);
@@ -1580,10 +1753,12 @@ static void create_ui(void)
     lv_obj_set_style_radius(rule, 0, 0);
     lv_obj_clear_flag(rule, LV_OBJ_FLAG_SCROLLABLE);
 
-    g_chip_fix = make_chip(g_topbar, &g_chip_fix_lbl, 0x6B5420, 124);
-    lv_obj_set_pos(g_chip_fix, 12, 12);
-    g_chip_link = make_chip(g_topbar, &g_chip_link_lbl, 0x1E3A5F, 200);
-    lv_obj_set_pos(g_chip_link, 144, 12);
+    g_chip_fix = make_icon_chip(g_topbar, 0x6B5420, LV_SYMBOL_GPS, on_fix_chip);
+    lv_obj_set_pos(g_chip_fix, 8, 8);
+    g_chip_link = make_icon_chip(g_topbar, 0x1E3A5F, LV_SYMBOL_BLUETOOTH, on_link_chip);
+    lv_obj_set_pos(g_chip_link, 56, 8);
+    g_chip_qr = make_icon_chip(g_topbar, 0x0E5C55, "QR", on_qr_chip);
+    lv_obj_set_pos(g_chip_qr, 104, 8);
 
     g_crumb_home = make_crumb_btn(g_topbar, "Home", on_show_home, kCrumbHomeX, kCrumbHomeW,
                                   &lv_font_montserrat_16);
@@ -1672,6 +1847,23 @@ static void create_ui(void)
     lv_obj_set_style_text_font(g_rail_chevron, &lv_font_montserrat_28, 0);
     lv_obj_center(g_rail_chevron);
     lv_obj_move_foreground(g_rail_ear);
+
+    g_status_pop = lv_obj_create(scr);
+    lv_obj_set_size(g_status_pop, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_pos(g_status_pop, 8, kTopH + 8);
+    lv_obj_set_style_bg_color(g_status_pop, lv_color_hex(0x12243A), 0);
+    lv_obj_set_style_bg_opa(g_status_pop, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(g_status_pop, 12, 0);
+    lv_obj_set_style_border_width(g_status_pop, 0, 0);
+    lv_obj_set_style_pad_all(g_status_pop, 12, 0);
+    lv_obj_set_style_shadow_width(g_status_pop, 0, 0);
+    lv_obj_clear_flag(g_status_pop, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_status_pop, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(g_status_pop, on_status_pop, LV_EVENT_CLICKED, nullptr);
+    g_status_pop_lbl = lv_label_create(g_status_pop);
+    lv_label_set_text(g_status_pop_lbl, "");
+    lv_obj_set_style_text_color(g_status_pop_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(g_status_pop_lbl, &lv_font_montserrat_16, 0);
 
     update_status_labels();
     g_status_timer = lv_timer_create(status_timer_cb, 250, nullptr);

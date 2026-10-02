@@ -37,6 +37,9 @@ static lv_obj_t *g_row_title[kRows] = {};
 static lv_obj_t *g_row_cat[kRows] = {};
 static lv_obj_t *g_row_pri[kRows] = {};
 static lv_obj_t *g_row_pri_lbl[kRows] = {};
+static lv_obj_t *g_row_photo[kRows] = {};
+static bool g_items_fresh = false;
+static uint32_t g_items_gen = 0;
 static lv_obj_t *g_empty = nullptr;
 static lv_obj_t *g_http = nullptr;
 static lv_obj_t *g_http_log = nullptr;
@@ -588,21 +591,43 @@ void maint_ui_next_photo(void)
     queue_photo();
 }
 
+void maint_ui_next_report(void)
+{
+    if (!maint_ui_showing_detail()) {
+        return;
+    }
+    if (g_reader != nullptr && !lv_obj_has_flag(g_reader, LV_OBJ_FLAG_HIDDEN)) {
+        return;
+    }
+    if (g_count < 2 || g_selected < 0 || g_selected >= g_count) {
+        return;
+    }
+    show_detail((g_selected + 1) % g_count);
+}
+
 void maint_ui_reload(void)
 {
-    g_count = 0;
+    const bool ready = maint_store_ready();
+    const uint32_t gen = maint_store_generation();
+    /* The six open items already live in g_items. Read the card again only
+     * when it changed, or when this is the first look. */
+    if (!ready || !g_items_fresh || gen != g_items_gen) {
+        g_count = 0;
+        if (ready && maint_store_list_start()) {
+            MaintItem item;
+            while (g_count < kRows && maint_store_list_next(&item)) {
+                if (!is_open(&item)) {
+                    continue;
+                }
+                g_items[g_count++] = item;
+            }
+            maint_store_list_end();
+        }
+        g_items_fresh = ready;
+        g_items_gen = gen;
+    }
     g_selected = 0;
     g_photo_n = 1;
-    if (maint_store_ready() && maint_store_list_start()) {
-        MaintItem item;
-        while (g_count < kRows && maint_store_list_next(&item)) {
-            if (!is_open(&item)) {
-                continue;
-            }
-            g_items[g_count++] = item;
-        }
-        maint_store_list_end();
-    }
     for (int i = 0; i < kRows; ++i) {
         if (g_rows[i] == nullptr) {
             continue;
@@ -614,6 +639,13 @@ void maint_ui_reload(void)
             pretty_token(g_items[i].category, cat, sizeof(cat));
             lv_label_set_text(g_row_cat[i], cat);
             paint_priority(g_row_pri[i], g_row_pri_lbl[i], g_items[i].priority);
+            if (g_row_photo[i] != nullptr) {
+                if (g_items[i].photo_count > 0) {
+                    lv_obj_clear_flag(g_row_photo[i], LV_OBJ_FLAG_HIDDEN);
+                } else {
+                    lv_obj_add_flag(g_row_photo[i], LV_OBJ_FLAG_HIDDEN);
+                }
+            }
             lv_obj_clear_flag(g_rows[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(g_rows[i], LV_OBJ_FLAG_HIDDEN);
@@ -683,9 +715,11 @@ void maint_ui_build(lv_obj_t *parent, lv_coord_t width, lv_coord_t height,
     const lv_coord_t row_w = list_w > 24 ? list_w - 24 : list_w;
     const lv_coord_t chip_w = 112;
     const lv_coord_t cat_w = 170;
+    const lv_coord_t photo_w = 36;
     const lv_coord_t gap = 10;
     const lv_coord_t chip_x = row_w > chip_w + 20 ? row_w - 10 - chip_w : row_w / 2;
-    const lv_coord_t cat_x = chip_x > cat_w + gap ? chip_x - gap - cat_w : 0;
+    const lv_coord_t photo_x = chip_x > photo_w + gap ? chip_x - gap - photo_w : 0;
+    const lv_coord_t cat_x = photo_x > cat_w + gap ? photo_x - gap - cat_w : 0;
     const lv_coord_t title_x = 12;
     const lv_coord_t title_w = cat_x > title_x + gap ? cat_x - gap - title_x : 80;
 
@@ -712,6 +746,11 @@ void maint_ui_build(lv_obj_t *parent, lv_coord_t width, lv_coord_t height,
     col_head(g_list, "Title", title_x, title_w);
     col_head(g_list, "Category", cat_x, cat_w);
     col_head(g_list, "Priority", chip_x, chip_w);
+    lv_obj_t *photo_hd = lv_label_create(g_list);
+    lv_label_set_text(photo_hd, LV_SYMBOL_IMAGE);
+    lv_obj_set_style_text_font(photo_hd, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(photo_hd, lv_color_hex(0x8FA3B8), 0);
+    lv_obj_align(photo_hd, LV_ALIGN_TOP_LEFT, photo_x + 6, -2);
 
     g_empty = lv_label_create(g_list);
     lv_label_set_text(g_empty, "No open reports");
@@ -736,6 +775,13 @@ void maint_ui_build(lv_obj_t *parent, lv_coord_t width, lv_coord_t height,
         lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
         lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
         lv_obj_align(title, LV_ALIGN_LEFT_MID, title_x, 0);
+
+        lv_obj_t *photo = lv_label_create(btn);
+        lv_label_set_text(photo, LV_SYMBOL_IMAGE);
+        lv_obj_set_style_text_font(photo, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(photo, lv_color_hex(0x00B4A6), 0);
+        lv_obj_align(photo, LV_ALIGN_LEFT_MID, photo_x + 6, 0);
+        lv_obj_add_flag(photo, LV_OBJ_FLAG_HIDDEN);
 
         lv_obj_t *cat = lv_label_create(btn);
         lv_label_set_text(cat, "");
@@ -770,6 +816,7 @@ void maint_ui_build(lv_obj_t *parent, lv_coord_t width, lv_coord_t height,
         g_row_cat[i] = cat;
         g_row_pri[i] = chip;
         g_row_pri_lbl[i] = pri;
+        g_row_photo[i] = photo;
         lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
     }
 
