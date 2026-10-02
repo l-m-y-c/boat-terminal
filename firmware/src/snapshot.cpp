@@ -161,6 +161,110 @@ bool snapshot_load_jpeg_limited(const uint8_t *jpeg, size_t len, size_t limit)
     return true;
 }
 
+struct ThumbDst {
+    uint16_t *px;
+    int w;
+    int h;
+    int src_w;
+    int src_h;
+    int ox;
+    int oy;
+    int draw_w;
+    int draw_h;
+};
+
+static ThumbDst g_thumb_dst;
+
+static UINT thumb_out(JDEC * /*jd*/, void *bitmap, JRECT *rect)
+{
+    if (g_thumb_dst.px == nullptr || g_thumb_dst.src_w < 1 || g_thumb_dst.src_h < 1 ||
+        g_thumb_dst.draw_w < 1 || g_thumb_dst.draw_h < 1) {
+        return 0;
+    }
+    const auto *rgb = static_cast<const uint8_t *>(bitmap);
+    unsigned i = 0;
+    for (int y = rect->top; y <= rect->bottom; ++y) {
+        for (int x = rect->left; x <= rect->right; ++x) {
+            const uint8_t r = rgb[i++];
+            const uint8_t g = rgb[i++];
+            const uint8_t b = rgb[i++];
+            const int dx = g_thumb_dst.ox + x * g_thumb_dst.draw_w / g_thumb_dst.src_w;
+            const int dy = g_thumb_dst.oy + y * g_thumb_dst.draw_h / g_thumb_dst.src_h;
+            if (dx < 0 || dy < 0 || dx >= g_thumb_dst.w || dy >= g_thumb_dst.h) {
+                continue;
+            }
+            g_thumb_dst.px[dy * g_thumb_dst.w + dx] =
+                static_cast<uint16_t>(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+        }
+    }
+    return 1;
+}
+
+bool snapshot_load_jpeg_thumb(const uint8_t *jpeg, size_t len, size_t limit,
+                              uint16_t *dst, int dst_w, int dst_h)
+{
+    if (jpeg == nullptr || dst == nullptr || len < 32 || len > limit || dst_w < 1 || dst_h < 1) {
+        return false;
+    }
+    if (g_pool == nullptr) {
+        g_pool = static_cast<uint8_t *>(
+            heap_caps_malloc(16384, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (g_pool == nullptr) {
+            g_pool = static_cast<uint8_t *>(malloc(16384));
+        }
+        if (g_pool == nullptr) {
+            return false;
+        }
+    }
+    JDEC jd = {};
+    JpegSrc src{jpeg, len, 0};
+    if (jd_prepare(&jd, jpeg_in, g_pool, 16384, &src) != JDR_OK) {
+        return false;
+    }
+    BYTE scale = 0;
+    int w = static_cast<int>(jd.width);
+    int h = static_cast<int>(jd.height);
+    while (scale < 3 && (w / 2) >= dst_w && (h / 2) >= dst_h) {
+        ++scale;
+        w /= 2;
+        h /= 2;
+    }
+    if (w < 1) {
+        w = 1;
+    }
+    if (h < 1) {
+        h = 1;
+    }
+    memset(dst, 0, static_cast<size_t>(dst_w) * static_cast<size_t>(dst_h) * sizeof(uint16_t));
+    int draw_w = dst_w;
+    int draw_h = dst_h;
+    if (static_cast<long>(w) * dst_h < static_cast<long>(h) * dst_w) {
+        draw_h = dst_h;
+        draw_w = static_cast<int>((static_cast<long>(w) * dst_h) / h);
+    } else {
+        draw_w = dst_w;
+        draw_h = static_cast<int>((static_cast<long>(h) * dst_w) / w);
+    }
+    if (draw_w < 1) {
+        draw_w = 1;
+    }
+    if (draw_h < 1) {
+        draw_h = 1;
+    }
+    if (draw_w > dst_w) {
+        draw_w = dst_w;
+    }
+    if (draw_h > dst_h) {
+        draw_h = dst_h;
+    }
+    const int ox = (dst_w - draw_w) / 2;
+    const int oy = (dst_h - draw_h) / 2;
+    g_thumb_dst = ThumbDst{dst, dst_w, dst_h, w, h, ox, oy, draw_w, draw_h};
+    const bool ok = jd_decomp(&jd, thumb_out, scale) == JDR_OK;
+    g_thumb_dst.px = nullptr;
+    return ok;
+}
+
 bool snapshot_has_image(void) { return g_have; }
 const lv_img_dsc_t *snapshot_dsc(void) { return g_have ? &g_dsc : nullptr; }
 void snapshot_clear(void)

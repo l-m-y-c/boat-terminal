@@ -89,12 +89,13 @@ Allowed later, not now: on-demand JPEG *snapshots* (phone-composed 800×480 fram
 | Debug tap of the same lines | BLE notify `…000030` *or* TCP, rate-limited | Phone console while still on BLE |
 | Phone GNSS inject | Wi-Fi TCP write or BLE `…000031`, **gated** | Must not be a silent bus talker |
 | JPEG snapshots (later) | HTTP POST or raw TCP | Too big for BLE |
+| SoftAP join (name, passphrase, 192.168.4.1) | BLE read `…000040` after OOB OK | Book and photos. Not in the QR |
 
 ### Networking modes (add in this order)
 
 1. **STA to a known SSID** — already implemented via `secrets.h`. Keep for bench.
 2. **STA to the member’s phone hotspot** — same code, different SSID provisioned after pair. Zero extra radio mode.
-3. **SoftAP `LMYC-<boat>`** — Slice B. Phone and Navionics join the *boat*. This is how commercial Wi-Fi multiplexers work.
+3. **SoftAP `LMYC-<boat>`** — Slice B. After the BLE pair, the phone reads `…000040` and Android joins the boat. Navionics still joins that SSID from Wi-Fi settings, the same way a chart app joins a marine multiplexer.
 
 Do not take down BLE advertising while flipping Wi-Fi modes. Coex + reconnect backoff already exist; extend them.
 

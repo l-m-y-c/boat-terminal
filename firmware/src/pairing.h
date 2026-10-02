@@ -17,6 +17,8 @@ static constexpr size_t kPairingOobBytes = 16;
 static constexpr size_t kPairingPayloadMax = 192;
 static constexpr uint16_t kPairingBleAppearance = 0x0341; /* generic outdoor sports activity */
 
+/* Mint the lmyc://pair link. Does not start the radio. */
+void pairing_prepare(void);
 void pairing_init(void);
 const char *pairing_payload(void);
 const char *pairing_oob_hex(void);
@@ -38,6 +40,9 @@ bool pairing_ble_ok(void);
 bool pairing_is_confirmed(void);
 void pairing_set_status(const char *status);
 void pairing_restart_advertising(void);
+
+/* SoftAP name, passphrase, and address. Served on …000040 only after OOB OK. */
+void pairing_set_wifi_bootstrap(const char *ssid, const char *psk, const char *ip);
 
 /* BLE NMEA tap (…000030). Drops oversize sentences when ATT payload < len. */
 void pairing_nmea_notify(const char *sentence);

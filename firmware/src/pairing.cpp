@@ -27,6 +27,8 @@ static constexpr const char *kLmycSessionUuid = "6c6d7963-0001-4000-8000-0000000
 static constexpr const char *kLmycStatusUuid = "6c6d7963-0001-4000-8000-000000000021";
 /* One NMEA sentence per notify. Drop on BLE if longer than ATT payload. */
 static constexpr const char *kLmycNmeaUuid = "6c6d7963-0001-4000-8000-000000000030";
+/* SoftAP bootstrap. Readable only after OOB confirmation. */
+static constexpr const char *kLmycWifiUuid = "6c6d7963-0001-4000-8000-000000000040";
 static constexpr size_t kEventLogLines = 5;
 static constexpr size_t kEventLineLen = 40;
 static constexpr size_t kRxAccMax = 80;
@@ -65,6 +67,11 @@ static NimBLECharacteristic *g_payload_chr = nullptr;
 static NimBLECharacteristic *g_session_chr = nullptr;
 static NimBLECharacteristic *g_status_chr = nullptr;
 static NimBLECharacteristic *g_nmea_chr = nullptr;
+static NimBLECharacteristic *g_wifi_chr = nullptr;
+static char g_wifi_ssid[33] = "";
+static char g_wifi_psk[64] = "";
+static char g_wifi_ip[16] = "192.168.4.1";
+static char g_wifi_json[280] = "WAIT";
 static uint32_t g_nmea_window_ms = 0;
 static uint8_t g_nmea_window_count = 0;
 
@@ -248,9 +255,61 @@ static void set_session_status(const char *status)
     }
 }
 
+static void json_escape(const char *in, char *out, size_t cap)
+{
+    size_t n = 0;
+    if (cap == 0) {
+        return;
+    }
+    for (; in != nullptr && *in != '\0' && n + 2 < cap; ++in) {
+        const unsigned char c = static_cast<unsigned char>(*in);
+        if (c == '"' || c == '\\') {
+            if (n + 3 >= cap) {
+                break;
+            }
+            out[n++] = '\\';
+            out[n++] = static_cast<char>(c);
+        } else if (c < 0x20) {
+            continue;
+        } else {
+            out[n++] = static_cast<char>(c);
+        }
+    }
+    out[n] = '\0';
+}
+
+static void publish_wifi_chr(void)
+{
+    if (g_wifi_chr == nullptr) {
+        return;
+    }
+    if (!g_confirmed || g_wifi_ssid[0] == '\0' || g_wifi_psk[0] == '\0') {
+        snprintf(g_wifi_json, sizeof(g_wifi_json), "WAIT");
+        g_wifi_chr->setValue(g_wifi_json);
+        return;
+    }
+    char ssid[80];
+    char psk[140];
+    char ip[40];
+    json_escape(g_wifi_ssid, ssid, sizeof(ssid));
+    json_escape(g_wifi_psk, psk, sizeof(psk));
+    json_escape(g_wifi_ip[0] != '\0' ? g_wifi_ip : "192.168.4.1", ip, sizeof(ip));
+    const int wrote = snprintf(g_wifi_json, sizeof(g_wifi_json),
+                               "{\"ssid\":\"%s\",\"psk\":\"%s\",\"ip\":\"%s\"}",
+                               ssid, psk, ip);
+    if (wrote < 0 || static_cast<size_t>(wrote) >= sizeof(g_wifi_json)) {
+        snprintf(g_wifi_json, sizeof(g_wifi_json), "ERR");
+        g_wifi_chr->setValue(g_wifi_json);
+        set_event("wifi info too long");
+        return;
+    }
+    g_wifi_chr->setValue(g_wifi_json);
+}
+
 static void apply_pair_result(bool ok, const char *how)
 {
     g_confirmed = ok;
+    publish_wifi_chr();
     if (ok) {
         set_status("Paired");
         char ev[48];
@@ -368,6 +427,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
                  static_cast<unsigned>(g_mtu));
         set_status(buf);
         set_event(buf);
+        publish_wifi_chr();
         Serial.printf("BLE: peer %s  MTU %u\n", g_peer, static_cast<unsigned>(g_mtu));
     }
 
@@ -376,6 +436,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         g_confirmed = false;
         g_connected = false;
         g_rx_acc_len = 0;
+        publish_wifi_chr();
         set_session_status("WAIT");
         set_status("Advertising");
         if (g_got_payload_read && !g_got_session_write) {
@@ -463,6 +524,16 @@ class StatusCallbacks : public NimBLECharacteristicCallbacks {
     }
 };
 
+class WifiCallbacks : public NimBLECharacteristicCallbacks {
+    void onRead(NimBLECharacteristic * /*chr*/) override
+    {
+        g_read_count++;
+        publish_wifi_chr();
+        set_event(g_confirmed ? "wifi info read" : "wifi info withheld");
+        Serial.println(g_confirmed ? "BLE: wifi bootstrap read" : "BLE: wifi bootstrap withheld");
+    }
+};
+
 class PayloadCallbacks : public NimBLECharacteristicCallbacks {
     void onRead(NimBLECharacteristic * /*chr*/) override
     {
@@ -479,6 +550,7 @@ static ServerCallbacks g_server_cb;
 static SessionCallbacks g_session_cb;
 static StatusCallbacks g_status_cb;
 static PayloadCallbacks g_payload_cb;
+static WifiCallbacks g_wifi_cb;
 
 static bool start_advertising(void)
 {
@@ -551,22 +623,42 @@ static bool start_ble_peripheral(void)
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
     g_nmea_chr->setValue("");
 
+    g_wifi_chr = svc->createCharacteristic(kLmycWifiUuid, NIMBLE_PROPERTY::READ);
+    g_wifi_chr->setCallbacks(&g_wifi_cb);
+    publish_wifi_chr();
+
     svc->start();
     return start_advertising();
 }
 
-void pairing_init(void)
+void pairing_prepare(void)
 {
     mint_oob();
     build_ble_identity();
     build_payload();
+}
+
+void pairing_init(void)
+{
+    if (g_payload[0] == '\0') {
+        pairing_prepare();
+    }
     g_confirmed = false;
     g_event_head = 0;
     g_event_count = 0;
     g_event_log[0] = '\0';
     g_ble_ok = start_ble_peripheral();
     Serial.printf("Pairing payload: %s\n", g_payload);
-    Serial.println("BLE: session …000020; status …000021; NMEA notify …000030");
+    Serial.println("BLE: session …000020; status …000021; NMEA …000030; wifi …000040");
+}
+
+void pairing_set_wifi_bootstrap(const char *ssid, const char *psk, const char *ip)
+{
+    snprintf(g_wifi_ssid, sizeof(g_wifi_ssid), "%s", ssid != nullptr ? ssid : "");
+    snprintf(g_wifi_psk, sizeof(g_wifi_psk), "%s", psk != nullptr ? psk : "");
+    snprintf(g_wifi_ip, sizeof(g_wifi_ip), "%s",
+             (ip != nullptr && ip[0] != '\0') ? ip : "192.168.4.1");
+    publish_wifi_chr();
 }
 
 void pairing_restart_advertising(void)
@@ -577,6 +669,7 @@ void pairing_restart_advertising(void)
     g_confirmed = false;
     g_connected = false;
     g_rx_acc_len = 0;
+    publish_wifi_chr();
     snprintf(g_peer, sizeof(g_peer), "-");
     snprintf(g_last_rx, sizeof(g_last_rx), "none");
     g_mtu = 23;

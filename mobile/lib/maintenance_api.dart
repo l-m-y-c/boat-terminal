@@ -36,6 +36,20 @@ String clubBaseUrl(String raw) {
   return base;
 }
 
+/// The terminal stores 120 characters beside each photo. The boat's HTTP
+/// server accepts a URI of 512 bytes, and `/maintenance/photo?id=&n=&note=`
+/// already uses about 50 of those, so a heavily encoded note is shortened.
+String _clipPhotoNote(String note) {
+  var text = note.trim();
+  if (text.length > 120) {
+    text = text.substring(0, 120);
+  }
+  while (text.isNotEmpty && Uri.encodeQueryComponent(text).length > 450) {
+    text = text.substring(0, text.length - 1);
+  }
+  return text;
+}
+
 /// The card's `/maintenance` routes. The caller owns [client].
 class TerminalBook {
   TerminalBook({
@@ -96,10 +110,17 @@ class TerminalBook {
   }
 
   /// [n] is 1-based. [jpeg] must already be a JPEG under 500 KB.
-  Future<void> putPhoto(String id, int n, List<int> jpeg) async {
+  /// [note] is the line that belongs to this photo, such as
+  /// "Sail is ripped, left hand side". Blank notes are omitted.
+  Future<void> putPhoto(String id, int n, List<int> jpeg, {String note = ''}) async {
+    final query = <String, String>{'id': id, 'n': '$n'};
+    final clipped = _clipPhotoNote(note);
+    if (clipped.isNotEmpty) {
+      query['note'] = clipped;
+    }
     final res = await _client
         .post(
-          _uri('/maintenance/photo', {'id': id, 'n': '$n'}),
+          _uri('/maintenance/photo', query),
           headers: {'Content-Type': 'image/jpeg'},
           body: jpeg,
         )

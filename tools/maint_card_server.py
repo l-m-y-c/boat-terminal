@@ -284,6 +284,9 @@ class Handler(BaseHTTPRequestHandler):
                 fh.write(blob)
             os.replace(tmp, dest)
             item["photo_count"] = max(int(item.get("photo_count", 0)), n)
+            note = query.get("note", "").replace("\x00", "").strip()[:120]
+            if note:
+                item[f"note{n}"] = note
             item["modified"] = _now()
             _save(item)
         self._send(200, b"OK\n", "text/plain; charset=utf-8")

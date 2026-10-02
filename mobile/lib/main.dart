@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'boat_wifi.dart';
 import 'boatlink.dart';
 import 'maintenance_book.dart';
 import 'nmea_console.dart';
@@ -107,6 +110,12 @@ class _HomePageState extends State<HomePage> {
       Guid('6c6d7963-0001-4000-8000-000000000020');
   static final Guid kLmycStatusChr =
       Guid('6c6d7963-0001-4000-8000-000000000021');
+  static final Guid kLmycWifiChr =
+      Guid('6c6d7963-0001-4000-8000-000000000040');
+
+  bool _wifiBusy = false;
+  bool _wifiJoined = false;
+  String _wifiDetail = '';
 
   @override
   void initState() {
@@ -526,6 +535,7 @@ class _HomePageState extends State<HomePage> {
             backgroundColor: const Color(0xFF00B4A6),
           ),
         );
+        await _bringUpBoatWifi(device);
       } else {
         final shown = _isSessionStatus(reply) ? reply : '(no status yet)';
         setState(() {
@@ -558,7 +568,91 @@ class _HomePageState extends State<HomePage> {
         _blePhase = BlePhase.idle;
         _bleDetail = '';
         _sessionReply = null;
+        if (!_wifiJoined) {
+          _wifiDetail = '';
+        }
       });
+    }
+  }
+
+  /// After OOB OK, read the SoftAP details and ask Android to join that network.
+  Future<void> _bringUpBoatWifi(BluetoothDevice device) async {
+    if (_wifiBusy) {
+      return;
+    }
+    setState(() {
+      _wifiBusy = true;
+      _wifiJoined = false;
+      _wifiDetail = 'Reading the boat Wi-Fi over Bluetooth…';
+    });
+    try {
+      final status = await Permission.nearbyWifiDevices.request();
+      if (!status.isGranted && !status.isLimited) {
+        debugPrint('nearby wifi permission: $status');
+      }
+      try {
+        await device.requestMtu(185);
+      } catch (e) {
+        debugPrint('requestMtu: $e');
+      }
+      final services = await device.discoverServices();
+      BluetoothCharacteristic? wifiChr;
+      for (final s in services) {
+        if (s.uuid != kLmycService) continue;
+        for (final c in s.characteristics) {
+          if (c.uuid == kLmycWifiChr) wifiChr = c;
+        }
+      }
+      if (wifiChr == null) {
+        if (!mounted) return;
+        setState(() {
+          _wifiDetail =
+              'This terminal has no Wi-Fi bootstrap yet. Flash the new firmware and pair again.';
+        });
+        return;
+      }
+      final raw = utf8.decode(await wifiChr.read(), allowMalformed: true);
+      final info = parseWifiBootstrap(raw);
+      if (info == null) {
+        if (!mounted) return;
+        setState(() {
+          _wifiDetail =
+              'The terminal did not share Wi-Fi yet. Pair again, then tap Join boat Wi-Fi.';
+        });
+        return;
+      }
+      BoatSession.offer(info);
+      if (!mounted) return;
+      setState(() {
+        _wifiDetail =
+            'Android is asking to join ${info.ssid}. Tap Connect. '
+            'The network has no internet; Read Book still uses ${info.ip}.';
+      });
+      await BoatWifi.join(ssid: info.ssid, psk: info.psk);
+      BoatSession.markJoined();
+      if (!mounted) return;
+      setState(() {
+        _wifiJoined = true;
+        _wifiDetail = 'On boat Wi-Fi ${info.ssid}. Read Book uses ${info.ip}.';
+      });
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _wifiJoined = false;
+        _wifiDetail = e.message ?? 'Could not join the boat Wi-Fi.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _wifiJoined = false;
+        _wifiDetail = 'Could not join the boat Wi-Fi ($e).';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _wifiBusy = false);
+      } else {
+        _wifiBusy = false;
+      }
     }
   }
 
@@ -902,12 +996,28 @@ class _HomePageState extends State<HomePage> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        const Text(
-                          'OOB match confirmed. Open Sentences for the live '
-                          'NMEA tap (BLE …000030), or TCP :10110 using the '
-                          'IP on the terminal DIAGNOSTICS card.',
-                          style: TextStyle(height: 1.4, color: Colors.black87),
+                        Text(
+                          _wifiDetail.isEmpty
+                              ? 'OOB match confirmed. The app reads the boat '
+                                  'Wi-Fi over Bluetooth and Android asks you to join it.'
+                              : _wifiDetail,
+                          style: const TextStyle(height: 1.4, color: Colors.black87),
                         ),
+                        if (!_wifiJoined) ...[
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: _device == null || _wifiBusy
+                                  ? null
+                                  : () => _bringUpBoatWifi(_device!),
+                              icon: const Icon(Icons.wifi),
+                              label: Text(_wifiBusy
+                                  ? 'Joining boat Wi-Fi…'
+                                  : 'Join boat Wi-Fi'),
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 12),
                         SizedBox(
                           width: double.infinity,

@@ -19,6 +19,7 @@ static constexpr size_t kMaintDescMax = 2000;
 static constexpr size_t kMaintReporterMax = 80;
 static constexpr size_t kMaintPhotoMax = 5;
 static constexpr size_t kMaintPhotoBytesMax = 500 * 1024;
+static constexpr size_t kMaintPhotoNoteMax = 120;
 
 struct MaintItem {
     char id[kMaintIdHex + 1];
@@ -34,6 +35,8 @@ struct MaintItem {
     char modified[32];
     char sync_state[16];
     uint8_t photo_count;
+    /* note[0] belongs to 1.jpg. Empty until the phone sends one. */
+    char photo_note[kMaintPhotoMax][kMaintPhotoNoteMax + 1];
 };
 
 /* Call after SD.begin() succeeds. Creates /maint. */
@@ -63,6 +66,9 @@ void maint_store_photo_abort(void);
 
 /* Path of an existing photo, or false. */
 bool maint_store_photo_path(const char *id, uint8_t n, char *out, size_t cap);
+
+/* Stores the note beside photo n (1-based) in item.json. */
+bool maint_store_set_photo_note(const char *id, uint8_t n, const char *note);
 
 bool maint_category_ok(const char *category);
 bool maint_priority_ok(const char *priority);

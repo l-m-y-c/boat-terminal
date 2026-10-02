@@ -16,6 +16,12 @@ void snapshot_init(void);
 bool snapshot_load_jpeg(const uint8_t *jpeg, size_t len);
 bool snapshot_load_jpeg_limited(const uint8_t *jpeg, size_t len, size_t limit);
 
+/* Nearest-neighbor shrink into a small RGB565 buffer. The picture keeps its
+ * shape and sits in the middle; unused pixels stay black. Does not touch the
+ * full-screen canvas. */
+bool snapshot_load_jpeg_thumb(const uint8_t *jpeg, size_t len, size_t limit,
+                              uint16_t *dst, int dst_w, int dst_h);
+
 bool snapshot_has_image(void);
 const lv_img_dsc_t *snapshot_dsc(void);
 void snapshot_clear(void);

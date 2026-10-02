@@ -1,10 +1,12 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'boat_wifi.dart';
 import 'maintenance_api.dart';
 import 'maintenance_jpeg.dart';
 
@@ -43,11 +45,13 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
   final _titleController = TextEditingController();
   final _descController = TextEditingController();
   final _picker = ImagePicker();
-  final List<Uint8List> _photos = [];
+  final List<_PhotoDraft> _photos = [];
+  final List<_PhotoDraft> _retired = [];
 
   String _category = 'other';
   String _priority = 'medium';
   bool _busy = false;
+  double? _progress;
   String _status = '';
   List<Map<String, dynamic>> _items = [];
   late final http.Client _client;
@@ -56,9 +60,11 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
   @override
   void initState() {
     super.initState();
-    _ipController.text = widget.suggestedIp?.isNotEmpty == true
-        ? widget.suggestedIp!
-        : '192.168.4.1';
+    _ipController.text = BoatSession.joined
+        ? BoatSession.ip
+        : (widget.suggestedIp?.isNotEmpty == true
+            ? widget.suggestedIp!
+            : '192.168.4.1');
     _ownsClient = widget.client == null;
     _client = widget.client ?? http.Client();
   }
@@ -69,6 +75,12 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
     _clubController.dispose();
     _titleController.dispose();
     _descController.dispose();
+    for (final photo in _photos) {
+      photo.note.dispose();
+    }
+    for (final photo in _retired) {
+      photo.note.dispose();
+    }
     if (_ownsClient) {
       _client.close();
     }
@@ -81,6 +93,38 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _joinBoatWifi() async {
+    final info = BoatSession.info;
+    if (info == null || _busy) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status =
+          'Joining ${info.ssid}. Tap Connect. The network has no internet; Read Book uses ${info.ip}.';
+    });
+    try {
+      await BoatWifi.join(ssid: info.ssid, psk: info.psk);
+      BoatSession.markJoined();
+      _ipController.text = BoatSession.ip;
+      if (!mounted) return;
+      setState(() => _status = 'On boat Wi-Fi ${info.ssid}.');
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      _report(e.message ?? 'Could not join the boat Wi-Fi.');
+    } catch (e) {
+      if (!mounted) return;
+      _report('Could not join the boat Wi-Fi ($e).');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _progress = null;
+        });
+      }
+    }
+  }
+
   Future<void> _refresh({String? done}) async {
     final host = terminalHost(_ipController.text);
     if (host.isEmpty) {
@@ -89,6 +133,7 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
     }
     setState(() {
       _busy = true;
+      _progress = null;
       _status = 'Reading the boat…';
     });
     try {
@@ -106,7 +151,12 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
       if (!mounted) return;
       _report('Could not read the book ($e)');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _progress = null;
+        });
+      }
     }
   }
 
@@ -133,20 +183,26 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
     if (picked == null || !mounted) return;
     setState(() {
       _busy = true;
+      _progress = null;
       _status = 'Preparing photo…';
     });
     try {
       final fitted = fitMaintenanceJpeg(await picked.readAsBytes());
       if (!mounted) return;
       setState(() {
-        _photos.add(fitted);
+        _photos.add(_PhotoDraft(fitted));
         _status = '${_photos.length} of 5 photos ready';
       });
     } catch (e) {
       if (!mounted) return;
       setState(() => _status = '$e');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _progress = null;
+        });
+      }
     }
   }
 
@@ -163,10 +219,12 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
     }
     setState(() {
       _busy = true;
-      _status = 'Saving on the boat…';
+      _progress = _photos.isEmpty ? null : 0;
+      _status = _photos.isEmpty ? 'Saving the note…' : 'Saving the note, then the photos…';
     });
     final book = TerminalBook(host: host, client: _client);
-    final queued = List<Uint8List>.from(_photos);
+    final queued = [for (final photo in _photos) photo.bytes];
+    final notes = [for (final photo in _photos) photo.note.text];
     try {
       final id = await book.create(
         title: title,
@@ -177,9 +235,18 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
       var sent = 0;
       Object? photoError;
       for (var i = 0; i < queued.length; i++) {
+        if (mounted) {
+          setState(() {
+            _progress = i / queued.length;
+            _status = 'Saving photo ${i + 1} of ${queued.length}…';
+          });
+        }
         try {
-          await book.putPhoto(id, i + 1, queued[i]);
+          await book.putPhoto(id, i + 1, queued[i], note: notes[i]);
           sent++;
+          if (mounted) {
+            setState(() => _progress = sent / queued.length);
+          }
         } catch (e) {
           photoError = e;
           break;
@@ -187,7 +254,10 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
       }
       _titleController.clear();
       _descController.clear();
-      _photos.clear();
+      setState(() {
+        _retired.addAll(_photos);
+        _photos.clear();
+      });
       final note = photoError == null
           ? 'Saved on the boat'
                 '${sent == 0 ? '' : ' with $sent photo(s)'}. '
@@ -199,7 +269,12 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
       if (!mounted) return;
       _report('Save failed ($e)');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _progress = null;
+        });
+      }
     }
   }
 
@@ -219,6 +294,7 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
     }
     setState(() {
       _busy = true;
+      _progress = null;
       _status = 'Syncing with the club…';
     });
     try {
@@ -230,8 +306,32 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
       if (!mounted) return;
       _report('Club upload stopped ($e)');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _progress = null;
+        });
+      }
     }
+  }
+
+  Widget _activity() {
+    if (!_busy) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LinearProgressIndicator(value: _progress),
+          if (_status.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(_status),
+          ],
+        ],
+      ),
+    );
   }
 
   void _openItem(Map<String, dynamic> item) {
@@ -257,13 +357,23 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          const Text(
-            'Join the terminal Wi-Fi, or type this computer’s stand-in address '
-            '(host and port, no http://). Photos are saved on the boat. '
-            'Leave Club API blank and the note stays pending. '
-            'Sync with club sends pending notes and brings home edits back.',
-            style: TextStyle(height: 1.4),
+          Text(
+            BoatSession.joined
+                ? 'This phone is on ${BoatSession.ssid}. Read Book uses ${BoatSession.ip}. '
+                    'Photos are saved on the boat. Leave Club API blank and the note stays pending.'
+                : 'Pair first. The app then joins the boat Wi-Fi, and Read Book uses that link. '
+                    'Or type a stand-in address (host and port, no http://). '
+                    'Leave Club API blank and the note stays pending.',
+            style: const TextStyle(height: 1.4),
           ),
+          if (BoatSession.info != null && !BoatSession.joined) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _joinBoatWifi,
+              icon: const Icon(Icons.wifi),
+              label: Text('Join ${BoatSession.ssid}'),
+            ),
+          ],
           const SizedBox(height: 12),
           TextField(
             key: const Key('terminal-host'),
@@ -287,6 +397,7 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
             keyboardType: TextInputType.url,
           ),
           const SizedBox(height: 8),
+          _activity(),
           FilledButton.icon(
             onPressed: _busy ? null : _refresh,
             icon: const Icon(Icons.refresh),
@@ -386,45 +497,42 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
           ),
           if (_photos.isNotEmpty) ...[
             const SizedBox(height: 8),
-            SizedBox(
-              height: 88,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: _photos.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 8),
-                itemBuilder: (context, i) {
-                  return Stack(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.memory(
-                          _photos[i],
-                          width: 88,
-                          height: 88,
-                          fit: BoxFit.cover,
-                        ),
+            for (var i = 0; i < _photos.length; i++) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.memory(
+                      _photos[i].bytes,
+                      width: 88,
+                      height: 88,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _photos[i].note,
+                      maxLength: 120,
+                      enabled: !_busy,
+                      decoration: InputDecoration(
+                        labelText: 'Photo ${i + 1} note',
+                        hintText: 'Sail is ripped, left hand side',
+                        border: const OutlineInputBorder(),
                       ),
-                      Positioned(
-                        right: 0,
-                        top: 0,
-                        child: IconButton(
-                          onPressed: _busy
-                              ? null
-                              : () => setState(() => _photos.removeAt(i)),
-                          icon: const Icon(Icons.close, size: 18),
-                          style: IconButton.styleFrom(
-                            backgroundColor: Colors.black54,
-                            foregroundColor: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _busy ? null : () => _dropPhoto(i),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
               ),
-            ),
+            ],
           ],
           const SizedBox(height: 8),
+          _activity(),
           FilledButton.icon(
             onPressed: _busy ? null : _file,
             icon: const Icon(Icons.save_alt),
@@ -433,6 +541,10 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
         ],
       ),
     );
+  }
+
+  void _dropPhoto(int i) {
+    setState(() => _retired.add(_photos.removeAt(i)));
   }
 
   Widget _tile(Map<String, dynamic> item) {
@@ -456,6 +568,13 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
   }
 }
 
+class _PhotoDraft {
+  _PhotoDraft(this.bytes);
+
+  final Uint8List bytes;
+  final TextEditingController note = TextEditingController();
+}
+
 class _BoatPhotoPage extends StatefulWidget {
   const _BoatPhotoPage({required this.book, required this.item});
 
@@ -473,6 +592,8 @@ class _BoatPhotoPageState extends State<_BoatPhotoPage> {
   bool _busy = false;
 
   int get _count => int.tryParse('${widget.item['photo_count']}') ?? 0;
+
+  String get _note => widget.item['note$_n']?.toString().trim() ?? '';
 
   @override
   void initState() {
@@ -536,6 +657,14 @@ class _BoatPhotoPageState extends State<_BoatPhotoPage> {
                     ),
             ),
           ),
+          if (_note.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: Text(
+                _note,
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+              ),
+            ),
           if (_count > 1)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),

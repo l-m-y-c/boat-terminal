@@ -168,7 +168,7 @@ bool maint_store_save(const MaintItem *item)
         return false;
     }
 
-    static constexpr size_t kJsonCap = 8192;
+    static constexpr size_t kJsonCap = 12288;
     char *json = static_cast<char *>(malloc(kJsonCap));
     if (json == nullptr) {
         return false;
@@ -206,6 +206,11 @@ bool maint_store_save(const MaintItem *item)
     field_str("modified", item->modified, true);
     field_str("sync", item->sync_state, true);
     field_u32("photo_count", item->photo_count);
+    for (int i = 0; i < static_cast<int>(kMaintPhotoMax); ++i) {
+        char key[8];
+        snprintf(key, sizeof(key), "note%d", i + 1);
+        field_str(key, item->photo_note[i], true);
+    }
     ok = ok && append_str(json, kJsonCap, &n, "}\n");
     if (!ok) {
         free(json);
@@ -266,6 +271,9 @@ bool maint_store_create(MaintItem *item)
     }
     snprintf(item->sync_state, sizeof(item->sync_state), "pending");
     item->photo_count = 0;
+    for (size_t i = 0; i < kMaintPhotoMax; ++i) {
+        item->photo_note[i][0] = '\0';
+    }
     return maint_store_save(item);
 }
 
@@ -441,12 +449,12 @@ bool maint_store_load(const char *id, MaintItem *out)
     if (!in) {
         return false;
     }
-    char *json = static_cast<char *>(malloc(8192));
+    char *json = static_cast<char *>(malloc(12288));
     if (json == nullptr) {
         in.close();
         return false;
     }
-    const size_t n = in.read(reinterpret_cast<uint8_t *>(json), 8191);
+    const size_t n = in.read(reinterpret_cast<uint8_t *>(json), 12287);
     in.close();
     json[n] = '\0';
     memset(out, 0, sizeof(*out));
@@ -466,6 +474,11 @@ bool maint_store_load(const char *id, MaintItem *out)
     parse_string_field(json, "modified", out->modified, sizeof(out->modified));
     parse_string_field(json, "sync", out->sync_state, sizeof(out->sync_state));
     out->photo_count = static_cast<uint8_t>(parse_u32_field(json, "photo_count"));
+    for (int i = 0; i < static_cast<int>(kMaintPhotoMax); ++i) {
+        char key[8];
+        snprintf(key, sizeof(key), "note%d", i + 1);
+        parse_string_field(json, key, out->photo_note[i], sizeof(out->photo_note[i]));
+    }
     free(json);
     return out->title[0] != '\0';
 }
@@ -525,6 +538,17 @@ bool maint_store_photo_path(const char *id, uint8_t n, char *out, size_t cap)
         return false;
     }
     return SD.exists(out);
+}
+
+bool maint_store_set_photo_note(const char *id, uint8_t n, const char *note)
+{
+    MaintItem item;
+    if (!maint_store_load(id, &item) || n == 0 || n > kMaintPhotoMax) {
+        return false;
+    }
+    snprintf(item.photo_note[n - 1], sizeof(item.photo_note[n - 1]), "%s",
+             note != nullptr ? note : "");
+    return maint_store_save(&item);
 }
 
 bool maint_store_photo_begin(const char *id, uint8_t n)

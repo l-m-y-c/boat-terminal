@@ -90,7 +90,7 @@ The Waveshare TF slot holds **this sailboat's** maintenance book, photos include
 On the card, for this boat only:
 
 - every item: title, description, category, priority, status, dates, reporter display name, and leader notes once those exist
-- the photos, as JPEGs, beside the item
+- the photos, as JPEGs, beside the item, each with an optional note of up to 120 characters (`note1` … `note5` in `item.json`)
 - a sync cursor, and which items were created on board and still need uploading
 
 Completed items stay. "We replaced this pump, here is the old one" is part of the handoff. One boat's history is small next to a large card. If a card ever fills, drop the oldest completed photos first and keep the text.
@@ -104,13 +104,23 @@ Layout (FAT32; exFAT will not mount on this firmware):
 /maint/<id>/1.jpg
 ```
 
-`item.json` carries `id`, `wp_id` (0 until the website accepts it), `sailboat_id`, `title`, `description`, `category`, `priority`, `status`, `reporter`, `created`, `modified`, `sync` (`pending` or `synced`), and `photos`. Writes go to a temporary file and are renamed into place after they are flushed, so an engine-start voltage dip does not tear the record.
+`item.json` carries `id`, `wp_id` (0 until the website accepts it), `sailboat_id`, `title`, `description`, `category`, `priority`, `status`, `reporter`, `created`, `modified`, `sync` (`pending` or `synced`), `photos`, and `note1` … `note5` (the line that belongs to `1.jpg` … `5.jpg`, for example "Sail is ripped, left hand side"). Writes go to a temporary file and are renamed into place after they are flushed, so an engine-start voltage dip does not tear the record.
 
 ### Who reads it
 
-The book is on the Waveshare with no phone and no coverage. Open items first, then the photo large enough to recognize the part. The screen is the glance.
+The book is on the Waveshare with no phone and no coverage. Open reports are the list. A row opens that item. A photo opens on the whole glass, and a sideways swipe moves between that picture and its note. **Back** returns to the item. The screen is the glance.
 
-Reviewing several problems is better on the phone, which reads the same files over the terminal's SoftAP. Photos move over that Wi-Fi. Bluetooth stays the pairing handshake.
+### How a report is laid out
+
+The list holds every open report on one screen (six at most). A header names the columns: Title, Category, Priority. Each row is one line, and each field has its own place. A long title or category ends in an ellipsis. The category is the word (`safety-equipment` is shown as Safety equipment), because ten small pictograms are harder to learn at arm's length than a word that always sits in the same column. Priority is a chip with the word on it: Critical and High are amber, Medium is teal, Low is gray. Color and the word travel together, so the chip still reads when the color is hard to see.
+
+The detail page is a set of wells in the card color. The field name is small and gray. The value is white. Category, priority, status, and reporter sit in a two-by-two band under the title, and priority uses the same chip as the list. The description has its own well and shows about four lines. The page is the only scroll on that screen, so a scrollbar inside a field does not fight the page. Photos below stay reachable.
+
+When the title or the description is longer than its well, tap it. A reader covers the detail page, shows the full title and the full description, and scrolls. **Close** returns to the same report, at the same place in the page.
+
+Photos stack down the page. The picture takes half the width and keeps its shape, with black bars where the frame is wider or taller than the photo. The note fills a well of the same height on the other half. A long note is clipped there. The full note is the Photo screen. Tap the picture to open Photo on the picture. Tap the note to open Photo already on the note. A sideways swipe rotates between the two. An empty note still has that screen: "No note for this photo".
+
+Reviewing several problems is better on the phone, which reads the same files over the terminal's SoftAP. After the pair, the phone learns that network's name and passphrase over BLE and Android joins it. Photos move over that Wi-Fi. Bluetooth stays the pairing handshake.
 
 ### Who carries it to the club
 
@@ -136,7 +146,7 @@ The terminal still must not advertise occupancy or a member name in BLE advertis
 
 1. On-card store and local HTTP. In this repo: `firmware/src/maint_store.*`, `GET`/`POST /maintenance`, `GET`/`POST /maintenance/photo`, and `POST /maintenance/ack`. The ack route writes `wp_id` and sets `sync` to `synced` after the club JSON API accepts the item. The terminal still does not call lmyc.ca.
 2. Phone screen reads that list and files a pending item with up to five JPEGs (long edge about 2000 px, under 500 KB) onto the card. A blank Club API field does not open a connection, so the items stay `pending`. `tools/maint_card_server.py` speaks the same routes on a computer, for a phone test while the Waveshare is not on the bench.
-3. Waveshare list of open items, then one photo large enough to recognize the part. Helm **Book** opens the list. A row decodes the JPEG onto the full screen; **Back** returns to the list and **Next photo** steps through that item. Compiled with the rest of the firmware. Not flashed yet.
+3. Waveshare list of open reports, then the item, then one photo large enough to recognize the part. **Reports** on the right-hand rail opens the list. The rail parks off the glass behind a tab; tap the tab or swipe left to bring the buttons out. **Home** in the top bar always returns to the landing screen. The path there is **Reports**, then **Details**, then **Photo**. **Reports** returns to the list and **Details** returns to the open report. The list is Title, Category, and a priority chip. The item is labeled wells, and a long title or description opens a reader on that same page. Each photo is half the width, with its note in a well beside it (the phone sends that note on `POST /maintenance/photo?id=&n=&note=`). The picture opens Photo on the picture. The note opens Photo on the note. Swipe between them. **Back** on the chart rail returns to the item and **Next photo** steps through that item, back on the picture. The chart page and a book photo still share one canvas. See `firmware/README.md`.
 4. Bearer-token client for those JSON routes. The phone uploads `sync: pending` items, then downloads club edits. `POST /maintenance/reconcile` writes an edit onto the card when the website `modified` time is newer, and leaves a still-pending boat note alone. A blank Club API field does not open a connection. The live lmyc.ca routes are still waiting on the site owner. The stand-in answers both directions.
 5. Boarding pass check in the existing QR + BLE handshake.
 

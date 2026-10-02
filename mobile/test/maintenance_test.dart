@@ -28,6 +28,31 @@ void main() {
     expect(decodedSmall.height, 80);
   });
 
+  test('a photo note is sent with the JPEG and clipped to 120 characters', () async {
+    final seen = <http.Request>[];
+    final client = MockClient((request) async {
+      seen.add(request);
+      return http.Response('OK\n', 200);
+    });
+    final book = TerminalBook(host: '192.168.4.1', client: client);
+    const jpeg = [0xFF, 0xD8, 0xFF, 0xD9];
+    await book.putPhoto(
+      'aabbccddeeff0011',
+      1,
+      jpeg,
+      note: 'Sail is ripped, left hand side',
+    );
+    await book.putPhoto('aabbccddeeff0011', 2, jpeg, note: '   ');
+    await book.putPhoto('aabbccddeeff0011', 3, jpeg, note: 'n' * 150);
+    expect(seen[0].url.path, '/maintenance/photo');
+    expect(seen[0].url.queryParameters['id'], 'aabbccddeeff0011');
+    expect(seen[0].url.queryParameters['n'], '1');
+    expect(seen[0].url.queryParameters['note'], 'Sail is ripped, left hand side');
+    expect(seen[0].bodyBytes, jpeg);
+    expect(seen[1].url.queryParameters.containsKey('note'), isFalse);
+    expect(seen[2].url.queryParameters['note'], 'n' * 120);
+  });
+
   test('a blank club API does not open a connection', () async {
     var calls = 0;
     final client = MockClient((request) async {

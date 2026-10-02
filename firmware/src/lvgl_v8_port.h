@@ -36,9 +36,10 @@
  *      - Lager buffer size can improve FPS, but it will occupy more memory. Maximum buffer size is `width * height`.
  *      - The number of buffers should be 1 or 2.
  */
-#define LVGL_PORT_BUFFER_MALLOC_CAPS            (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)       // Allocate LVGL buffer in SRAM
-// #define LVGL_PORT_BUFFER_MALLOC_CAPS            (MALLOC_CAP_SPIRAM)      // Allocate LVGL buffer in PSRAM
-#define LVGL_PORT_BUFFER_SIZE_HEIGHT            (20)
+// Same place as the first firmware that brought this panel up: two partial
+// buffers in PSRAM, 40 rows tall (800 * 40). Internal SRAM is left for Wi-Fi.
+#define LVGL_PORT_BUFFER_MALLOC_CAPS            (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#define LVGL_PORT_BUFFER_SIZE_HEIGHT            (40)
 #define LVGL_PORT_BUFFER_NUM                    (2)
 
 /**
@@ -143,6 +144,12 @@ extern "C" {
  * @return true if success, otherwise false
  */
 bool lvgl_port_init(esp_panel::drivers::LCD *lcd, esp_panel::drivers::Touch *tp);
+
+/**
+ * Run one LVGL turn. The first firmware called `lv_timer_handler()` from
+ * `loop()` on the same core that started the panel. There is no LVGL task.
+ */
+void lvgl_port_handle(void);
 
 /**
  * @brief Deinitialize the LVGL porting.

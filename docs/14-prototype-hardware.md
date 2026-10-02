@@ -52,10 +52,18 @@ From the board labeling:
 | 11 | **RS485 header** | NMEA 0183 |
 | 13 | CAN terminal resistor selection | Enable/disable 120 Ω |
 | 14 | RS485 terminal resistor selection | Enable/disable 120 Ω |
-| 7 / 6 | UART2 / UART1 | Debugging or additional serial |
+| 7 / 6 | UART2 / UART1 | CH343 Type-C (UART1) or the UART header (UART2). On a Mac the CH343 enumerates and does not deliver flash data |
 | 10 | I2C header | Sensors / expansion |
 | 4 | TF card slot | Local logs, reference data |
-| 5 | USB Type-C | Programming & power (5 V) |
+| 5 | USB Type-C | ESP32 native USB. Shared with CAN. Flash port on a Mac (see below) |
+
+### Flashing from a Mac
+
+Two Type-C sockets. The one marked **UART** is the CH343 (`1A86:55D3`). It shows up under `/dev/cu.usbmodem…` and `make flash` will select it, then esptool reports `No serial data received`. Holding BOOT and tapping RESET on that socket did not change that.
+
+The socket marked **USB** is the ESP32's own USB and is shared with the CAN connector, so a normal plug-in creates no serial port. Unplug that cable, hold **BOOT**, plug it in, release **BOOT**. The port comes up as "USB JTAG/serial debug unit" (`303A:1001`). On 2026-10-01 that was `/dev/cu.usbmodem101`, and `pio run -t upload --upload-port /dev/cu.usbmodem101` from `firmware/` wrote the image and verified the hash. The chip reported ESP32-S3 revision v0.2, 8 MB PSRAM, and 16 MB flash. The steps live in `firmware/README.md`.
+
+On that same day the picture walked off the glass and the chip rebooted while LVGL draw buffers were in internal RAM and LVGL ran on its own task. The screen stayed up after those buffers moved back to PSRAM (40 rows) and `loop()` called the LVGL handler on the core that started the panel, with the UI drawn before Wi-Fi. Panel timing stays on the Waveshare defaults. Details are in `firmware/README.md`.
 
 **Important safety note**  
 The onboard CAN and RS485 transceivers are **not galvanically isolated**.  
@@ -87,7 +95,7 @@ Recommended order of tests:
 - Flash Size: 8 MB (or 16 MB depending on exact module variant)
 - PSRAM: OPI PSRAM / Enabled
 - USB CDC On Boot: Enabled (for serial monitor)
-- Upload mode: UART0 / default
+- Upload: the Type-C socket marked USB, with BOOT held while the cable is plugged in (see Flashing from a Mac above). The UART socket's CH343 port enumerates and does not accept the upload on this Mac.
 
 **ESP-IDF** is also fully supported and may be preferred later for more control over the NMEA and BLE stacks.
 

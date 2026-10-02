@@ -727,22 +727,11 @@ static bool tick_deinit(void)
 }
 #endif
 
-static void lvgl_port_task(void *arg)
+void lvgl_port_handle(void)
 {
-    ESP_UTILS_LOGD("Starting LVGL task");
-
-    uint32_t task_delay_ms = LVGL_PORT_TASK_MAX_DELAY_MS;
-    while (1) {
-        if (lvgl_port_lock(-1)) {
-            task_delay_ms = lv_timer_handler();
-            lvgl_port_unlock();
-        }
-        if (task_delay_ms > LVGL_PORT_TASK_MAX_DELAY_MS) {
-            task_delay_ms = LVGL_PORT_TASK_MAX_DELAY_MS;
-        } else if (task_delay_ms < LVGL_PORT_TASK_MIN_DELAY_MS) {
-            task_delay_ms = LVGL_PORT_TASK_MIN_DELAY_MS;
-        }
-        vTaskDelay(pdMS_TO_TICKS(task_delay_ms));
+    if (lvgl_port_lock(0)) {
+        lv_timer_handler();
+        lvgl_port_unlock();
     }
 }
 
@@ -813,12 +802,6 @@ bool lvgl_port_init(LCD *lcd, Touch *tp)
     ESP_UTILS_LOGD("Create mutex for LVGL");
     lvgl_mux = xSemaphoreCreateRecursiveMutex();
     ESP_UTILS_CHECK_NULL_RETURN(lvgl_mux, false, "Create LVGL mutex failed");
-
-    ESP_UTILS_LOGD("Create LVGL task");
-    BaseType_t core_id = (LVGL_PORT_TASK_CORE < 0) ? tskNO_AFFINITY : LVGL_PORT_TASK_CORE;
-    BaseType_t ret = xTaskCreatePinnedToCore(lvgl_port_task, "lvgl", LVGL_PORT_TASK_STACK_SIZE, NULL,
-                     LVGL_PORT_TASK_PRIORITY, &lvgl_task_handle, core_id);
-    ESP_UTILS_CHECK_FALSE_RETURN(ret == pdPASS, false, "Create LVGL task failed");
 
 #if LVGL_PORT_AVOID_TEAR
     lcd->attachRefreshFinishCallback(onLcdVsyncCallback, (void *)lvgl_task_handle);
