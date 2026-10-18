@@ -13,13 +13,13 @@
 /* PGN → NMEA 0183. Phone-facing sentences stay 0183 so Navionics and the
  * LMYC app do not change.
  *
- *  129025 position rapid          GLL + RMC/GGA cache
+ *  129025 position rapid          RMC/GLL cache
  *  129026 COG/SOG rapid           RMC/VTG cache
- *  129029 GNSS position           RMC + GGA
+ *  129029 GNSS position           RMC + GGA + GLL (GGA only with 129029)
  *  126992 system time             RMC time
  *  128267 depth                   DPT
  *  128259 water speed             VHW
- *  130306 wind                    MWV
+ *  130306 wind                    MWV (apparent / boat-true), MWD (ground)
  *  127250 heading                 HDG or HDT
  *  129038 AIS Class A position    !AIVDM/!AIVDO type 1
  *  129039 AIS Class B position    type 18
@@ -27,15 +27,24 @@
  *  129794 AIS Class A static      type 5
  *  129809 AIS Class B static A    type 24 part A
  *  129810 AIS Class B static B    type 24 part B
- *  129808 DSC call                $CDDSE (not a synthesized distress)
+ *  129808 DSC call                $PLMYC,DSC,<hex> (raw, not a synthesized distress)
  *
  * GNSS, depth, wind, and heading are emitted at 1 Hz. AIS goes out as received.
+ * GNSS older than 3 s is dropped rather than repeated.
  * v1 does not transmit on NMEA 2000.
  */
 
 static constexpr double kMsToKn = 1.9438444924406046;
 static constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
 static constexpr uint32_t kEmitMs = 1000;
+/* Cached GNSS older than this is not re-sent. Matches the 3 s AUTO quiet
+ * window, so a dead GPS never keeps repeating its last fix. */
+static constexpr uint32_t kStaleMs = 3000;
+
+static bool fresh(uint32_t stamp_ms, uint32_t now)
+{
+    return stamp_ms != 0 && (now - stamp_ms) <= kStaleMs;
+}
 
 static void emit_sentence(char *line, size_t cap)
 {
@@ -61,6 +70,16 @@ static double wrap360(double deg)
     return deg;
 }
 
+/* ddmm.mmmm / dddmm.mmmm. Minutes are rounded to 1/10000 first so
+ * 59.99996' carries into the degree instead of printing "60.0000". */
+static void fmt_ddmm(double a, int deg_digits, char *out, size_t cap)
+{
+    long ticks = lround(a * 600000.0); /* 1/10000 minute */
+    const long deg = ticks / 600000;
+    ticks -= deg * 600000;
+    snprintf(out, cap, "%0*ld%02ld.%04ld", deg_digits, deg, ticks / 10000, ticks % 10000);
+}
+
 static void fmt_lat(double deg, char *out, size_t cap, char *ns)
 {
     out[0] = '\0';
@@ -69,9 +88,7 @@ static void fmt_lat(double deg, char *out, size_t cap, char *ns)
         return;
     }
     *ns = deg < 0.0 ? 'S' : 'N';
-    const double a = fabs(deg);
-    const int d = static_cast<int>(a);
-    snprintf(out, cap, "%02d%07.4f", d, (a - d) * 60.0);
+    fmt_ddmm(fabs(deg), 2, out, cap);
 }
 
 static void fmt_lon(double deg, char *out, size_t cap, char *ew)
@@ -82,9 +99,7 @@ static void fmt_lon(double deg, char *out, size_t cap, char *ew)
         return;
     }
     *ew = deg < 0.0 ? 'W' : 'E';
-    const double a = fabs(deg);
-    const int d = static_cast<int>(a);
-    snprintf(out, cap, "%03d%07.4f", d, (a - d) * 60.0);
+    fmt_ddmm(fabs(deg), 3, out, cap);
 }
 
 static void civil_from_days(long z, int *year, int *month, int *day)
@@ -120,6 +135,13 @@ struct FixCache {
     double seconds;
     int sats;
     int quality;
+    bool have_gnss; /* 129029 seen: quality / sats / HDOP are real */
+    bool have_hdop;
+    bool have_geoid;
+    uint32_t ll_ms;
+    uint32_t sog_ms;
+    uint32_t time_ms;
+    uint32_t gnss_ms;
     uint32_t last_ms;
 };
 
@@ -156,6 +178,7 @@ static void note_time(uint16_t days, double seconds)
     if (!missing(seconds) && seconds >= 0.0 && seconds < 86400.0) {
         g_fix.seconds = seconds;
         g_fix.have_time = true;
+        g_fix.time_ms = millis();
     }
 }
 
@@ -192,11 +215,8 @@ static int ais_cog(double rad)
     if (missing(rad)) {
         return 3600;
     }
-    int v = static_cast<int>(lround(wrap360(rad * kRadToDeg) * 10.0));
-    if (v >= 3600) {
-        v = 3599;
-    }
-    return v;
+    /* 359.96 rounds to 3600, which is 0.0, not 359.9. */
+    return static_cast<int>(lround(wrap360(rad * kRadToDeg) * 10.0)) % 3600;
 }
 
 static int ais_hdg(double rad)
@@ -204,11 +224,11 @@ static int ais_hdg(double rad)
     if (missing(rad)) {
         return 511;
     }
-    const int v = static_cast<int>(lround(rad * kRadToDeg));
-    if (v < 0 || v >= 360) {
+    const double deg = rad * kRadToDeg;
+    if (deg < 0.0 || deg >= 360.0) {
         return 511;
     }
-    return v;
+    return static_cast<int>(lround(deg)) % 360;
 }
 
 static int ais_lat(double deg)
@@ -355,7 +375,7 @@ static void handle_class_b_pos(const tN2kMsg &msg)
     bits.put(mode == N2kaismode_Assigned ? 1u : 0u, 1);
     bits.put(raim ? 1u : 0u, 1);
     bits.put(state ? 1u : 0u, 1);
-    bits.put(0, 19);
+    bits.put(0, 19); /* radio status: 1 selector bit above + 19 = 168 bits */
     emit_ais(bits, info);
 }
 
@@ -553,8 +573,10 @@ static void handle_class_b_static_b(const tN2kMsg &msg)
 }
 
 /* 129808 has no stable parser in the NMEA2000 library we ship, and a wrong
- * $CDDSC format byte would look like a distress call. Emit the expanded
- * sentence with the payload hex so the phone console shows the call. */
+ * $CDDSC format byte would look like a distress call. A standard $CDDSE
+ * with hex in its MMSI field would also be misread by chart plotters, so
+ * the raw payload goes out as a proprietary $PLMYC,DSC sentence instead.
+ * Third-party apps ignore it; the phone console can still show it. */
 static void handle_dsc(const tN2kMsg &msg)
 {
     if (msg.PGN != 129808L || msg.DataLen == 0) {
@@ -566,7 +588,7 @@ static void handle_dsc(const tN2kMsg &msg)
         snprintf(hex + i * 2, 3, "%02X", msg.Data[i]);
     }
     char line[96];
-    snprintf(line, sizeof(line), "$CDDSE,1,1,A,%s", hex);
+    snprintf(line, sizeof(line), "$PLMYC,DSC,%s", hex);
     emit_sentence(line, sizeof(line));
 }
 
@@ -609,14 +631,26 @@ static void handle_wind(const tN2kMsg &msg)
     if (missing(speed) || missing(angle)) {
         return;
     }
-    const char kind = (ref == N2kWind_Apparent) ? 'R' : 'T';
-    if (ref == N2kWind_Error || ref == N2kWind_Unavailable) {
+    char line[84];
+    const double deg = wrap360(angle * kRadToDeg);
+    if (ref == N2kWind_True_North || ref == N2kWind_Magnetic) {
+        /* Ground-referenced direction is a compass bearing, not an angle off
+         * the bow. MWV would show it as relative wind, so send MWD. */
+        g_wind_ms = now;
+        if (ref == N2kWind_True_North) {
+            snprintf(line, sizeof(line), "$WIMWD,%.1f,T,,M,%.1f,N,%.1f,M", deg, speed * kMsToKn, speed);
+        } else {
+            snprintf(line, sizeof(line), "$WIMWD,,T,%.1f,M,%.1f,N,%.1f,M", deg, speed * kMsToKn, speed);
+        }
+        emit_sentence(line, sizeof(line));
         return;
     }
+    if (ref != N2kWind_Apparent && ref != N2kWind_True_boat && ref != N2kWind_True_water) {
+        return;
+    }
+    const char kind = (ref == N2kWind_Apparent) ? 'R' : 'T';
     g_wind_ms = now;
-    char line[84];
-    snprintf(line, sizeof(line), "$WIMWV,%.1f,%c,%.1f,N,A", wrap360(angle * kRadToDeg), kind,
-             speed * kMsToKn);
+    snprintf(line, sizeof(line), "$WIMWV,%.1f,%c,%.1f,N,A", deg, kind, speed * kMsToKn);
     emit_sentence(line, sizeof(line));
 }
 
@@ -639,19 +673,16 @@ static void handle_heading(const tN2kMsg &msg)
     const double deg = wrap360(heading * kRadToDeg);
     char line[84];
     if (ref == N2khr_magnetic) {
-        char dev_s[16] = "";
-        char var_s[16] = "";
-        char dev_dir = 'E';
-        char var_dir = 'E';
+        /* Value and E/W are both empty when N2K says not available. */
+        char dev_s[20] = ",";
+        char var_s[20] = ",";
         if (!missing(dev)) {
-            dev_dir = dev < 0.0 ? 'W' : 'E';
-            snprintf(dev_s, sizeof(dev_s), "%.1f", fabs(dev * kRadToDeg));
+            snprintf(dev_s, sizeof(dev_s), "%.1f,%c", fabs(dev * kRadToDeg), dev < 0.0 ? 'W' : 'E');
         }
         if (!missing(var)) {
-            var_dir = var < 0.0 ? 'W' : 'E';
-            snprintf(var_s, sizeof(var_s), "%.1f", fabs(var * kRadToDeg));
+            snprintf(var_s, sizeof(var_s), "%.1f,%c", fabs(var * kRadToDeg), var < 0.0 ? 'W' : 'E');
         }
-        snprintf(line, sizeof(line), "$HCHDG,%.1f,%s,%c,%s,%c", deg, dev_s, dev_dir, var_s, var_dir);
+        snprintf(line, sizeof(line), "$HCHDG,%.1f,%s,%s", deg, dev_s, var_s);
     } else {
         snprintf(line, sizeof(line), "$HEHDT,%.1f,T", deg);
     }
@@ -692,6 +723,7 @@ static void handle_position(const tN2kMsg &msg)
     g_fix.lat = lat;
     g_fix.lon = lon;
     g_fix.have_ll = true;
+    g_fix.ll_ms = millis();
 }
 
 static void handle_cogsog(const tN2kMsg &msg)
@@ -703,14 +735,13 @@ static void handle_cogsog(const tN2kMsg &msg)
         return;
     }
     (void)ref;
-    if (!missing(sog)) {
-        g_fix.sog_kn = sog * kMsToKn;
-        g_fix.have_sog = true;
+    if (missing(sog) || missing(cog)) {
+        return;
     }
-    if (!missing(cog)) {
-        g_fix.cog_deg = wrap360(cog * kRadToDeg);
-        g_fix.have_sog = true;
-    }
+    g_fix.sog_kn = sog * kMsToKn;
+    g_fix.cog_deg = wrap360(cog * kRadToDeg);
+    g_fix.have_sog = true;
+    g_fix.sog_ms = millis();
 }
 
 static void handle_gnss(const tN2kMsg &msg)
@@ -730,24 +761,31 @@ static void handle_gnss(const tN2kMsg &msg)
     (void)ref_kind;
     (void)station;
     (void)age;
+    const uint32_t now = millis();
     if (!missing(lat) && !missing(lon)) {
         g_fix.lat = lat;
         g_fix.lon = lon;
         g_fix.have_ll = true;
+        g_fix.ll_ms = now;
     }
     note_time(days, seconds);
-    if (!missing(alt)) {
+    /* Per message: a field that goes not-available must not keep its old value. */
+    g_fix.have_alt = !missing(alt);
+    if (g_fix.have_alt) {
         g_fix.alt_m = alt;
-        g_fix.have_alt = true;
     }
-    if (!missing(hdop)) {
+    g_fix.have_hdop = !missing(hdop);
+    if (g_fix.have_hdop) {
         g_fix.hdop = hdop;
     }
-    if (!missing(geoid)) {
+    g_fix.have_geoid = !missing(geoid);
+    if (g_fix.have_geoid) {
         g_fix.geoid_m = geoid;
     }
     g_fix.sats = N2kIsNA(sats) ? 0 : sats;
     g_fix.quality = gga_quality(method);
+    g_fix.have_gnss = true;
+    g_fix.gnss_ms = now;
 }
 
 static void handle_time(const tN2kMsg &msg)
@@ -818,10 +856,12 @@ void n2k_to_0183_handle(const tN2kMsg &msg)
 
 void n2k_to_0183_poll(void)
 {
-    if (!g_fix.have_ll && !g_fix.have_sog) {
+    const uint32_t now = millis();
+    const bool ll_ok = g_fix.have_ll && fresh(g_fix.ll_ms, now);
+    const bool sog_ok = g_fix.have_sog && fresh(g_fix.sog_ms, now);
+    if (!ll_ok && !sog_ok) {
         return;
     }
-    const uint32_t now = millis();
     if (g_fix.last_ms != 0 && (now - g_fix.last_ms) < kEmitMs) {
         return;
     }
@@ -829,7 +869,7 @@ void n2k_to_0183_poll(void)
 
     char hhmmss[16] = "";
     char date[8] = "";
-    if (g_fix.have_time) {
+    if (g_fix.have_time && fresh(g_fix.time_ms, now)) {
         const int sec = static_cast<int>(g_fix.seconds);
         if (sec >= 0 && sec < 86400) {
             snprintf(hhmmss, sizeof(hhmmss), "%02d%02d%02d.00", sec / 3600, (sec / 60) % 60, sec % 60);
@@ -841,30 +881,55 @@ void n2k_to_0183_poll(void)
         }
     }
 
-    char lat[16], lon[16];
+    char lat[16] = "", lon[16] = "";
     char ns = 'N', ew = 'E';
-    fmt_lat(g_fix.lat, lat, sizeof(lat), &ns);
-    fmt_lon(g_fix.lon, lon, sizeof(lon), &ew);
+    if (ll_ok) {
+        fmt_lat(g_fix.lat, lat, sizeof(lat), &ns);
+        fmt_lon(g_fix.lon, lon, sizeof(lon), &ew);
+    }
     const bool pos = lat[0] != '\0' && lon[0] != '\0';
-    const char status = (pos && g_fix.quality != 0) || pos ? 'A' : 'V';
+    /* 129029 can say "no fix". 129025 alone carries no quality, so trust it. */
+    const bool gnss_ok = g_fix.have_gnss && fresh(g_fix.gnss_ms, now);
+    const bool valid = pos && (!gnss_ok || g_fix.quality != 0);
+    const char status = valid ? 'A' : 'V';
+    const char mode = valid ? 'A' : 'N';
 
     char line[96];
+    char sog_s[12] = "", cog_s[12] = "";
+    if (sog_ok) {
+        snprintf(sog_s, sizeof(sog_s), "%.1f", g_fix.sog_kn);
+        snprintf(cog_s, sizeof(cog_s), "%.1f", g_fix.cog_deg);
+    }
     if (pos) {
-        snprintf(line, sizeof(line), "$GPRMC,%s,%c,%s,%c,%s,%c,%.1f,%.1f,%s,,,A", hhmmss, status, lat, ns,
-                 lon, ew, g_fix.have_sog ? g_fix.sog_kn : 0.0, g_fix.have_sog ? g_fix.cog_deg : 0.0, date);
+        snprintf(line, sizeof(line), "$GPRMC,%s,%c,%s,%c,%s,%c,%s,%s,%s,,,%c", hhmmss, status, lat, ns,
+                 lon, ew, sog_s, cog_s, date, mode);
         emit_sentence(line, sizeof(line));
 
-        snprintf(line, sizeof(line), "$GPGGA,%s,%s,%c,%s,%c,%d,%02d,%.1f,%.1f,M,%.1f,M,,", hhmmss, lat, ns,
-                 lon, ew, g_fix.quality > 0 ? g_fix.quality : 1, g_fix.sats,
-                 g_fix.hdop > 0.0 ? g_fix.hdop : 1.0, g_fix.have_alt ? g_fix.alt_m : 0.0, g_fix.geoid_m);
-        emit_sentence(line, sizeof(line));
+        /* GGA only with a live 129029: quality, satellites, and altitude come from it. */
+        if (gnss_ok) {
+            char hdop_s[12] = "";
+            char alt_s[16] = "";
+            char geoid_s[16] = "";
+            if (g_fix.have_hdop) {
+                snprintf(hdop_s, sizeof(hdop_s), "%.1f", g_fix.hdop);
+            }
+            if (g_fix.have_alt) {
+                snprintf(alt_s, sizeof(alt_s), "%.1f", g_fix.alt_m);
+            }
+            if (g_fix.have_geoid) {
+                snprintf(geoid_s, sizeof(geoid_s), "%.1f", g_fix.geoid_m);
+            }
+            snprintf(line, sizeof(line), "$GPGGA,%s,%s,%c,%s,%c,%d,%02d,%s,%s,M,%s,M,,", hhmmss, lat, ns,
+                     lon, ew, g_fix.quality, g_fix.sats, hdop_s, alt_s, geoid_s);
+            emit_sentence(line, sizeof(line));
+        }
 
-        snprintf(line, sizeof(line), "$GPGLL,%s,%c,%s,%c,%s,%c", lat, ns, lon, ew, hhmmss, status);
+        snprintf(line, sizeof(line), "$GPGLL,%s,%c,%s,%c,%s,%c,%c", lat, ns, lon, ew, hhmmss, status, mode);
         emit_sentence(line, sizeof(line));
     }
-    if (g_fix.have_sog) {
-        snprintf(line, sizeof(line), "$GPVTG,%.1f,T,,M,%.1f,N,%.1f,K,A", g_fix.cog_deg, g_fix.sog_kn,
-                 g_fix.sog_kn * 1.852);
+    if (sog_ok) {
+        snprintf(line, sizeof(line), "$GPVTG,%.1f,T,,M,%.1f,N,%.1f,K,%c", g_fix.cog_deg, g_fix.sog_kn,
+                 g_fix.sog_kn * 1.852, valid || !ll_ok ? 'A' : 'N');
         emit_sentence(line, sizeof(line));
     }
 }

@@ -112,17 +112,17 @@ The node does not transmit. The TWAI controller is installed in listen-only mode
 
 ### PGN to NMEA 0183
 
-Decoded in `firmware/src/n2k_to_0183.cpp` and pushed through the existing sentence sink, so TCP 10110 and BLE notify are unchanged. Instrument sentences are limited to about 1 Hz. AIS is forwarded as it arrives.
+Decoded in `firmware/src/n2k_to_0183.cpp` and pushed through the existing sentence sink, so TCP 10110 and BLE notify are unchanged. Instrument sentences are limited to about 1 Hz. AIS is forwarded as it arrives. Cached GNSS older than 3 s is dropped, not repeated, so a GPS that goes quiet stops sending a fix instead of freezing on its last one. Fields N2K reports as not available are left empty.
 
 | PGN | Contents | 0183 |
 |-----|----------|------|
 | 126992 | System time | time fields on RMC / GGA |
-| 129025 | Latitude / longitude | GLL, and the RMC / GGA cache |
+| 129025 | Latitude / longitude | RMC / GLL cache |
 | 129026 | COG / SOG | RMC / VTG cache |
-| 129029 | GNSS position | RMC, GGA, GLL |
+| 129029 | GNSS position | RMC, GGA, GLL. GGA is only sent while 129029 is live, since its quality, satellites, and altitude come from it. "No fix" makes RMC / GLL status `V`. |
 | 128267 | Depth | `$SDDPT` |
 | 128259 | Water speed | `$VWVHW` |
-| 130306 | Wind | `$WIMWV` (apparent as `R`, other references as `T`) |
+| 130306 | Wind | `$WIMWV` for apparent (`R`) and boat-referenced true (`T`). Ground-referenced wind (true or magnetic north) is `$WIMWD`, because it is a compass direction, not an angle off the bow. |
 | 127250 | Heading | `$HCHDG` if magnetic, otherwise `$HEHDT` |
 | 129038 | AIS Class A position | `!AIVDM` / `!AIVDO` type 1 |
 | 129039 | AIS Class B position | type 18 |
@@ -130,8 +130,10 @@ Decoded in `firmware/src/n2k_to_0183.cpp` and pushed through the existing senten
 | 129794 | AIS Class A static and voyage | type 5 |
 | 129809 | AIS Class B static, part A | type 24 A |
 | 129810 | AIS Class B static, part B | type 24 B |
-| 129808 | DSC call | `$CDDSE` plus a short hex dump |
+| 129808 | DSC call | `$PLMYC,DSC,<hex>` (raw payload, first 16 bytes) |
 
-`$CDDSE` is an expanded call, not an alarm. The firmware does not synthesize `$CDDSC`. A wrong distress sentence would look like a real distress to Navionics. Own-ship AIS (transceiver information "own" or a transmission) is `!AIVDO`; everything else is `!AIVDM`. Talkers are `GP`, `SD`, `WI`, `HC` / `HE`, `VW`, `AI`, and `CD`.
+DSC goes out as a proprietary `$PLMYC,DSC` sentence, not an alarm. The firmware does not synthesize `$CDDSC` or `$CDDSE`. A wrong distress sentence would look like a real distress to Navionics, and a `$CDDSE` with hex in its MMSI field would be misread by plotters. Third-party apps ignore `$P` sentences. Own-ship AIS (transceiver information "own" or a transmission) is `!AIVDO`; everything else is `!AIVDM`. Talkers are `GP`, `SD`, `WI`, `HC` / `HE`, `VW`, and `AI`.
+
+`make firmware-test` runs a host test on the Mac (no board): it feeds library-built PGNs through the converter, checks the 0183 sentences and checksums, checks the AIS packer against published `!AIVDM` reference sentences, and decodes every AIS sentence with an independent Python decoder (`firmware/test_host/ais_check.py`). It has not been run against a live NMEA 2000 bus.
 
 The FIX chip stays `SIM` on the simulator, `N2K` when listen-only is selected but no frame has arrived, and `BOAT` while frames are flowing. `PHONE` still means gated GNSS inject.

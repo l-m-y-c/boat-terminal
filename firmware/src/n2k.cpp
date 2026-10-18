@@ -147,7 +147,7 @@ bool N2kTwai::CANGetFrame(unsigned long &id, unsigned char &len, unsigned char *
     if (twai_receive(&message, 0) != ESP_OK) {
         return false;
     }
-    if (!message.extd) {
+    if (!message.extd || message.rtr) {
         return false;
     }
     id = message.identifier & 0x1fffffffu;
