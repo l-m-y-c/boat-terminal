@@ -1,6 +1,6 @@
 # 17 – Android Boat / BoatLink Roadmap
 
-**Status:** bench pairing works (QR + BLE OOB). BoatLink slices through the SoftAP gateway, TCP 10110, snapshots, and gated phone GNSS are in the firmware. Real RS485 listen is not.
+**Status:** bench pairing works (QR + BLE OOB). BoatLink slices through the SoftAP gateway, TCP 10110, snapshots, and gated phone GNSS are in the firmware. Listen-only NMEA 2000 conversion is in the firmware and does not transmit. The onboard CAN transceiver is not isolated, so it must not be tied to a backbone until an isolated interface is fitted. Real RS485 listen is not.
 **Audience:** humans and Grok Build. Prefer this file over chat history when implementing the instrument path.
 **Member-facing work** (login, maintenance, the on-boat copy) is [18 – Maintenance handoff](18-maintenance-handoff-and-auth.md), not this file. The 13.3″ E-Ink is a separate project.
 **Related:** [03 architecture](03-system-architecture.md), [05 NMEA](05-nmea-connectivity.md), [06 pairing](06-phone-app-and-pairing.md), [16 Tritium](16-related-projects-tritium.md).
@@ -16,10 +16,10 @@ The phone is the computer. The Waveshare is the boat’s I/O hub: it aggregates 
 | Piece | What exists | What does not |
 |-------|-------------|----------------|
 | Hardware | Waveshare ESP32-S3-Touch-LCD-7, 800×480 RGB + GT911, CAN + RS485 headers, TF slot, Wi-Fi + BLE 5 | Galvanic isolation, 12 V path, enclosure |
-| Firmware | LVGL v8 QR + helm, NimBLE peripheral, OOB pairing, **APSTA** SoftAP, SD FAT32, NMEA sim + parser, TCP/UDP 10110, `POST /snapshot`, gated `POST /inject` | Real RS485 listen, maintenance book on the card |
+| Firmware | LVGL v8 QR + helm, NimBLE peripheral, OOB pairing, **APSTA** SoftAP, SD FAT32, NMEA sim + parser, TCP/UDP 10110, `POST /snapshot`, gated `POST /inject`, NMEA 2000 listen-only → 0183 | Real RS485 listen, NMEA 2000 transmit, isolated CAN hardware |
 | BLE GATT | Service `6c6d7963-0001-4000-8000-000000000001`. Payload read `…000010`, session WRITE `…000020` (raw 16-byte OOB), status READ/NOTIFY `…000021`, NMEA notify `…000030` | Inject write on BLE (inject is HTTP, and only when the 7″ arms LOCAL) |
 | Mobile | Flutter Android, `lmyc://` deep link, Find terminals, raw16 OOB write, sentence console, BoatLink page (TCP, snapshot, GNSS) | Member login, maintenance UI |
-| Safety docs | Isolation + “instruments survive pairing expiry” are hard requirements | No live bus code yet — keep it that way |
+| Safety docs | Isolation + “instruments survive pairing expiry” are hard requirements | Listen-only N2K code is in tree. Do not connect the onboard TJA1051 to a backbone. No transmit. |
 
 Known constraints the next code must respect:
 
@@ -243,6 +243,8 @@ Acceptance: kitchen-table demo. Walk around the block. 7″ SOG/COG tracks the p
 
 Out of band with Board / insurance. Separate hardware note. Use `NMEA2000` library family. Convert a useful PGN set to 0183 so Slices A–E stay unchanged. No TX.
 
+Listen-only code is in `firmware/src/n2k.cpp`, `n2k_to_0183.cpp`, and `ais0183.cpp`. `NMEA_SOURCE` in `secrets.h` selects the simulator (`0`, default), NMEA 2000 (`1`), or simulator-until-frames (`2`). The phone path is still the 0183 sink (TCP 10110 and BLE notify). The onboard TJA1051 is not an isolated drop. See [05 – NMEA](05-nmea-connectivity.md) before any backbone connection.
+
 ---
 
 ## File ownership (do not dump everything in main.cpp)
@@ -254,6 +256,9 @@ Out of band with Board / insurance. Separate hardware note. Use `NMEA2000` libra
 | `firmware/src/nmea.*` | Parse / checksum / state. |
 | `firmware/src/nmea_io.*` | Bytes in/out of UART/RS485. |
 | `firmware/src/nmea_sim.*` | Fake talker. |
+| `firmware/src/n2k.*` | Listen-only TWAI port and the sim / N2K switch. No transmit. |
+| `firmware/src/n2k_to_0183.*` | PGN decode → NMEA 0183 sentences into the existing sink. |
+| `firmware/src/ais0183.*` | ITU-R M.1371 bit packer for `!AIVDM` / `!AIVDO`. |
 | `firmware/src/gateway.*` | TCP/UDP. |
 | `mobile/lib/main.dart` | Pairing UX. Extract BLE + NMEA into `mobile/lib/ble/` and `mobile/lib/nmea/` if main grows. |
 

@@ -45,6 +45,7 @@ extern "C" int lwip_hook_ip6_input(struct pbuf *p, struct netif *inp)
 #include "nmea.h"
 #include "nmea_io.h"
 #include "nmea_sim.h"
+#include "n2k.h"
 #include "nmea_state.h"
 #include "gateway.h"
 #include "hub_http.h"
@@ -70,6 +71,7 @@ static constexpr int kSdMosi = 11;
 static constexpr int kSdSck = 12;
 static constexpr int kSdMiso = 13;
 static constexpr int kSdCsExpander = 4; /* CH422G EXIO4 */
+static constexpr int kCanMuxExpander = 5; /* CH422G EXIO5: high = CAN, low = USB */
 
 static Board *g_board = nullptr;
 static lv_obj_t *g_wifi_value = nullptr;
@@ -260,6 +262,19 @@ static void set_label(lv_obj_t *label, const char *text)
     if (label != nullptr) {
         lv_label_set_text(label, text);
     }
+}
+
+/* GPIO19/20 are shared. EXIO5 high wires the TJA1051; low wires USB. */
+static void select_can(bool can_mode)
+{
+    auto *expander_dev = (g_board != nullptr) ? g_board->getIO_Expander() : nullptr;
+    auto *expander = (expander_dev != nullptr) ? expander_dev->getBase() : nullptr;
+    if (expander == nullptr) {
+        Serial.println("N2K: no IO expander, CAN mux unchanged");
+        return;
+    }
+    expander->pinMode(kCanMuxExpander, OUTPUT);
+    expander->digitalWrite(kCanMuxExpander, can_mode ? HIGH : LOW);
 }
 
 static void init_sd_card(void)
@@ -719,12 +734,10 @@ static void update_status_labels(void)
     if (inject_local_armed()) {
         snprintf(g_fix_msg, sizeof(g_fix_msg), "FIX: PHONE");
         paint_chip(g_chip_fix, 0x6B5420);
-    } else if (nmea_sim_enabled()) {
-        snprintf(g_fix_msg, sizeof(g_fix_msg), "FIX: SIM");
-        paint_chip(g_chip_fix, 0x6B5420);
     } else {
-        snprintf(g_fix_msg, sizeof(g_fix_msg), "FIX: BOAT");
-        paint_chip(g_chip_fix, 0x1E4D3A);
+        const char *tag = n2k_fix_tag();
+        snprintf(g_fix_msg, sizeof(g_fix_msg), "FIX: %s", tag);
+        paint_chip(g_chip_fix, strcmp(tag, "BOAT") == 0 ? 0x1E4D3A : 0x6B5420);
     }
     const char *link = pairing_status();
     if (pairing_is_confirmed()) {
@@ -784,7 +797,7 @@ static void update_status_labels(void)
     char heap[24];
     char wifi[48];
     char mtu[24];
-    char nmea[48];
+    char nmea[64];
 
     snprintf(conn, sizeof(conn), "%lu  R%lu W%lu",
              static_cast<unsigned long>(pairing_connect_count()),
@@ -795,10 +808,11 @@ static void update_status_labels(void)
     snprintf(mtu, sizeof(mtu), "%u  (%uB wr)",
              static_cast<unsigned>(pairing_mtu()),
              pairing_mtu() > 3 ? pairing_mtu() - 3 : 0);
-    snprintf(nmea, sizeof(nmea), "%lug/%lub %s TCP:%lu",
+    snprintf(nmea, sizeof(nmea), "%lug/%lub %s N2K:%lu TCP:%lu",
              static_cast<unsigned long>(nmea_good_count()),
              static_cast<unsigned long>(nmea_bad_count()),
-             nmea_sim_enabled() ? "FIX:SIM" : "live",
+             n2k_fix_tag(),
+             static_cast<unsigned long>(n2k_frame_count()),
              static_cast<unsigned long>(gateway_client_count()));
     update_wifi_line(wifi, sizeof(wifi));
 
@@ -1967,9 +1981,26 @@ void setup()
     nmea_set_sink(on_nmea_sentence, nullptr);
     pairing_init();
     start_wifi_client();
+    /* After Wi-Fi logs. N2K/AUTO may release USB Serial onto the CAN mux. */
+    n2k_init(select_can);
 
-    Serial.println("UI ready. BLE name is in the primary ADV packet; scan in the LMYC app.");
-    Serial.println("NMEA sim on (FIX: SIM) — RMC/GGA/DPT/MWV @ 1 Hz until a real talker appears.");
+    auto boot_log = [](const char *msg) {
+        if (n2k_using_uart()) {
+            Serial0.println(msg);
+        } else {
+            Serial.println(msg);
+        }
+    };
+    boot_log("UI ready. BLE name is in the primary ADV packet; scan in the LMYC app.");
+    if (n2k_source() == NMEA_SOURCE_N2K) {
+        boot_log(n2k_using_uart()
+                     ? "NMEA source N2K listen-only. Serial log is on the UART Type-C socket."
+                     : "NMEA source N2K selected, but CAN did not open. USB serial stays up.");
+    } else if (n2k_source() == NMEA_SOURCE_AUTO) {
+        boot_log("NMEA source AUTO — simulator until NMEA 2000 frames, then FIX: BOAT.");
+    } else {
+        boot_log("NMEA sim on (FIX: SIM) — RMC/GGA/DPT/MWV @ 1 Hz until a real talker appears.");
+    }
 }
 
 void loop()
@@ -1997,6 +2028,7 @@ void loop()
     }
 
     nmea_io_poll();
+    n2k_poll();
     if (nmea_sim_enabled() && nmea_io_quiet()) {
         nmea_sim_poll();
     }

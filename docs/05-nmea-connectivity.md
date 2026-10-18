@@ -88,8 +88,50 @@ For the first pilot boat, prefer a vessel that already has clean NMEA 0183 outpu
 - Use proper shielding and strain relief
 - Document the connection point and any LEN contribution for future maintainers
 
-## Library Support (for later implementation)
+## Waveshare listen-only NMEA 2000 (firmware)
 
-- NMEA 0183: multiple mature parsers exist for ESP-IDF / Arduino
-- NMEA 2000: `NMEA2000` library family is the de-facto open standard on ESP32
-- Several existing open projects already drive instrument displays on Waveshare ESP32-S3 hardware
+The ESP32-S3-Touch-LCD-7 has a TJA1051 on a PH2.0 header. That transceiver is **not isolated**. Do not connect it to a boat backbone. Fit an isolated CAN interface (or an isolated drop) between the header and the tee. The terminal stays powered from the boat 12 V (or USB on the bench), never from NET-S / NET-C. LEN for this node is 0: it does not draw bus power.
+
+| Pin / control | Function |
+|---------------|----------|
+| GPIO20 | CANTX into the TJA1051. Also USB D+ when the mux is on USB. |
+| GPIO19 | CANRX. Also USB D−. |
+| CH422G EXIO5 | High selects CAN. Low selects USB. Default build leaves it low. |
+| Jumper 13 | Onboard 120 Ω terminator. **Remove it** before any bus connection. One terminator at each physical end of the backbone is enough. |
+| UART Type-C (GPIO43 / GPIO44, CH343) | Serial log once CAN owns GPIO19/20. Native USB CDC is gone until reboot in practice. |
+
+`NMEA_SOURCE` in `firmware/src/secrets.h` (see `secrets.h.example`):
+
+- `0` — simulator. USB stays up. This is the bench and CI default.
+- `1` — NMEA 2000 listen-only.
+- `2` — simulator until a CAN frame arrives, then the bus.
+
+Runtime, on the live console: `NMEA SIM`, `NMEA N2K`, `NMEA AUTO`. Switching back to `SIM` releases the controller and tries to restore USB. If the USB socket does not return, reboot.
+
+The node does not transmit. The TWAI controller is installed in listen-only mode, and the library mode is `N2km_ListenOnly`. Preferred source address 22 is stored for the library and is **not** sent as an ISO Address Claim. `CANSendFrame` does not call `twai_transmit`. On bus-off the driver is uninstalled, GPIO20 is an input with pull-up (TJA1051 TXD high is recessive), and a later retry is still listen-only. Power loss leaves TXD high-Z; the transceiver's own TXD pull-up holds the bus recessive.
+
+### PGN to NMEA 0183
+
+Decoded in `firmware/src/n2k_to_0183.cpp` and pushed through the existing sentence sink, so TCP 10110 and BLE notify are unchanged. Instrument sentences are limited to about 1 Hz. AIS is forwarded as it arrives.
+
+| PGN | Contents | 0183 |
+|-----|----------|------|
+| 126992 | System time | time fields on RMC / GGA |
+| 129025 | Latitude / longitude | GLL, and the RMC / GGA cache |
+| 129026 | COG / SOG | RMC / VTG cache |
+| 129029 | GNSS position | RMC, GGA, GLL |
+| 128267 | Depth | `$SDDPT` |
+| 128259 | Water speed | `$VWVHW` |
+| 130306 | Wind | `$WIMWV` (apparent as `R`, other references as `T`) |
+| 127250 | Heading | `$HCHDG` if magnetic, otherwise `$HEHDT` |
+| 129038 | AIS Class A position | `!AIVDM` / `!AIVDO` type 1 |
+| 129039 | AIS Class B position | type 18 |
+| 129040 | AIS Class B extended position | type 19 |
+| 129794 | AIS Class A static and voyage | type 5 |
+| 129809 | AIS Class B static, part A | type 24 A |
+| 129810 | AIS Class B static, part B | type 24 B |
+| 129808 | DSC call | `$CDDSE` plus a short hex dump |
+
+`$CDDSE` is an expanded call, not an alarm. The firmware does not synthesize `$CDDSC`. A wrong distress sentence would look like a real distress to Navionics. Own-ship AIS (transceiver information "own" or a transmission) is `!AIVDO`; everything else is `!AIVDM`. Talkers are `GP`, `SD`, `WI`, `HC` / `HE`, `VW`, `AI`, and `CD`.
+
+The FIX chip stays `SIM` on the simulator, `N2K` when listen-only is selected but no frame has arrived, and `BOAT` while frames are flowing. `PHONE` still means gated GNSS inject.

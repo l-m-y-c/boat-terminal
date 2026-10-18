@@ -93,7 +93,10 @@ firmware/
 │   ├── nmea.*              # Line assembler + checksum
 │   ├── nmea_sim.*          # 1 Hz canned talker (FIX: SIM)
 │   ├── nmea_state.*        # Latest fix / depth / wind for the helm
-│   ├── nmea_io.*           # UART/RS485 (sim-only until slice-d)
+│   ├── nmea_io.*           # Console bytes, NMEA SIM|N2K|AUTO, later RS485
+│   ├── n2k.*               # NMEA 2000 listen-only (no transmit)
+│   ├── n2k_to_0183.*       # PGN → 0183 into the existing sink
+│   ├── ais0183.*           # !AIVDM / !AIVDO packer
 │   ├── gateway.*           # TCP/UDP 10110
 │   ├── hub_http.*          # GET /  POST /snapshot  POST /inject  /maintenance
 │   ├── snapshot.*          # 800×480 JPEG for the Chart page and book photos
@@ -138,6 +141,22 @@ With no RS485 talker, firmware emits `$GPRMC` / `$GPGGA` / `$GPDPT` / `$WIMWV` a
 - BLE notify `6c6d7963-0001-4000-8000-000000000030` (dropped if longer than ATT payload)
 
 **Instruments** is Depth, Speed, Course, and Wind, four tiles that fill the page. A list icon and a Wi-Fi icon at the top right open NMEA talkers and the link summary on their own screens. **Close** returns to the instruments. The full radio and boat detail stays on Diagnostics.
+
+### NMEA 2000 listen-only
+
+`NMEA_SOURCE` in `secrets.h` (copied from `secrets.h.example`):
+
+| Value | Behavior |
+|-------|----------|
+| `0` | Simulator. USB serial stays up. Default for the bench and for CI. |
+| `1` | Listen on the CAN header. No transmit. |
+| `2` | Simulator until a CAN frame arrives, then the bus. |
+
+On the serial console: `NMEA SIM`, `NMEA N2K`, or `NMEA AUTO`.
+
+The header is GPIO20 TX / GPIO19 RX through the onboard TJA1051. Those pins are also USB. CH422G EXIO5 high selects CAN, and the log moves to the UART Type-C socket (GPIO43/44). Remove the 120 Ω terminator jumper. Do not power the board from the NMEA 2000 network. The onboard transceiver is **not isolated** — do not connect it to a backbone. Details and the PGN → 0183 table are in [doc 05](../docs/05-nmea-connectivity.md).
+
+The FIX chip reads `SIM`, `N2K` (selected, no frames yet), `BOAT` (frames flowing), or `PHONE` (gated GNSS). Depth, speed, course, and wind tiles update from the converted sentences. Phones keep using TCP 10110 and the BLE NMEA notify.
 
 Pairing GATT is `…000020` / `…000021`. After OOB OK, `…000040` serves the SoftAP name, passphrase, and `192.168.4.1` so the phone can join. That read is `WAIT` until the pair succeeds.
 

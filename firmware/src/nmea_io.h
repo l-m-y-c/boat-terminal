@@ -1,6 +1,7 @@
 #pragma once
 
-/* Physical NMEA byte source. Slice A is sim-only until RS485 pins are confirmed. */
+/* Console bytes (USB, or UART0 once N2K owns the CAN mux) and, later, RS485.
+ * "NMEA SIM|N2K|AUTO" is taken here. Sentences starting with $ or ! go to the parser. */
 
 void nmea_io_init(void);
 void nmea_io_poll(void);
