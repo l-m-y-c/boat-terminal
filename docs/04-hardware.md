@@ -90,5 +90,5 @@ Exact per-boat production costing will be refined after the pilot.
 
 ## Enclosure Philosophy
 
-- **7" terminal:** Simple cabin enclosure, protection from knocks and condensation.
+- **7" terminal:** Simple cabin enclosure, protection from knocks and condensation. A candidate is the one-piece, wall-mount [Waveshare ESP32-S3-Touch-LCD-7 case](https://www.printables.com/model/1558735-waveshare-esp32-s3-touch-lcd-7-case) on Printables, for the original board (not the 7B). It covers the display board only. Openings for the N2K drop and USB-C lead are drilled after printing and sealed with Sikaflex-291. The N2K power parts need their own small box. See [19](19-n2k-backbone-install.md#2-parts-list) and [20](20-n2k-bus-power-supply.md).
 - **13.3" E-Ink:** Can be a sealed, weather-resistant unit with large battery if mounted where it has clear view from the cockpit. E-ink’s readability in daylight and low static power make this attractive.

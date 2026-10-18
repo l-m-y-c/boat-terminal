@@ -77,6 +77,7 @@ The system may still listen to waypoint and autopilot data and can push high-qua
 | [17 – Android Boat / BoatLink Roadmap](docs/17-android-boat-roadmap.md) | Phone-as-computer plan, protocol, and Grok Build slices |
 | [18 – Maintenance handoff & login](docs/18-maintenance-handoff-and-auth.md) | Agreed member loop: phone, Waveshare, lmyc.ca, on-boat copy |
 | [19 – NMEA 2000 Backbone Install](docs/19-n2k-backbone-install.md) | Backbone layout, parts, LEN budget, bench test, commissioning |
+| [20 – N2K Bus Power Supply](docs/20-n2k-bus-power-supply.md) | Off-the-shelf 12 V to 5 V supply for boat-terminal: wiring diagram, parts, bench test |
 
 ---
 

@@ -18,8 +18,8 @@ This is the first physical prototype unit for the LMYC Boat Terminal project.
 | TF card slot | Yes | Local log storage |
 | I2C + sensor header | Yes | Expansion |
 | Wi-Fi + BLE 5 | Yes | QR pairing + phone companion |
-| Official enclosure | No | Will need case or 3D print later |
-| Wide 7–36 V input | No | Needs external DC-DC from 12 V |
+| Official enclosure | No | Community 3D-print: [wall-mount case on Printables](https://www.printables.com/model/1558735-waveshare-esp32-s3-touch-lcd-7-case). See [19](19-n2k-backbone-install.md#2-parts-list). |
+| Wide 7–36 V input | No | Needs external DC-DC from 12 V. See [20](20-n2k-bus-power-supply.md). |
 | Galvanic isolation on CAN/RS485 | No | External isolation still required for real boat install |
 
 This board gives us a large usable screen and the native interfaces needed to start real NMEA work quickly.
@@ -123,7 +123,7 @@ This board is a **development prototype**, not the final production unit.
 We still plan to:
 - Add proper galvanic isolation for NMEA 2000
 - Provide a clean 12 V power path
-- Fit the unit into a suitable cabin enclosure
+- Fit the unit into a suitable cabin enclosure. A candidate is the one-piece, wall-mount [Printables case](https://www.printables.com/model/1558735-waveshare-esp32-s3-touch-lcd-7-case) for the original ESP32-S3-Touch-LCD-7 (not the 7B). It covers the display board only; openings for the N2K drop / CAN entry and the USB-C lead are drilled after printing and sealed with Sikaflex-291.
 - Keep the software architecture independent of the exact display size so we can move to other boards later if needed
 
 ---
