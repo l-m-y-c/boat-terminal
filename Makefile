@@ -10,7 +10,7 @@
 #   make devices            List serial + Flutter devices
 #   make clean              Clean both projects
 
-.PHONY: help all firmware flash monitor phone phone-get phone-run phone-reinstall \
+.PHONY: help all firmware firmware-test flash monitor phone phone-get phone-run phone-reinstall \
         pair-test devices doctor clean clean-firmware clean-phone
 
 FIRMWARE_DIR := firmware
@@ -23,6 +23,7 @@ help:
 	@echo ""
 	@echo "Firmware (ESP32 terminal)"
 	@echo "  make firmware          Build only"
+	@echo "  make firmware-test     Host test: N2K -> 0183 and AIS (no board)"
 	@echo "  make flash             Build + upload (press RESET after if needed)"
 	@echo "  make monitor           Serial monitor @ 115200"
 	@echo ""
@@ -53,6 +54,10 @@ help:
 
 firmware:
 	cd $(FIRMWARE_DIR) && pio run
+
+# Runs on the Mac. Needs the NMEA2000 library that `make firmware` fetches.
+firmware-test:
+	$(FIRMWARE_DIR)/test_host/run.sh
 
 flash:
 	cd $(FIRMWARE_DIR) && pio run -t upload
