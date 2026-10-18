@@ -154,7 +154,7 @@ With no RS485 talker, firmware emits `$GPRMC` / `$GPGGA` / `$GPDPT` / `$WIMWV` a
 
 On the serial console: `NMEA SIM`, `NMEA N2K`, or `NMEA AUTO`.
 
-The header is GPIO20 TX / GPIO19 RX through the onboard TJA1051. Those pins are also USB. CH422G EXIO5 high selects CAN, and the log moves to the UART Type-C socket (GPIO43/44). Remove the 120 Ω terminator jumper. Do not power the board from the NMEA 2000 network. The onboard transceiver is **not isolated** — do not connect it to a backbone. Details and the PGN → 0183 table are in [doc 05](../docs/05-nmea-connectivity.md).
+The header is GPIO20 TX / GPIO19 RX through the onboard TJA1051. Those pins are also USB. CH422G EXIO5 high selects CAN, and the log moves to the UART Type-C socket (GPIO43/44). Remove the 120 Ω terminator jumper. The onboard transceiver is **not isolated**. On the boat, power the board from the NMEA 2000 drop (NET-S / NET-C through a fuse and a 12 V to 5 V DC/DC into the USB socket) and wire nothing else to it: no USB lead, RS485 or other 12 V while it's on the bus. Flash and read the log off the bus. If the board must keep its own power, it needs an isolated CAN interface instead. Wiring is in [doc 19](../docs/19-n2k-backbone-install.md#4-boat-terminal-connection). Details and the PGN → 0183 table are in [doc 05](../docs/05-nmea-connectivity.md).
 
 The FIX chip reads `SIM`, `N2K` (selected, no frames yet), `BOAT` (frames flowing), or `PHONE` (gated GNSS). Depth, speed, course, and wind tiles update from the converted sentences. Phones keep using TCP 10110 and the BLE NMEA notify.
 

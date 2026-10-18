@@ -39,7 +39,7 @@ The goal is a seamless experience that strengthens the co-operative — not a se
 | **Solves real co-op problems** | Clean handovers, consistent logging, visible maintenance, boat knowledge that stays with the vessel |
 | **Keeps costs reasonable** | Hardware target in the low-to-mid hundreds per boat |
 | **Stays open and maintainable** | Designed so more than one volunteer can understand and improve it |
-| **Safety-conscious** | Isolated NMEA interfaces and clear failure modes are required |
+| **Safety-conscious** | Single-ground or isolated NMEA connections and clear failure modes are required |
 | **Respects professional tools** | Navigation and autopilot control remain with proper chartplotters |
 
 ---

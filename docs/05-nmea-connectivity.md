@@ -13,7 +13,7 @@ The terminal is designed to accept both major marine data standards:
 ### NMEA 2000
 - CAN-bus based, modern standard
 - Preferred on newer boats
-- Requires careful, isolated connection (see safety section below)
+- Requires a careful connection: bus-powered with a single ground, or isolated (see safety section below)
 - Mature open-source library ecosystem exists (`NMEA2000` + community ESP32 ports)
 
 ## What Data Should Be Displayed?
@@ -56,8 +56,10 @@ Connecting any new device to a boat’s NMEA 2000 backbone is the highest-risk p
 
 ### Mandatory Requirements Before Any NMEA 2000 Connection
 
-1. **Galvanic isolation**  
-   The terminal must not share a common ground or power reference with the NMEA 2000 bus. An isolated CAN transceiver (or a purpose-built marine NMEA 2000 interface module) is required. The ESP32’s onboard CAN controller alone is insufficient.
+1. **One ground, or isolation**  
+   The terminal must never join the bus ground to a second ground. There are two accepted ways to connect:
+   - **Bus-powered, single ground (primary).** The terminal takes all its power from NET-S / NET-C and has no other wired connection. Its only ground is the bus ground, so there is no ground loop and a non-isolated transceiver is acceptable. This is how bus-powered N2K sensors work.
+   - **Isolated (when self-powered).** If the terminal keeps its own 12 V supply, or any other wired link (RS485, USB, 0183), the CAN interface must be galvanically isolated: an isolated CAN transceiver or a certified marine gateway.
 
 2. **Clean failure mode**  
    If the terminal loses power, locks up, or is removed, it must drop off the bus cleanly. It must never load the bus, inject noise, or hold the bus in a dominant state.
@@ -68,8 +70,8 @@ Connecting any new device to a boat’s NMEA 2000 backbone is the highest-risk p
 4. **Certified or high-quality drop cable**  
    Prefer a proper Micro-C drop cable and tee rather than DIY wiring. This reduces installation errors and improves reliability.
 
-5. **No bus power draw from the backbone**  
-   The terminal should be powered from the boat’s 12 V system, not from the NMEA 2000 net power pair, unless a carefully designed and approved interface is used.
+5. **Bus power only as a single-ground node**  
+   A bus-powered terminal draws NET-S / NET-C through its own fuse and a DC/DC converter, declares its measured LEN (20 LEN, 1 A, maximum), and has no other wired connection while it is on the bus. Flashing and debugging happen off the bus or through an isolated USB adapter. A self-powered terminal must not draw bus power and must use the isolated method.
 
 ### Liability Note
 
@@ -77,7 +79,7 @@ Modifying a vessel’s instrument network has insurance and liability implicatio
 
 ### Pilot Recommendation
 
-For the first pilot boat, prefer a vessel that already has clean NMEA 0183 outputs or a well-documented NMEA 2000 backbone with available drop points. Avoid boats where the network is poorly understood or heavily loaded until the isolated interface has been proven.
+For the first pilot boat, prefer a vessel that already has clean NMEA 0183 outputs or a well-documented NMEA 2000 backbone with available drop points. Avoid boats where the network is poorly understood or heavily loaded until the boat-terminal connection has passed the bench test in [doc 19](19-n2k-backbone-install.md#5-bench-test-before-the-boat).
 
 ---
 
@@ -92,7 +94,12 @@ For the first pilot boat, prefer a vessel that already has clean NMEA 0183 outpu
 
 Building the boat backbone: see [19 – NMEA 2000 Backbone Install](19-n2k-backbone-install.md).
 
-The ESP32-S3-Touch-LCD-7 has a TJA1051 on a PH2.0 header. That transceiver is **not isolated**. Do not connect it to a boat backbone. Fit an isolated CAN interface (or an isolated drop) between the header and the tee. The terminal stays powered from the boat 12 V (or USB on the bench), never from NET-S / NET-C. LEN for this node is 0: it does not draw bus power.
+The ESP32-S3-Touch-LCD-7 has a TJA1051 on a PH2.0 header. That transceiver is **not isolated**, so how the board is powered decides how it may connect:
+
+- **Primary: bus-powered.** NET-S / NET-C through a 1 A fuse and a 12 V to 5 V DC/DC into the board's USB socket. CAN-H / CAN-L to the header. Nothing else wired to the board: no USB lead, no RS485, no 12 V, no battery. Wi-Fi and BLE only. Estimated LEN is 10 until it is measured. The board turns off when the bus power does.
+- **Alternative: isolated.** If the board must keep its own power or another wired link, fit an isolated CAN interface or a certified gateway between it and the tee. Never connect the bare TJA1051 to a backbone while the board has its own supply.
+
+Wiring, DC/DC choice, LEN and bench test are in [doc 19](19-n2k-backbone-install.md#4-boat-terminal-connection). The board only accepts 5 V (USB-C); it has no wide-range DC input.
 
 | Pin / control | Function |
 |---------------|----------|
@@ -100,7 +107,7 @@ The ESP32-S3-Touch-LCD-7 has a TJA1051 on a PH2.0 header. That transceiver is **
 | GPIO19 | CANRX. Also USB D−. |
 | CH422G EXIO5 | High selects CAN. Low selects USB. Default build leaves it low. |
 | Jumper 13 | Onboard 120 Ω terminator. **Remove it** before any bus connection. One terminator at each physical end of the backbone is enough. |
-| UART Type-C (GPIO43 / GPIO44, CH343) | Serial log once CAN owns GPIO19/20. Native USB CDC is gone until reboot in practice. |
+| UART Type-C (GPIO43 / GPIO44, CH343) | Serial log once CAN owns GPIO19/20. Native USB CDC is gone until reboot in practice. Bench only: on a bus-powered board, nothing is plugged in here. |
 
 `NMEA_SOURCE` in `firmware/src/secrets.h` (see `secrets.h.example`):
 
@@ -110,7 +117,7 @@ The ESP32-S3-Touch-LCD-7 has a TJA1051 on a PH2.0 header. That transceiver is **
 
 Runtime, on the live console: `NMEA SIM`, `NMEA N2K`, `NMEA AUTO`. Switching back to `SIM` releases the controller and tries to restore USB. If the USB socket does not return, reboot.
 
-The node does not transmit. The TWAI controller is installed in listen-only mode, and the library mode is `N2km_ListenOnly`. Preferred source address 22 is stored for the library and is **not** sent as an ISO Address Claim. `CANSendFrame` does not call `twai_transmit`. On bus-off the driver is uninstalled, GPIO20 is an input with pull-up (TJA1051 TXD high is recessive), and a later retry is still listen-only. Power loss leaves TXD high-Z; the transceiver's own TXD pull-up holds the bus recessive.
+The node does not transmit. The TWAI controller is installed in listen-only mode, and the library mode is `N2km_ListenOnly`. Preferred source address 22 is stored for the library and is **not** sent as an ISO Address Claim. `CANSendFrame` does not call `twai_transmit`. On bus-off the driver is uninstalled, GPIO20 is an input with pull-up (TJA1051 TXD high is recessive), and a later retry is still listen-only. Power loss leaves TXD high-Z; the transceiver's own TXD pull-up holds the bus recessive. On a bus-powered board a blown fuse or dead DC/DC also unpowers the TJA1051, and an unpowered TJA1051 disengages from the bus with zero load (NXP datasheet). Its TXD dominant time-out also releases the bus if TXD is ever stuck low.
 
 ### PGN to NMEA 0183
 
