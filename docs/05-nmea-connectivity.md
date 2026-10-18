@@ -90,6 +90,8 @@ For the first pilot boat, prefer a vessel that already has clean NMEA 0183 outpu
 
 ## Waveshare listen-only NMEA 2000 (firmware)
 
+Building the boat backbone: see [19 – NMEA 2000 Backbone Install](19-n2k-backbone-install.md).
+
 The ESP32-S3-Touch-LCD-7 has a TJA1051 on a PH2.0 header. That transceiver is **not isolated**. Do not connect it to a boat backbone. Fit an isolated CAN interface (or an isolated drop) between the header and the tee. The terminal stays powered from the boat 12 V (or USB on the bench), never from NET-S / NET-C. LEN for this node is 0: it does not draw bus power.
 
 | Pin / control | Function |
