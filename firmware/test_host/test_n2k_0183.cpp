@@ -54,6 +54,90 @@ static void expect_eq(const char *what, const std::string &got, const std::strin
     }
 }
 
+static void expect_true(const char *what, bool ok);
+static void expect_sentence(const char *prefix, const char *want_body);
+
+static void push_pgn(unsigned long pgn, unsigned char src)
+{
+    tN2kMsg m;
+    m.SetPGN(pgn);
+    m.Source = src;
+    m.AddByte(0);
+    n2k_to_0183_handle(m);
+}
+
+static void test_pgn_list(void)
+{
+    n2k_pgn_reset();
+    g_now = 100000;
+    push_pgn(128267, 12);
+    push_pgn(128267, 12);
+    g_now = 102500;
+    push_pgn(130306, 7);
+    push_pgn(130816, 4);
+
+    char lines[400];
+    n2k_pgn_lines(lines, sizeof(lines));
+    expect_eq("pgn lines", std::string(lines),
+              "130816 other  src 4  0s  1\n"
+              "130306 Wind  src 7  0s  1\n"
+              "128267 Depth  src 12  2s  2");
+
+    char names[80];
+    n2k_pgn_names(names, sizeof(names));
+    expect_eq("pgn names", std::string(names), "130816, Wind, Depth");
+
+    n2k_pgn_reset();
+    push_pgn(129026, 1);
+    push_pgn(129026, 35);
+    n2k_pgn_lines(lines, sizeof(lines));
+    expect_eq("same pgn, two sources", std::string(lines),
+              "129026 COG/SOG  src 35  0s  1\n"
+              "129026 COG/SOG  src 1  0s  1");
+
+    n2k_pgn_reset();
+    g_now = 200000;
+    for (unsigned long pgn = 1; pgn <= 9; ++pgn) {
+        push_pgn(pgn, 1);
+    }
+    n2k_pgn_lines(lines, sizeof(lines));
+    expect_true("newest pgn kept", strstr(lines, "9 other  src 1") == lines);
+    expect_true("oldest pgn dropped", strstr(lines, "1 other") == nullptr);
+
+    n2k_pgn_reset();
+    n2k_pgn_lines(lines, sizeof(lines));
+    n2k_pgn_names(names, sizeof(names));
+    expect_true("empty pgn lines", lines[0] == '\0');
+    expect_eq("empty pgn names", std::string(names), "none");
+}
+
+static void test_play(void)
+{
+    g_now = 900000;
+    g_out.clear();
+    n2k_play_demo();
+    expect_sentence("$SDDPT", "$SDDPT,42.0,0.0,");
+    expect_sentence("$WIMWV", "$WIMWV,40.0,R,18.0,N,A");
+    expect_sentence("$HEHDT", "$HEHDT,45.0,T");
+    expect_sentence("$GPVTG", "$GPVTG,90.0,T,,M,7.5,N,13.9,K,A");
+
+    n2k_pgn_reset();
+    g_now = 910000;
+    expect_true("play line 130816", n2k_play_line("PGN 130816 src=4 dead"));
+    char lines[80];
+    n2k_pgn_lines(lines, sizeof(lines));
+    expect_eq("play line seen", std::string(lines), "130816 other  src 4  0s  1");
+
+    expect_true("play line spaces", n2k_play_line("PGN 130816 src=4 de ad"));
+    n2k_pgn_lines(lines, sizeof(lines));
+    expect_eq("play line counted", std::string(lines), "130816 other  src 4  0s  2");
+
+    expect_true("reject junk", !n2k_play_line("PGN 130816 zz"));
+    expect_true("reject odd hex", !n2k_play_line("PGN 130816 src=4 dea"));
+    n2k_pgn_lines(lines, sizeof(lines));
+    expect_eq("reject leaves the list", std::string(lines), "130816 other  src 4  0s  2");
+}
+
 static void expect_true(const char *what, bool ok)
 {
     if (ok) {
@@ -386,7 +470,10 @@ int main(int argc, char **argv)
     expect_true("no sentence rejected by the 0183 checksum path", nmea_bad_count() == 0);
     if (g_file != nullptr) {
         fclose(g_file);
+        g_file = nullptr;
     }
+    test_pgn_list();
+    test_play();
     printf("host test: %d passed, %d failed (sentences in %s)\n", g_pass, g_fail, path);
     return g_fail == 0 ? 0 : 1;
 }

@@ -1,7 +1,8 @@
 #pragma once
 
-/* Console bytes (USB, or UART0 once N2K owns the CAN mux) and, later, RS485.
- * "NMEA SIM|N2K|AUTO" is taken here. Sentences starting with $ or ! go to the parser. */
+/* Console bytes on USB and on UART0 (CH343, GPIO43/44), and later RS485.
+ * "NMEA SIM|N2K|AUTO|DEMO" and "NMEA PGN ..." are taken here.
+ * Sentences starting with $ or ! go to the parser. */
 
 void nmea_io_init(void);
 void nmea_io_poll(void);

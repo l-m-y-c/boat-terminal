@@ -128,6 +128,20 @@ void nmea_state_note(const char *sentence)
             g_inst.have_depth = true;
             g_inst.updated_ms = now;
         }
+    } else if (strcmp(formatter, "VTG") == 0 && nfields > 5) {
+        /* $GPVTG,cog,T,,M,sog,N,kmh,K,mode. 129026 with no position emits
+         * VTG and not RMC, so course and speed have to come from here. */
+        float sog = 0, cog = 0;
+        if (parse_float(fields[5], &sog)) {
+            g_inst.sog_kn = sog;
+            g_inst.have_sog = true;
+            g_inst.updated_ms = now;
+        }
+        if (parse_float(fields[1], &cog)) {
+            g_inst.cog_deg = cog;
+            g_inst.have_cog = true;
+            g_inst.updated_ms = now;
+        }
     } else if (strcmp(formatter, "MWV") == 0 && nfields > 4) {
         float ang = 0, spd = 0;
         if (parse_float(fields[1], &ang) && parse_float(fields[3], &spd)) {

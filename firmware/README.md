@@ -93,7 +93,7 @@ firmware/
 │   ├── nmea.*              # Line assembler + checksum
 │   ├── nmea_sim.*          # 1 Hz canned talker (FIX: SIM)
 │   ├── nmea_state.*        # Latest fix / depth / wind for the helm
-│   ├── nmea_io.*           # Console bytes, NMEA SIM|N2K|AUTO, later RS485
+│   ├── nmea_io.*           # USB + UART0 console, NMEA SIM|N2K|AUTO|DEMO|PGN
 │   ├── n2k.*               # NMEA 2000 listen-only (no transmit)
 │   ├── n2k_to_0183.*       # PGN → 0183 into the existing sink
 │   ├── ais0183.*           # !AIVDM / !AIVDO packer
@@ -140,7 +140,7 @@ With no RS485 talker, firmware emits `$GPRMC` / `$GPGGA` / `$GPDPT` / `$WIMWV` a
 - TCP **10110** (CRLF) for `nc <ip> 10110` / Navionics later
 - BLE notify `6c6d7963-0001-4000-8000-000000000030` (dropped if longer than ATT payload)
 
-**Instruments** is Depth, Speed, Course, and Wind, four tiles that fill the page. A list icon and a Wi-Fi icon at the top right open NMEA talkers and the link summary on their own screens. **Close** returns to the instruments. The full radio and boat detail stays on Diagnostics.
+**Instruments** is Depth, Speed, Course, and Wind, four tiles that fill the page. The readings are Montserrat 96. Captions and units stay at 16. The crumb on that page adds the fix tag (`SIM`, `PLAY`, `N2K`, `BOAT`, or `PHONE`). A list icon and a Wi-Fi icon at the top right open NMEA detail and the link summary on their own screens. The Wi-Fi icon is amber while no phone is associated to the hotspot and green when one is. The link screen reads Bluetooth, the hotspot name, phones on it, NMEA listeners on TCP 10110, and Uplink for the terminal's own upstream network. The list shows the NMEA 2000 types seen on the bus, then the 0183 talkers. **Close** returns to the instruments. The full radio and boat detail stays on Diagnostics.
 
 ### NMEA 2000 listen-only
 
@@ -152,11 +152,11 @@ With no RS485 talker, firmware emits `$GPRMC` / `$GPGGA` / `$GPDPT` / `$WIMWV` a
 | `1` | Listen on the CAN header. No transmit. |
 | `2` | Simulator until a CAN frame arrives, then the bus. |
 
-On the serial console: `NMEA SIM`, `NMEA N2K`, or `NMEA AUTO`.
+On the serial console: `NMEA SIM`, `NMEA N2K`, `NMEA AUTO`, `NMEA DEMO`, or `NMEA PGN <number> [src=N] <hex>`. `DEMO` and `PGN` do not open CAN. They pause the 1 Hz simulator and feed reassembled PGNs through the same converter. The fix tag becomes `PLAY` and the source line `PLAY - CAN off`. `make n2k-demo` (or `python3 tools/n2k_play.py`) writes `NMEA DEMO` to the UART Type-C socket, the CH343 on GPIO43/44. Leave the cable in that socket. Opening the USB socket from the Mac resets the chip into download. The demo is depth 42.0 m, course 90°, speed 7.5 kn, wind 18 kn at 40° apparent, heading 45° true, and PGN 130816 so an unknown type is listed. `NMEA SIM` turns the simulator back on. `python3 tools/n2k_play.py PGN 130816 src=4 dead` sends one hex payload.
 
 The header is GPIO20 TX / GPIO19 RX through the onboard TJA1051. Those pins are also USB. CH422G EXIO5 high selects CAN, and the log moves to the UART Type-C socket (GPIO43/44). Remove the 120 Ω terminator jumper. The onboard transceiver is **not isolated**. On the boat, power the board from the NMEA 2000 drop (NET-S / NET-C through a fuse and a 12 V to 5 V DC/DC into the USB socket) and wire nothing else to it: no USB lead, RS485 or other 12 V while it's on the bus. Flash and read the log off the bus. If the board must keep its own power, it needs an isolated CAN interface instead. Wiring is in [doc 19](../docs/19-n2k-backbone-install.md#4-boat-terminal-connection). Details and the PGN → 0183 table are in [doc 05](../docs/05-nmea-connectivity.md).
 
-The FIX chip reads `SIM`, `N2K` (selected, no frames yet), `BOAT` (frames flowing), or `PHONE` (gated GNSS). Depth, speed, course, and wind tiles update from the converted sentences. Phones keep using TCP 10110 and the BLE NMEA notify.
+The FIX chip reads `SIM`, `PLAY` (canned PGNs, CAN still closed), `N2K` (selected, no frames yet), `BOAT` (frames flowing), or `PHONE` (gated GNSS). Tap that icon and the line under the bar adds the source (`SIM - CAN off`, `PLAY - CAN off`, `N2K - listening - 1482 frames`, `quiet`, or `bus-off`) and each PGN seen: number, name, source address, age, and how many. The same list is under the Instruments list icon. Diagnostics has the source on the NMEA row and the type names on the PGN row. With `NMEA_SOURCE` left unset the line stays `SIM - CAN off` and `No N2K messages`, and the tiles keep the simulator. Depth, speed, course, and wind update from the converted sentences. Phones keep using TCP 10110 and the BLE NMEA notify.
 
 Pairing GATT is `…000020` / `…000021`. After OOB OK, `…000040` serves the SoftAP name, passphrase, and `192.168.4.1` so the phone can join. That read is `WAIT` until the pair succeeds.
 

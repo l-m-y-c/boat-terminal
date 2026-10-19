@@ -10,7 +10,7 @@
 #   make devices            List serial + Flutter devices
 #   make clean              Clean both projects
 
-.PHONY: help all firmware firmware-test flash monitor phone phone-get phone-run phone-reinstall \
+.PHONY: help all firmware firmware-test n2k-demo flash monitor phone phone-get phone-run phone-reinstall \
         pair-test devices doctor clean clean-firmware clean-phone
 
 FIRMWARE_DIR := firmware
@@ -24,6 +24,7 @@ help:
 	@echo "Firmware (ESP32 terminal)"
 	@echo "  make firmware          Build only"
 	@echo "  make firmware-test     Host test: N2K -> 0183 and AIS (no board)"
+	@echo "  make n2k-demo          Send canned PGNs on the UART Type-C socket"
 	@echo "  make flash             Build + upload (press RESET after if needed)"
 	@echo "  make monitor           Serial monitor @ 115200"
 	@echo ""
@@ -58,6 +59,10 @@ firmware:
 # Runs on the Mac. Needs the NMEA2000 library that `make firmware` fetches.
 firmware-test:
 	$(FIRMWARE_DIR)/test_host/run.sh
+
+# CH343 UART socket only. Does not open the USB socket (that resets the chip).
+n2k-demo:
+	python3 tools/n2k_play.py
 
 flash:
 	cd $(FIRMWARE_DIR) && pio run -t upload

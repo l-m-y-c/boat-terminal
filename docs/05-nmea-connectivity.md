@@ -107,7 +107,7 @@ Wiring, DC/DC choice, LEN and bench test are in [doc 19](19-n2k-backbone-install
 | GPIO19 | CANRX. Also USB D−. |
 | CH422G EXIO5 | High selects CAN. Low selects USB. Default build leaves it low. |
 | Jumper 13 | Onboard 120 Ω terminator. **Remove it** before any bus connection. One terminator at each physical end of the backbone is enough. |
-| UART Type-C (GPIO43 / GPIO44, CH343) | Serial log once CAN owns GPIO19/20. Native USB CDC is gone until reboot in practice. Bench only: on a bus-powered board, nothing is plugged in here. |
+| UART Type-C (GPIO43 / GPIO44, CH343) | Console in every mode, including `NMEA DEMO`. Also the only log once CAN owns GPIO19/20. On a bus-powered board, nothing is plugged in here. |
 
 `NMEA_SOURCE` in `firmware/src/secrets.h` (see `secrets.h.example`):
 
@@ -115,7 +115,9 @@ Wiring, DC/DC choice, LEN and bench test are in [doc 19](19-n2k-backbone-install
 - `1` — NMEA 2000 listen-only.
 - `2` — simulator until a CAN frame arrives, then the bus.
 
-Runtime, on the live console: `NMEA SIM`, `NMEA N2K`, `NMEA AUTO`. Switching back to `SIM` releases the controller and tries to restore USB. If the USB socket does not return, reboot.
+Runtime, on the live console: `NMEA SIM`, `NMEA N2K`, `NMEA AUTO`, `NMEA DEMO`, or `NMEA PGN <number> [src=N] <hex>`. Switching back to `SIM` releases the controller and tries to restore USB. If the USB socket does not return, reboot.
+
+`DEMO` and `PGN` do not open CAN and do not change `NMEA_SOURCE`. They pause the simulator and inject reassembled PGNs into the converter, so the tiles can move before any copper is connected. The fix tag is `PLAY` and the source line is `PLAY - CAN off`. From the Mac, with the cable in the UART Type-C socket (CH343, not the socket marked USB), `make n2k-demo` sends `NMEA DEMO`: depth 42.0 m, course 90°, speed 7.5 kn, wind 18 kn at 40° apparent, heading 45° true, plus PGN 130816. Opening the USB socket resets the chip into the ROM download bootloader. `NMEA SIM` restores the 1 Hz simulator. `make firmware-test` checks the same demo sentences on the Mac with no board.
 
 The node does not transmit. The TWAI controller is installed in listen-only mode, and the library mode is `N2km_ListenOnly`. Preferred source address 22 is stored for the library and is **not** sent as an ISO Address Claim. `CANSendFrame` does not call `twai_transmit`. On bus-off the driver is uninstalled, GPIO20 is an input with pull-up (TJA1051 TXD high is recessive), and a later retry is still listen-only. Power loss leaves TXD high-Z; the transceiver's own TXD pull-up holds the bus recessive. On a bus-powered board a blown fuse or dead DC/DC also unpowers the TJA1051, and an unpowered TJA1051 disengages from the bus with zero load (NXP datasheet). Its TXD dominant time-out also releases the bus if TXD is ever stuck low.
 
@@ -145,4 +147,4 @@ DSC goes out as a proprietary `$PLMYC,DSC` sentence, not an alarm. The firmware 
 
 `make firmware-test` runs a host test on the Mac (no board): it feeds library-built PGNs through the converter, checks the 0183 sentences and checksums, checks the AIS packer against published `!AIVDM` reference sentences, and decodes every AIS sentence with an independent Python decoder (`firmware/test_host/ais_check.py`). It has not been run against a live NMEA 2000 bus.
 
-The FIX chip stays `SIM` on the simulator, `N2K` when listen-only is selected but no frame has arrived, and `BOAT` while frames are flowing. `PHONE` still means gated GNSS inject.
+The FIX chip stays `SIM` on the simulator, `PLAY` while canned PGNs are injected with CAN still closed, `N2K` when listen-only is selected but no frame has arrived, and `BOAT` while frames are flowing. `PHONE` still means gated GNSS inject. Tap the position icon for the source line and the PGNs heard so far (number, name, source address, age, count), including types the converter does not turn into 0183. Instruments shows the same list from its list icon, and the crumb on that page carries the fix tag. Diagnostics shows the source and the type names. `SIM - CAN off` and `No N2K messages` means this boot is still the simulator, which is what an unset `NMEA_SOURCE` does.

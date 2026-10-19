@@ -8,7 +8,9 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <strings.h>
 
 /* PGN → NMEA 0183. Phone-facing sentences stay 0183 so Navionics and the
  * LMYC app do not change.
@@ -150,6 +152,215 @@ static uint32_t g_depth_ms = 0;
 static uint32_t g_wind_ms = 0;
 static uint32_t g_hdg_ms = 0;
 static uint32_t g_stw_ms = 0;
+
+/* Eight newest (PGN, source) pairs for the cabin screen. A type this
+ * file does not convert is still stored, named "other", so a quiet tile
+ * can be told apart from a bus that is talking. */
+static constexpr int kSeenMax = 8;
+
+struct SeenPgn {
+    unsigned long pgn;
+    unsigned char src;
+    uint32_t count;
+    uint32_t last_ms;
+};
+
+static SeenPgn g_seen[kSeenMax];
+static int g_seen_n = 0;
+
+static const char *pgn_name(unsigned long pgn)
+{
+    switch (pgn) {
+    case 59392UL:
+        return "ISO Ack";
+    case 59904UL:
+        return "ISO Req";
+    case 60928UL:
+        return "Addr claim";
+    case 126992UL:
+        return "Time";
+    case 126993UL:
+        return "Heartbeat";
+    case 126996UL:
+        return "Product";
+    case 126998UL:
+        return "Config";
+    case 127245UL:
+        return "Rudder";
+    case 127250UL:
+        return "Heading";
+    case 127251UL:
+        return "Rate";
+    case 127257UL:
+        return "Attitude";
+    case 127488UL:
+        return "RPM";
+    case 127489UL:
+        return "Engine";
+    case 127505UL:
+        return "Fluid";
+    case 128259UL:
+        return "Water spd";
+    case 128267UL:
+        return "Depth";
+    case 128275UL:
+        return "Log";
+    case 129025UL:
+        return "Position";
+    case 129026UL:
+        return "COG/SOG";
+    case 129029UL:
+        return "GNSS";
+    case 129033UL:
+        return "Time/date";
+    case 129038UL:
+        return "AIS A";
+    case 129039UL:
+        return "AIS B";
+    case 129040UL:
+        return "AIS B ext";
+    case 129283UL:
+        return "XTE";
+    case 129284UL:
+        return "Nav";
+    case 129285UL:
+        return "Route";
+    case 129291UL:
+        return "Set/drift";
+    case 129539UL:
+        return "GNSS DOP";
+    case 129540UL:
+        return "GNSS sats";
+    case 129794UL:
+        return "AIS static";
+    case 129808UL:
+        return "DSC";
+    case 129809UL:
+        return "AIS B A";
+    case 129810UL:
+        return "AIS B B";
+    case 130306UL:
+        return "Wind";
+    case 130310UL:
+        return "Env";
+    case 130311UL:
+        return "Environ";
+    case 130312UL:
+        return "Temp";
+    case 130314UL:
+        return "Pressure";
+    case 130316UL:
+        return "Temp ext";
+    default:
+        return "other";
+    }
+}
+
+void n2k_pgn_reset(void)
+{
+    memset(g_seen, 0, sizeof(g_seen));
+    g_seen_n = 0;
+}
+
+static void note_seen(const tN2kMsg &msg)
+{
+    const uint32_t now = millis();
+    int slot = -1;
+    for (int i = 0; i < g_seen_n; ++i) {
+        if (g_seen[i].pgn == msg.PGN && g_seen[i].src == msg.Source) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        if (g_seen_n < kSeenMax) {
+            slot = g_seen_n++;
+        } else {
+            slot = kSeenMax - 1;
+        }
+        g_seen[slot].pgn = msg.PGN;
+        g_seen[slot].src = msg.Source;
+        g_seen[slot].count = 0;
+    }
+    g_seen[slot].count++;
+    g_seen[slot].last_ms = now;
+    const SeenPgn kept = g_seen[slot];
+    while (slot > 0) {
+        g_seen[slot] = g_seen[slot - 1];
+        --slot;
+    }
+    g_seen[0] = kept;
+}
+
+void n2k_pgn_lines(char *out, size_t cap)
+{
+    if (out == nullptr || cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    const uint32_t now = millis();
+    size_t used = 0;
+    for (int i = 0; i < g_seen_n; ++i) {
+        const SeenPgn &s = g_seen[i];
+        uint32_t age_s = (now - s.last_ms) / 1000UL;
+        if (age_s > 9999UL) {
+            age_s = 9999UL;
+        }
+        uint32_t n = s.count;
+        if (n > 99999UL) {
+            n = 99999UL;
+        }
+        char line[64];
+        snprintf(line, sizeof(line), "%lu %s  src %u  %lus  %lu", s.pgn, pgn_name(s.pgn),
+                 static_cast<unsigned>(s.src), static_cast<unsigned long>(age_s),
+                 static_cast<unsigned long>(n));
+        const size_t len = strlen(line);
+        const size_t extra = (used > 0 ? 1 : 0) + len;
+        if (used + extra + 1 > cap) {
+            break;
+        }
+        if (used > 0) {
+            out[used++] = '\n';
+        }
+        memcpy(out + used, line, len);
+        used += len;
+        out[used] = '\0';
+    }
+}
+
+void n2k_pgn_names(char *out, size_t cap)
+{
+    if (out == nullptr || cap == 0) {
+        return;
+    }
+    if (g_seen_n == 0) {
+        snprintf(out, cap, "none");
+        return;
+    }
+    size_t used = 0;
+    out[0] = '\0';
+    for (int i = 0; i < g_seen_n; ++i) {
+        const char *name = pgn_name(g_seen[i].pgn);
+        char piece[20];
+        if (strcmp(name, "other") == 0) {
+            snprintf(piece, sizeof(piece), "%lu", g_seen[i].pgn);
+        } else {
+            snprintf(piece, sizeof(piece), "%s", name);
+        }
+        const size_t piece_len = strlen(piece);
+        const size_t extra = (used > 0 ? 2 : 0) + piece_len;
+        if (used + extra + 1 > cap) {
+            break;
+        }
+        if (used > 0) {
+            out[used++] = ',';
+            out[used++] = ' ';
+        }
+        memcpy(out + used, piece, piece_len);
+        used += piece_len;
+        out[used] = '\0';
+    }
+}
 
 static int gga_quality(tN2kGNSSmethod method)
 {
@@ -801,8 +1012,116 @@ static void handle_time(const tN2kMsg &msg)
     note_time(days, seconds);
 }
 
+bool n2k_play_pgn(unsigned long pgn, uint8_t src, const uint8_t *data, size_t len)
+{
+    if (data == nullptr || len == 0 || len > static_cast<size_t>(tN2kMsg::MaxDataLen)) {
+        return false;
+    }
+    tN2kMsg msg;
+    msg.SetPGN(pgn);
+    msg.Source = src;
+    for (size_t i = 0; i < len; ++i) {
+        msg.AddByte(data[i]);
+    }
+    n2k_to_0183_handle(msg);
+    return true;
+}
+
+static int hex_nibble(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+bool n2k_play_line(const char *args)
+{
+    if (args == nullptr || strncasecmp(args, "PGN", 3) != 0) {
+        return false;
+    }
+    const char *p = args + 3;
+    while (*p == ' ' || *p == '\t') {
+        ++p;
+    }
+    char *end = nullptr;
+    const unsigned long pgn = strtoul(p, &end, 10);
+    if (end == p || pgn == 0 || pgn > 0x3ffffUL) {
+        return false;
+    }
+    p = end;
+    unsigned long src = 1;
+    while (*p == ' ' || *p == '\t') {
+        ++p;
+    }
+    if (strncasecmp(p, "src=", 4) == 0) {
+        p += 4;
+        src = strtoul(p, &end, 10);
+        if (end == p || src > 251UL) {
+            return false;
+        }
+        p = end;
+    }
+    uint8_t data[tN2kMsg::MaxDataLen];
+    int n = 0;
+    int hi = -1;
+    for (; *p != '\0'; ++p) {
+        if (*p == ' ' || *p == '\t') {
+            continue;
+        }
+        const int v = hex_nibble(*p);
+        if (v < 0) {
+            return false;
+        }
+        if (hi < 0) {
+            hi = v;
+            continue;
+        }
+        if (n >= tN2kMsg::MaxDataLen) {
+            return false;
+        }
+        data[n++] = static_cast<uint8_t>((hi << 4) | v);
+        hi = -1;
+    }
+    if (hi >= 0 || n == 0) {
+        return false;
+    }
+    return n2k_play_pgn(pgn, static_cast<uint8_t>(src), data, static_cast<size_t>(n));
+}
+
+void n2k_play_demo(void)
+{
+    tN2kMsg msg;
+    SetN2kPGN128267(msg, 1, 42.0, 0.0);
+    msg.Source = 12;
+    n2k_to_0183_handle(msg);
+
+    SetN2kPGN129026(msg, 1, N2khr_true, 90.0 / kRadToDeg, 7.5 / kMsToKn);
+    msg.Source = 35;
+    n2k_to_0183_handle(msg);
+
+    SetN2kPGN130306(msg, 1, 18.0 / kMsToKn, 40.0 / kRadToDeg, N2kWind_Apparent);
+    msg.Source = 7;
+    n2k_to_0183_handle(msg);
+
+    SetN2kPGN127250(msg, 1, 45.0 / kRadToDeg, N2kDoubleNA, N2kDoubleNA, N2khr_true);
+    msg.Source = 8;
+    n2k_to_0183_handle(msg);
+
+    const uint8_t other[] = {0xde, 0xad};
+    n2k_play_pgn(130816UL, 4, other, sizeof(other));
+    n2k_to_0183_poll();
+}
+
 void n2k_to_0183_handle(const tN2kMsg &msg)
 {
+    note_seen(msg);
     switch (msg.PGN) {
     case 126992L:
         handle_time(msg);

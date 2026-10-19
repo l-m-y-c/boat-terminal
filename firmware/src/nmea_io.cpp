@@ -6,12 +6,23 @@
 #include <Arduino.h>
 
 static uint32_t g_last_rx_ms = 0;
-static char g_cmd[40];
+/* A full 223-byte PGN as contiguous hex, plus "NMEA PGN <n> src=N ". */
+static char g_cmd[512];
 static size_t g_cmd_len = 0;
 static bool g_nmea_line = false;
+static bool g_cmd_overflow = false;
 
-/* Commands ("NMEA SIM|N2K|AUTO") share the console with pasted sentences.
- * The NMEA assembler ignores anything that does not start with '$' or '!'. */
+static void command_log(const char *msg)
+{
+    Serial0.println(msg);
+    if (!n2k_using_uart()) {
+        Serial.println(msg);
+    }
+}
+
+/* Commands share the console with pasted sentences.
+ * The NMEA assembler ignores anything that does not start with '$' or '!'.
+ * A line that does not fit is dropped whole, not run as a clipped command. */
 static void take_byte(int b)
 {
     if (b < 0) {
@@ -19,20 +30,29 @@ static void take_byte(int b)
     }
     const char c = static_cast<char>(b);
     if (c == '\r' || c == '\n') {
-        if (!g_nmea_line && g_cmd_len > 0) {
-            g_cmd[g_cmd_len] = '\0';
-            n2k_handle_command(g_cmd);
+        if (!g_nmea_line && g_cmd_overflow) {
+            command_log("NMEA command too long");
+        } else if (!g_nmea_line && g_cmd_len > 0) {
+            while (g_cmd_len > 0 &&
+                   (g_cmd[g_cmd_len - 1] == ' ' || g_cmd[g_cmd_len - 1] == '\t')) {
+                --g_cmd_len;
+            }
+            if (g_cmd_len > 0) {
+                g_cmd[g_cmd_len] = '\0';
+                n2k_handle_command(g_cmd);
+            }
         }
         const bool was_nmea = g_nmea_line;
         g_cmd_len = 0;
         g_nmea_line = false;
+        g_cmd_overflow = false;
         if (was_nmea) {
             const uint8_t byte = static_cast<uint8_t>(b);
             nmea_feed_bytes(&byte, 1);
         }
         return;
     }
-    if (g_cmd_len == 0 && !g_nmea_line && (c == '$' || c == '!')) {
+    if (g_cmd_len == 0 && !g_nmea_line && !g_cmd_overflow && (c == '$' || c == '!')) {
         g_nmea_line = true;
     }
     if (g_nmea_line) {
@@ -41,8 +61,14 @@ static void take_byte(int b)
         g_last_rx_ms = millis();
         return;
     }
+    if (g_cmd_overflow) {
+        return;
+    }
     if (g_cmd_len + 1 < sizeof(g_cmd)) {
         g_cmd[g_cmd_len++] = c;
+    } else {
+        g_cmd_overflow = true;
+        g_cmd_len = 0;
     }
 }
 
@@ -56,6 +82,12 @@ static void poll_stream(Stream &in)
 void nmea_io_init(void)
 {
     g_last_rx_ms = 0;
+    /* UART Type-C is the CH343 on UART0: TX GPIO43, RX GPIO44.
+     * begin(baud, config, rxPin, txPin). This socket does not reset the chip.
+     * The socket marked USB is native CDC; opening it from the Mac resets
+     * the chip into the ROM download bootloader. */
+    Serial0.begin(115200, SERIAL_8N1, 44, 43);
+    command_log("UART console: NMEA DEMO | NMEA PGN <num> [src=N] <hex> | NMEA SIM");
     /*
      * TODO(slice-d): Wire Waveshare RS485 UART + DE/RE once pins are confirmed
      * against the wiki / esp_panel_board_custom_conf.h. Do not drive a TX pin
@@ -66,11 +98,9 @@ void nmea_io_init(void)
 
 void nmea_io_poll(void)
 {
-    /* USB-CDC while the CAN mux is on USB. UART0 (CH343) once N2K owns
-     * GPIO19/20. Pasted sentences still feed the assembler. */
-    if (n2k_using_uart()) {
-        poll_stream(Serial0);
-    }
+    /* Both consoles. UART0 stays up when CAN later takes GPIO19/20.
+     * Pasted sentences still feed the assembler. */
+    poll_stream(Serial0);
     poll_stream(Serial);
 }
 

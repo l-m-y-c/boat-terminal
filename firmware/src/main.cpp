@@ -41,11 +41,13 @@ extern "C" int lwip_hook_ip6_input(struct pbuf *p, struct netif *inp)
 #include <lvgl.h>
 #include "lvgl_v8_port.h"
 #include "lmyc_logo.h"
+#include "montserrat_96.h"
 #include "pairing.h"
 #include "nmea.h"
 #include "nmea_io.h"
 #include "nmea_sim.h"
 #include "n2k.h"
+#include "n2k_to_0183.h"
 #include "nmea_state.h"
 #include "gateway.h"
 #include "hub_http.h"
@@ -87,6 +89,7 @@ static lv_obj_t *g_adv_value = nullptr;
 static lv_obj_t *g_heap_value = nullptr;
 static lv_obj_t *g_sd_value = nullptr;
 static lv_obj_t *g_nmea_value = nullptr;
+static lv_obj_t *g_pgn_value = nullptr;
 static lv_obj_t *g_hint_value = nullptr;
 static lv_obj_t *g_log_value = nullptr;
 
@@ -156,8 +159,8 @@ static lv_obj_t *g_chip_link = nullptr;
 static lv_obj_t *g_chip_qr = nullptr;
 static lv_obj_t *g_status_pop = nullptr;
 static lv_obj_t *g_status_pop_lbl = nullptr;
-static char g_fix_msg[48] = "FIX: SIM";
-static char g_link_msg[64] = "Advertising";
+static char g_fix_msg[512] = "FIX: SIM";
+static char g_link_msg[160] = "Advertising";
 static int g_status_open = 0;
 static bool g_qr_hold = false;
 static bool g_pair_seen = false;
@@ -167,6 +170,8 @@ static lv_obj_t *g_tile_cog = nullptr;
 static lv_obj_t *g_tile_wind = nullptr;
 static lv_obj_t *g_tile_wind_sub = nullptr;
 static lv_obj_t *g_talker_list = nullptr;
+static lv_obj_t *g_helm_n2k_status = nullptr;
+static lv_obj_t *g_helm_n2k = nullptr;
 static lv_obj_t *g_helm_nmea = nullptr;
 static lv_obj_t *g_helm_tcp = nullptr;
 static lv_obj_t *g_helm_ip = nullptr;
@@ -185,6 +190,8 @@ static lv_obj_t *g_photo_hint = nullptr;
 static lv_obj_t *g_chart_img = nullptr;
 static lv_timer_t *g_status_timer = nullptr;
 static bool g_gateway_started = false;
+static bool g_ap_up = false;
+static lv_obj_t *g_link_chip = nullptr;
 static bool g_showing_helm = false;
 static lv_obj_t *g_chart_next = nullptr;
 static lv_obj_t *g_rail_ear = nullptr;
@@ -214,7 +221,6 @@ static char g_wifi_ip[16] = "-";
 static char g_wifi_line[48] = "Starting...";
 static uint32_t g_wifi_backoff_ms = 1000;
 static uint32_t g_wifi_next_try_ms = 0;
-static int8_t g_wifi_rssi = 0;
 
 static void wifi_event_handler(void * /*arg*/, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
@@ -236,6 +242,7 @@ static void wifi_event_handler(void * /*arg*/, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
         snprintf(g_wifi_line, sizeof(g_wifi_line), "AP %s", g_ap_ssid);
         Serial.printf("Wi-Fi AP %s  %s\n", g_ap_ssid, g_ap_ip);
+        g_ap_up = true;
         if (!g_gateway_started) {
             gateway_begin();
             hub_http_start();
@@ -541,6 +548,8 @@ static void mark_crumb(lv_obj_t *btn, bool current)
     }
 }
 
+static char g_leaf[32] = "";
+
 static void refresh_chrome(void)
 {
     const bool on_detail = g_screen == Screen::Reports && maint_ui_showing_detail();
@@ -550,7 +559,9 @@ static void refresh_chrome(void)
     if (!in_reports) {
         switch (g_screen) {
         case Screen::Instruments:
-            leaf = "Instruments";
+            snprintf(g_leaf, sizeof(g_leaf), "Instruments %s",
+                     inject_local_armed() ? "PHONE" : n2k_fix_tag());
+            leaf = g_leaf;
             break;
         case Screen::Diagnostics:
             leaf = "Diagnostics";
@@ -605,17 +616,43 @@ static void paint_chip(lv_obj_t *chip, uint32_t bg)
     }
 }
 
-static void update_wifi_line(char *wifi, size_t cap)
+/* Stations associated to the boat hotspot. This is not the upstream STA. */
+static int hotspot_phones(void)
 {
-    if (g_wifi_got_ip) {
-        wifi_ap_record_t ap = {};
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-            g_wifi_rssi = ap.rssi;
-            snprintf(wifi, cap, "Up  %d dBm", static_cast<int>(ap.rssi));
-            return;
-        }
+    if (!g_ap_up) {
+        return 0;
     }
-    snprintf(wifi, cap, "%s", g_wifi_line);
+    wifi_sta_list_t list = {};
+    if (esp_wifi_ap_get_sta_list(&list) != ESP_OK) {
+        return 0;
+    }
+    return list.num;
+}
+
+static void note_link_uart(int phones)
+{
+    char line[140];
+    snprintf(line, sizeof(line), "LINK %s phones %d  nmea %lu  ble %s  uplink %s",
+             g_ap_ssid, phones,
+             static_cast<unsigned long>(gateway_client_count()),
+             pairing_status(),
+             g_wifi_got_ip ? g_wifi_ip : "none");
+    static char last[140] = "";
+    if (strcmp(line, last) == 0) {
+        return;
+    }
+    snprintf(last, sizeof(last), "%s", line);
+    /* UART Type-C stays up in simulator mode. USB Serial is a different port. */
+    Serial0.println(line);
+    Serial.println(line);
+}
+
+static void paint_hotspot_chip(int phones)
+{
+    if (g_link_chip == nullptr) {
+        return;
+    }
+    lv_obj_set_style_bg_color(g_link_chip, lv_color_hex(phones > 0 ? 0x1E4D3A : 0x6B5420), 0);
 }
 
 static void update_helm_labels(void)
@@ -674,24 +711,28 @@ static void update_helm_labels(void)
     }
     set_label(g_talker_list, talkers);
 
-    snprintf(buf, sizeof(buf), "%lu good  /  %lu bad",
-             static_cast<unsigned long>(nmea_good_count()),
-             static_cast<unsigned long>(nmea_bad_count()));
-    set_label(g_helm_nmea, buf);
-    snprintf(buf, sizeof(buf), "TCP 10110 - %lu client",
+    char n2k_status[80];
+    char n2k_lines[480];
+    n2k_status_line(n2k_status, sizeof(n2k_status));
+    n2k_pgn_lines(n2k_lines, sizeof(n2k_lines));
+    set_label(g_helm_n2k_status, n2k_status);
+    set_label(g_helm_n2k, n2k_lines[0] != '\0' ? n2k_lines : "No N2K messages");
+
+    char line[96];
+    const int phones = hotspot_phones();
+    snprintf(line, sizeof(line), "Bluetooth  %s",
+             pairing_is_confirmed() ? "Paired" : pairing_status());
+    set_label(g_helm_nmea, line);
+    snprintf(line, sizeof(line), "Hotspot  %s", g_ap_up ? g_ap_ssid : "starting");
+    set_label(g_helm_tcp, line);
+    snprintf(line, sizeof(line), "Phones on it  %d", phones);
+    set_label(g_helm_ip, line);
+    lv_obj_set_style_text_color(g_helm_ip, lv_color_hex(phones > 0 ? 0x3DDC97 : 0xE6C35C), 0);
+    snprintf(line, sizeof(line), "NMEA listeners  %lu",
              static_cast<unsigned long>(gateway_client_count()));
-    set_label(g_helm_tcp, buf);
-    char ip_line[40];
-    if (g_wifi_got_ip) {
-        snprintf(ip_line, sizeof(ip_line), "STA %s", g_wifi_ip);
-    } else {
-        snprintf(ip_line, sizeof(ip_line), "STA --");
-    }
-    set_label(g_helm_ip, ip_line);
-    char ap_line[40];
-    snprintf(ap_line, sizeof(ap_line), "AP %s", g_ap_ip);
-    set_label(g_helm_ap, ap_line);
-    set_label(g_helm_peer, pairing_peer());
+    set_label(g_helm_ap, line);
+    snprintf(line, sizeof(line), "Uplink  %s", g_wifi_got_ip ? g_wifi_ip : "none");
+    set_label(g_helm_peer, line);
     if (g_gnss_btn_lbl != nullptr) {
         lv_label_set_text(g_gnss_btn_lbl,
                           inject_local_armed() ? "GNSS LOCAL" : "GNSS off");
@@ -731,26 +772,36 @@ static void update_status_labels(void)
 {
     apply_pages();
 
-    if (inject_local_armed()) {
-        snprintf(g_fix_msg, sizeof(g_fix_msg), "FIX: PHONE");
-        paint_chip(g_chip_fix, 0x6B5420);
+    const bool phone = inject_local_armed();
+    const char *tag = phone ? "PHONE" : n2k_fix_tag();
+    paint_chip(g_chip_fix, (!phone && strcmp(tag, "BOAT") == 0) ? 0x1E4D3A : 0x6B5420);
+    char n2k_status[80];
+    char n2k_lines[480];
+    n2k_status_line(n2k_status, sizeof(n2k_status));
+    n2k_pgn_lines(n2k_lines, sizeof(n2k_lines));
+    if (n2k_lines[0] == '\0') {
+        snprintf(g_fix_msg, sizeof(g_fix_msg), "FIX: %s\n%s\nNo N2K messages", tag, n2k_status);
     } else {
-        const char *tag = n2k_fix_tag();
-        snprintf(g_fix_msg, sizeof(g_fix_msg), "FIX: %s", tag);
-        paint_chip(g_chip_fix, strcmp(tag, "BOAT") == 0 ? 0x1E4D3A : 0x6B5420);
+        snprintf(g_fix_msg, sizeof(g_fix_msg), "FIX: %s\n%s\n%s", tag, n2k_status, n2k_lines);
     }
     const char *link = pairing_status();
+    const int phones = hotspot_phones();
+    note_link_uart(phones);
+    paint_hotspot_chip(phones);
     if (pairing_is_confirmed()) {
-        snprintf(g_link_msg, sizeof(g_link_msg), "Paired");
         paint_chip(g_chip_link, 0x0E5C55);
     } else if (strcmp(link, "Advertising") == 0) {
-        snprintf(g_link_msg, sizeof(g_link_msg), "Advertising - scan the code to pair");
         paint_chip(g_chip_link, 0x1E3A5F);
     } else {
-        snprintf(g_link_msg, sizeof(g_link_msg), "%s", link);
         const bool bad = strcmp(link, "OOB mismatch") == 0 || strcmp(link, "ADV failed") == 0;
         paint_chip(g_chip_link, bad ? 0x6B5420 : 0x1E3A5F);
     }
+    snprintf(g_link_msg, sizeof(g_link_msg),
+             "%s\nHotspot %s\n%d phone%s on it\nNMEA listeners %lu",
+             pairing_is_confirmed() ? "Bluetooth paired" : link,
+             g_ap_up ? g_ap_ssid : "starting",
+             phones, phones == 1 ? "" : "s",
+             static_cast<unsigned long>(gateway_client_count()));
     update_home_status();
     apply_home_qr();
     if (g_status_open == 1) {
@@ -797,7 +848,8 @@ static void update_status_labels(void)
     char heap[24];
     char wifi[48];
     char mtu[24];
-    char nmea[64];
+    char nmea[80];
+    char pgns[80];
 
     snprintf(conn, sizeof(conn), "%lu  R%lu W%lu",
              static_cast<unsigned long>(pairing_connect_count()),
@@ -808,16 +860,14 @@ static void update_status_labels(void)
     snprintf(mtu, sizeof(mtu), "%u  (%uB wr)",
              static_cast<unsigned>(pairing_mtu()),
              pairing_mtu() > 3 ? pairing_mtu() - 3 : 0);
-    snprintf(nmea, sizeof(nmea), "%lug/%lub %s N2K:%lu TCP:%lu",
-             static_cast<unsigned long>(nmea_good_count()),
-             static_cast<unsigned long>(nmea_bad_count()),
-             n2k_fix_tag(),
-             static_cast<unsigned long>(n2k_frame_count()),
-             static_cast<unsigned long>(gateway_client_count()));
-    update_wifi_line(wifi, sizeof(wifi));
+    n2k_status_line(nmea, sizeof(nmea));
+    n2k_pgn_names(pgns, sizeof(pgns));
+    snprintf(wifi, sizeof(wifi), "%s  %d phone%s",
+             g_ap_up ? g_ap_ssid : "starting",
+             hotspot_phones(), hotspot_phones() == 1 ? "" : "s");
 
     set_label(g_wifi_value, wifi);
-    set_label(g_ip_value, g_wifi_ip);
+    set_label(g_ip_value, g_wifi_got_ip ? g_wifi_ip : "none");
     set_label(g_ble_value, pairing_status());
     set_label(g_mac_value, pairing_mac());
     set_label(g_peer_value, pairing_peer());
@@ -829,6 +879,7 @@ static void update_status_labels(void)
     set_label(g_heap_value, heap);
     set_label(g_sd_value, g_sd_summary.c_str());
     set_label(g_nmea_value, nmea);
+    set_label(g_pgn_value, pgns);
     set_label(g_hint_value, pairing_hint());
     set_label(g_log_value, pairing_event_log());
 }
@@ -923,7 +974,7 @@ static lv_obj_t *make_tile(lv_obj_t *parent, const char *caption, const char *un
     lv_obj_t *val = lv_label_create(tile);
     lv_label_set_text(val, "—");
     lv_obj_set_style_text_color(val, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(val, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_font(val, &lv_font_montserrat_96, 0);
     lv_obj_align(val, LV_ALIGN_CENTER, 0, 6);
     *value_out = val;
 
@@ -1099,18 +1150,19 @@ static void build_diag_page(lv_obj_t *parent)
     set_label(tid_value, LMYC_TERMINAL_ID);
     add_kv_row(boat, "BLE name", 88, &name_value);
     set_label(name_value, pairing_ble_name());
-    add_kv_row(boat, "Wi-Fi", 116, &g_wifi_value);
-    add_kv_row(boat, "IP", 144, &g_ip_value);
+    add_kv_row(boat, "Hotspot", 116, &g_wifi_value);
+    add_kv_row(boat, "Uplink", 144, &g_ip_value);
     add_kv_row(boat, "Heap", 172, &g_heap_value);
     add_kv_row(boat, "SD", 200, &g_sd_value);
-    add_kv_row(boat, "NMEA", 228, &g_nmea_value);
+    add_kv_row(boat, "NMEA", 228, &g_nmea_value, 230);
+    add_kv_row(boat, "PGN", 256, &g_pgn_value, 230);
 
     g_log_value = lv_label_create(boat);
     lv_label_set_text(g_log_value, "—");
     lv_obj_set_style_text_color(g_log_value, lv_color_hex(0x8FA3B8), 0);
     lv_obj_set_style_text_font(g_log_value, &lv_font_montserrat_12, 0);
-    lv_label_set_long_mode(g_log_value, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(g_log_value, 320);
+    lv_label_set_long_mode(g_log_value, LV_LABEL_LONG_DOT);
+    lv_obj_set_size(g_log_value, 320, 64);
     lv_obj_align(g_log_value, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 }
 
@@ -1194,23 +1246,32 @@ static void build_helm_page(lv_obj_t *parent)
     lv_obj_t *talk_btn = make_icon_chip(parent, 0x1E3A5F, LV_SYMBOL_LIST, on_helm_talk);
     lv_obj_set_pos(talk_btn, talk_x, icon_y);
     lv_obj_set_style_bg_color(talk_btn, lv_color_hex(0x1B4064), LV_STATE_PRESSED);
-    lv_obj_t *link_btn = make_icon_chip(parent, 0x1E3A5F, LV_SYMBOL_WIFI, on_helm_link);
+    g_link_chip = make_icon_chip(parent, 0x6B5420, LV_SYMBOL_WIFI, on_helm_link);
+    lv_obj_t *link_btn = g_link_chip;
     lv_obj_set_pos(link_btn, link_x, icon_y);
     lv_obj_set_style_bg_color(link_btn, lv_color_hex(0x1B4064), LV_STATE_PRESSED);
 
-    g_helm_talk = make_helm_sub(parent, "NMEA talkers");
-    helm_line(g_helm_talk, "ID      sentence      age      n", 0x8FA3B8, 64,
+    g_helm_talk = make_helm_sub(parent, "NMEA");
+    g_helm_n2k_status = helm_line(g_helm_talk, "SIM - CAN off", 0xFFFFFF, 52,
+                                  &lv_font_montserrat_16);
+    helm_line(g_helm_talk, "PGN    type    src    age    n", 0x8FA3B8, 80,
               &lv_font_montserrat_14);
-    g_talker_list = helm_line(g_helm_talk, "Waiting for sentences...", 0xE8F0F7, 92,
+    g_helm_n2k = helm_line(g_helm_talk, "No N2K messages", 0xE8F0F7, 104,
+                           &lv_font_montserrat_16);
+    helm_line(g_helm_talk, "0183    sentence    age    n", 0x8FA3B8, 286,
+              &lv_font_montserrat_14);
+    g_talker_list = helm_line(g_helm_talk, "Waiting for sentences...", 0xE8F0F7, 310,
                               &lv_font_montserrat_16);
 
     g_helm_link = make_helm_sub(parent, "Link");
-    g_helm_nmea = helm_line(g_helm_link, "0 good  /  0 bad", 0xFFFFFF, 72, &lv_font_montserrat_20);
-    g_helm_tcp = helm_line(g_helm_link, "TCP 10110 - 0 client", 0x8FA3B8, 128,
-                           &lv_font_montserrat_20);
-    g_helm_ip = helm_line(g_helm_link, "STA --", 0xFFFFFF, 184, &lv_font_montserrat_20);
-    g_helm_ap = helm_line(g_helm_link, "AP 192.168.4.1", 0x00B4A6, 240, &lv_font_montserrat_20);
-    g_helm_peer = helm_line(g_helm_link, "phone --", 0x8FA3B8, 296, &lv_font_montserrat_20);
+    g_helm_nmea = helm_line(g_helm_link, "Bluetooth  —", 0xFFFFFF, 64, &lv_font_montserrat_20);
+    g_helm_tcp = helm_line(g_helm_link, "Hotspot  starting", 0xFFFFFF, 112, &lv_font_montserrat_20);
+    g_helm_ip = helm_line(g_helm_link, "Phones on it  0", 0xE6C35C, 160, &lv_font_montserrat_20);
+    g_helm_ap = helm_line(g_helm_link, "NMEA listeners  0", 0xFFFFFF, 208, &lv_font_montserrat_20);
+    g_helm_peer = helm_line(g_helm_link, "Uplink  none", 0x8FA3B8, 256, &lv_font_montserrat_20);
+    helm_line(g_helm_link,
+              "Uplink is this terminal's own network. Phones on it is the boat hotspot.",
+              0x8FA3B8, 320, &lv_font_montserrat_16);
 }
 
 static void place_content(lv_obj_t *page)

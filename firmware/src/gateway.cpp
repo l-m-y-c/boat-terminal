@@ -6,7 +6,13 @@
 #include <cstring>
 #include <fcntl.h>
 
+#include "lwip/ip4_addr.h"
 #include "lwip/sockets.h"
+
+/* Chart apps on the hotspot listen for UDP. In AP+STA mode a socket bound
+ * to 0.0.0.0 sends broadcasts out the upstream interface, not to phones. */
+static constexpr const char *kHotspotIp = "192.168.4.1";
+static constexpr const char *kHotspotBroadcast = "192.168.4.255";
 
 static int g_listen_fd = -1;
 static int g_udp_fd = -1;
@@ -64,9 +70,12 @@ void gateway_begin(void)
         setsockopt(g_udp_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
         sockaddr_in uaddr = {};
         uaddr.sin_family = AF_INET;
-        uaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+        uaddr.sin_addr.s_addr = ipaddr_addr(kHotspotIp);
         uaddr.sin_port = htons(0);
-        bind(g_udp_fd, reinterpret_cast<sockaddr *>(&uaddr), sizeof(uaddr));
+        if (bind(g_udp_fd, reinterpret_cast<sockaddr *>(&uaddr), sizeof(uaddr)) != 0) {
+            Serial.printf("NMEA gateway: UDP bind %s failed errno=%d\n", kHotspotIp, errno);
+            close_fd(&g_udp_fd);
+        }
     }
 
     g_started = true;
@@ -133,7 +142,7 @@ static void udp_send(const char *line, size_t len)
     }
     sockaddr_in dest = {};
     dest.sin_family = AF_INET;
-    dest.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+    dest.sin_addr.s_addr = ipaddr_addr(kHotspotBroadcast);
     dest.sin_port = htons(kGatewayUdpPort);
     sendto(g_udp_fd, line, len, 0, reinterpret_cast<sockaddr *>(&dest), sizeof(dest));
     dest.sin_port = htons(kGatewayUdpAltPort);

@@ -58,6 +58,7 @@ static N2kCanSelectFn g_select = nullptr;
 static int g_source = NMEA_SOURCE_SIM;
 static bool g_stack_open = false;
 static bool g_uart = false;
+static bool g_play = false;
 static bool g_fault = false;
 static uint32_t g_frames = 0;
 static uint32_t g_last_frame_ms = 0;
@@ -66,9 +67,10 @@ static bool g_tx_attempted = false;
 
 static void n2k_log(const char *msg)
 {
-    if (g_uart) {
-        Serial0.println(msg);
-    } else {
+    /* UART0 (CH343) is up in every mode, so a Mac on the UART socket
+     * sees the ack. USB Serial is only alive while the mux is not on CAN. */
+    Serial0.println(msg);
+    if (!g_uart) {
         Serial.println(msg);
     }
 }
@@ -215,12 +217,22 @@ static bool open_stack(void)
     return g_n2k.reopen();
 }
 
+static void note_play(void)
+{
+    g_play = true;
+    /* The 1 Hz simulator would overwrite played values after the quiet window. */
+    if (g_source == NMEA_SOURCE_SIM) {
+        nmea_sim_set_enabled(false);
+    }
+}
+
 static void apply_source(int source)
 {
     if (source != NMEA_SOURCE_N2K && source != NMEA_SOURCE_AUTO) {
         source = NMEA_SOURCE_SIM;
     }
     g_source = source;
+    g_play = false;
     g_retry_ms = 0;
 
     if (source == NMEA_SOURCE_SIM) {
@@ -247,6 +259,7 @@ void n2k_init(N2kCanSelectFn select_can)
     g_source = NMEA_SOURCE;
     g_stack_open = false;
     g_uart = false;
+    g_play = false;
     g_fault = false;
     g_frames = 0;
     g_last_frame_ms = 0;
@@ -274,6 +287,9 @@ bool n2k_quiet(void)
 
 const char *n2k_fix_tag(void)
 {
+    if (g_play && g_source == NMEA_SOURCE_SIM) {
+        return "PLAY";
+    }
     if (g_source != NMEA_SOURCE_SIM && g_n2k.hardware_up() && !n2k_quiet()) {
         return "BOAT";
     }
@@ -284,6 +300,45 @@ const char *n2k_fix_tag(void)
         return "SIM";
     }
     return "N2K";
+}
+
+void n2k_status_line(char *out, size_t cap)
+{
+    if (out == nullptr || cap == 0) {
+        return;
+    }
+    if (g_play && g_source == NMEA_SOURCE_SIM) {
+        snprintf(out, cap, "PLAY - CAN off");
+        return;
+    }
+    const char *mode = "SIM";
+    if (g_source == NMEA_SOURCE_N2K) {
+        mode = "N2K";
+    } else if (g_source == NMEA_SOURCE_AUTO) {
+        mode = "AUTO";
+    }
+
+    const char *bus = "CAN off";
+    if (g_n2k.hardware_up()) {
+        if (g_frames == 0) {
+            bus = "listening, no frames";
+        } else if (n2k_quiet()) {
+            bus = "quiet";
+        } else {
+            bus = "listening";
+        }
+    } else if (g_fault) {
+        bus = "bus-off";
+    } else if (g_source != NMEA_SOURCE_SIM) {
+        bus = "CAN not open";
+    }
+
+    if (g_frames == 0) {
+        snprintf(out, cap, "%s - %s", mode, bus);
+    } else {
+        snprintf(out, cap, "%s - %s - %lu frames", mode, bus,
+                 static_cast<unsigned long>(g_frames));
+    }
 }
 
 bool n2k_handle_command(const char *line)
@@ -304,8 +359,20 @@ bool n2k_handle_command(const char *line)
         n2k_set_source(NMEA_SOURCE_N2K);
     } else if (strcasecmp(arg, "AUTO") == 0) {
         n2k_set_source(NMEA_SOURCE_AUTO);
+    } else if (strcasecmp(arg, "DEMO") == 0) {
+        n2k_play_demo();
+        note_play();
+        n2k_log("NMEA play: depth 42.0 m, COG 90, SOG 7.5 kn, wind 18 kn. "
+                "NMEA SIM restores the simulator.");
+    } else if (strncasecmp(arg, "PGN", 3) == 0) {
+        if (n2k_play_line(arg)) {
+            note_play();
+            n2k_log("NMEA play: PGN accepted");
+        } else {
+            n2k_log("NMEA PGN <number> [src=N] <hex>");
+        }
     } else {
-        n2k_log("NMEA command: SIM, N2K, or AUTO");
+        n2k_log("NMEA command: SIM, N2K, AUTO, DEMO, or PGN <number> [src=N] <hex>");
     }
     return true;
 }
@@ -334,7 +401,11 @@ static void note_bus_fault(void)
 
 void n2k_poll(void)
 {
+    /* SIM does not open CAN. Played PGNs still need the 1 Hz VTG refresh. */
     if (g_source == NMEA_SOURCE_SIM) {
+        if (g_play) {
+            n2k_to_0183_poll();
+        }
         return;
     }
     if (!g_n2k.hardware_up()) {

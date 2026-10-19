@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 /* NMEA input. 0 keeps the bench simulator and the USB socket.
@@ -18,7 +19,8 @@ void n2k_poll(void);
 int n2k_source(void);
 void n2k_set_source(int source);
 
-/* "NMEA SIM|N2K|AUTO". Returns true if the line was a command. */
+/* "NMEA SIM|N2K|AUTO|DEMO" or "NMEA PGN <number> [src=N] <hex>".
+ * DEMO and PGN do not open CAN. Returns true if the line was a command. */
 bool n2k_handle_command(const char *line);
 
 /* True once the USB/CAN mux is on the transceiver and logs go to UART0. */
@@ -29,5 +31,8 @@ bool n2k_quiet(void);
 
 uint32_t n2k_frame_count(void);
 
-/* "SIM", "N2K" (selected, no frames yet), or "BOAT". */
+/* "SIM", "PLAY" (canned PGNs, CAN still closed), "N2K" (selected, no frames yet), or "BOAT". */
 const char *n2k_fix_tag(void);
+
+/* "SIM - CAN off", "PLAY - CAN off", or "N2K - listening - 1482 frames". */
+void n2k_status_line(char *out, size_t cap);
