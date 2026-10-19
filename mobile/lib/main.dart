@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:app_links/app_links.dart';
@@ -10,6 +11,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'boat_wifi.dart';
 import 'boatlink.dart';
+import 'home_flow.dart';
 import 'maintenance_book.dart';
 import 'nmea_console.dart';
 
@@ -63,7 +65,8 @@ class _NearbyHit {
   String get name {
     final n = result.advertisementData.advName;
     if (n.isNotEmpty) return n;
-    if (result.device.platformName.isNotEmpty) return result.device.platformName;
+    if (result.device.platformName.isNotEmpty)
+      return result.device.platformName;
     return '(no name)';
   }
 
@@ -73,6 +76,41 @@ class _NearbyHit {
       result.advertisementData.serviceUuids.map((u) => u.toString()).toList();
 }
 
+class _LinkStatusRow extends StatelessWidget {
+  const _LinkStatusRow({required this.row});
+
+  final LinkRow row;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (row.mark) {
+      LinkMark.done => const Color(0xFF1E4D3A),
+      LinkMark.wait => const Color(0xFF8A6A12),
+      LinkMark.fail => const Color(0xFF8C2F2F),
+      LinkMark.idle => const Color(0xFF5C6B7A),
+    };
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          margin: const EdgeInsets.only(top: 5, right: 10),
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        SizedBox(
+          width: 108,
+          child: Text(
+            row.name,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+        Expanded(child: Text(row.value)),
+      ],
+    );
+  }
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -80,9 +118,15 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
+class _UiTick extends ChangeNotifier {
+  void ping() => notifyListeners();
+}
+
 class _HomePageState extends State<HomePage> {
   final _appLinks = AppLinks();
   final _pasteController = TextEditingController();
+  final _ui = _UiTick();
+  bool _connectQueued = false;
   StreamSubscription<Uri>? _linkSubscription;
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<BluetoothConnectionState>? _connSubscription;
@@ -102,20 +146,22 @@ class _HomePageState extends State<HomePage> {
   int _heardCount = 0;
   final Map<String, _NearbyHit> _nearby = {};
 
-  static final Guid kLmycService =
-      Guid('6c6d7963-0001-4000-8000-000000000001');
-  static final Guid kLmycPayloadChr =
-      Guid('6c6d7963-0001-4000-8000-000000000010');
-  static final Guid kLmycSessionChr =
-      Guid('6c6d7963-0001-4000-8000-000000000020');
-  static final Guid kLmycStatusChr =
-      Guid('6c6d7963-0001-4000-8000-000000000021');
-  static final Guid kLmycWifiChr =
-      Guid('6c6d7963-0001-4000-8000-000000000040');
+  static final Guid kLmycService = Guid('6c6d7963-0001-4000-8000-000000000001');
+  static final Guid kLmycPayloadChr = Guid(
+    '6c6d7963-0001-4000-8000-000000000010',
+  );
+  static final Guid kLmycSessionChr = Guid(
+    '6c6d7963-0001-4000-8000-000000000020',
+  );
+  static final Guid kLmycStatusChr = Guid(
+    '6c6d7963-0001-4000-8000-000000000021',
+  );
+  static final Guid kLmycWifiChr = Guid('6c6d7963-0001-4000-8000-000000000040');
 
   bool _wifiBusy = false;
   bool _wifiJoined = false;
   String _wifiDetail = '';
+  bool? _boatReachable;
 
   @override
   void initState() {
@@ -137,6 +183,18 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _ui.ping();
+  }
+
+  bool get _busy =>
+      _blePhase == BlePhase.scanning ||
+      _blePhase == BlePhase.connecting ||
+      _blePhase == BlePhase.confirming ||
+      _blePhase == BlePhase.checkingPermissions;
+
   void _handleIncomingLink(Uri uri) {
     if (uri.scheme != 'lmyc') return;
     final params = uri.queryParameters;
@@ -146,6 +204,20 @@ class _HomePageState extends State<HomePage> {
       _terminalId = params['tid'];
       _bleName = params['ble'];
       _oob = params['oob'];
+    });
+    _queueAutoConnect();
+  }
+
+  /// A QR scan opens the app. Connecting starts on its own.
+  void _queueAutoConnect() {
+    if (_connectQueued || _busy || _blePhase == BlePhase.paired) return;
+    if (_oob == null || _bleName == null) return;
+    _connectQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _connectQueued = false;
+      if (!mounted || _busy || _blePhase == BlePhase.paired) return;
+      if (_oob == null || _bleName == null) return;
+      _startScan(autoConnectExact: true);
     });
   }
 
@@ -207,8 +279,7 @@ class _HomePageState extends State<HomePage> {
       (u) => u == kLmycService,
     );
     final prefixMatch = names.any((n) => n.toUpperCase().startsWith('LMYC-'));
-    final exactMatch =
-        _bleName != null && names.any((n) => n == _bleName);
+    final exactMatch = _bleName != null && names.any((n) => n == _bleName);
     return exactMatch || prefixMatch || uuidMatch;
   }
 
@@ -287,10 +358,10 @@ class _HomePageState extends State<HomePage> {
             _blePhase = BlePhase.failed;
             _bleDetail = _nearby.isEmpty
                 ? 'Heard $_heardCount BLE device(s), 0 named LMYC-*.\n'
-                    'Terminal BLE line should read Advertising.\n'
-                    'Android Settings often hides LE-only devices — use this screen.'
+                      'Terminal BLE line should read Advertising.\n'
+                      'Android Settings often hides LE-only devices — use this screen.'
                 : 'Did not find "$_bleName". Nearby: '
-                    '${_nearby.values.map((h) => h.name).join(", ")}';
+                      '${_nearby.values.map((h) => h.name).join(", ")}';
           });
           return;
         }
@@ -298,7 +369,8 @@ class _HomePageState extends State<HomePage> {
           _device = found!.device;
           _rssi = found.rssi;
           _blePhase = BlePhase.connecting;
-          _bleDetail = 'Found ${found.advertisementData.advName.isNotEmpty ? found.advertisementData.advName : _bleName} '
+          _bleDetail =
+              'Found ${found.advertisementData.advName.isNotEmpty ? found.advertisementData.advName : _bleName} '
               '(${found.rssi} dBm) — connecting…';
         });
         await _connectAndConfirm(found.device);
@@ -309,7 +381,7 @@ class _HomePageState extends State<HomePage> {
         _blePhase = _nearby.isEmpty ? BlePhase.failed : BlePhase.idle;
         _bleDetail = _nearby.isEmpty
             ? 'Heard $_heardCount BLE device(s), 0 LMYC hits.\n'
-                'Confirm the terminal DIAGNOSTICS card says Advertising.'
+                  'Confirm the terminal DIAGNOSTICS card says Advertising.'
             : 'Found ${_nearby.length} LMYC terminal(s). Tap one to connect.';
       });
     } catch (e) {
@@ -332,7 +404,9 @@ class _HomePageState extends State<HomePage> {
         .timeout(const Duration(seconds: 10));
   }
 
-  Future<List<BluetoothService>> _discoverWithRetry(BluetoothDevice device) async {
+  Future<List<BluetoothService>> _discoverWithRetry(
+    BluetoothDevice device,
+  ) async {
     await Future<void>.delayed(const Duration(milliseconds: 1200));
 
     for (var attempt = 1; attempt <= 3; attempt++) {
@@ -369,7 +443,8 @@ class _HomePageState extends State<HomePage> {
         debugPrint('connectionState: $state');
         if (!mounted) return;
         if (state == BluetoothConnectionState.disconnected &&
-            (_blePhase == BlePhase.paired || _blePhase == BlePhase.confirming)) {
+            (_blePhase == BlePhase.paired ||
+                _blePhase == BlePhase.confirming)) {
           setState(() {
             _blePhase = BlePhase.idle;
             _bleDetail = 'Disconnected from terminal';
@@ -422,7 +497,9 @@ class _HomePageState extends State<HomePage> {
           final fromPayload = _oobFromPayloadBytes(payload);
           if (fromPayload != null) {
             _oob = fromPayload;
-            debugPrint('OOB from payload URI (${fromPayload.length} hex chars)');
+            debugPrint(
+              'OOB from payload URI (${fromPayload.length} hex chars)',
+            );
           }
         } catch (e) {
           debugPrint('payload read: $e');
@@ -453,8 +530,7 @@ class _HomePageState extends State<HomePage> {
         setState(() {
           _blePhase = BlePhase.idle;
           _sessionReply = 'WAIT (no OOB yet)';
-          _bleDetail =
-              'Link is up. Scan the terminal QR (or paste lmyc://) then tap Pair.';
+          _bleDetail = 'Link is up. Scan the terminal QR (or paste lmyc://) then tap Pair.';
         });
         return;
       }
@@ -529,12 +605,6 @@ class _HomePageState extends State<HomePage> {
           _bleDetail =
               'Paired with ${_boatId ?? "boat"}\nTerminal confirmed OOB.';
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Paired with ${_boatId ?? "terminal"}'),
-            backgroundColor: const Color(0xFF00B4A6),
-          ),
-        );
         await _bringUpBoatWifi(device);
       } else {
         final shown = _isSessionStatus(reply) ? reply : '(no status yet)';
@@ -570,6 +640,7 @@ class _HomePageState extends State<HomePage> {
         _sessionReply = null;
         if (!_wifiJoined) {
           _wifiDetail = '';
+          _boatReachable = null;
         }
       });
     }
@@ -583,7 +654,8 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _wifiBusy = true;
       _wifiJoined = false;
-      _wifiDetail = 'Reading the boat Wi-Fi over Bluetooth…';
+      _boatReachable = null;
+      _wifiDetail = 'Reading the boat Wi-Fi name over Bluetooth…';
     });
     try {
       final status = await Permission.nearbyWifiDevices.request();
@@ -606,8 +678,7 @@ class _HomePageState extends State<HomePage> {
       if (wifiChr == null) {
         if (!mounted) return;
         setState(() {
-          _wifiDetail =
-              'This terminal has no Wi-Fi bootstrap yet. Flash the new firmware and pair again.';
+          _wifiDetail = 'This terminal has no Wi-Fi bootstrap yet. Flash the new firmware and pair again.';
         });
         return;
       }
@@ -616,8 +687,7 @@ class _HomePageState extends State<HomePage> {
       if (info == null) {
         if (!mounted) return;
         setState(() {
-          _wifiDetail =
-              'The terminal did not share Wi-Fi yet. Pair again, then tap Join boat Wi-Fi.';
+          _wifiDetail = 'The terminal did not share Wi-Fi yet. Pair again, then tap Join boat Wi-Fi.';
         });
         return;
       }
@@ -632,9 +702,14 @@ class _HomePageState extends State<HomePage> {
       BoatSession.markJoined();
       if (!mounted) return;
       setState(() {
-        _wifiJoined = true;
-        _wifiDetail = 'On boat Wi-Fi ${info.ssid}. Read Book uses ${info.ip}.';
+        _wifiJoined = false;
+        _boatReachable = null;
+        _wifiDetail =
+            'Android is saving ${info.ssid} for the whole phone. '
+            'If Wi-Fi stays on your home network, open Wi-Fi settings and tap ${info.ssid}. '
+            'Checking ${info.ip}…';
       });
+      await _probeBoat(info.ip);
     } on PlatformException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -656,11 +731,35 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _probeBoat(String ip) async {
+    var open = false;
+    try {
+      final socket = await Socket.connect(
+        ip,
+        10110,
+        timeout: const Duration(seconds: 4),
+      );
+      socket.destroy();
+      open = true;
+    } catch (_) {
+      open = false;
+    }
+    if (!mounted) return;
+    setState(() {
+      _boatReachable = open;
+      _wifiJoined = open;
+      _wifiDetail = open
+          ? 'The phone is on the boat hotspot. Navionics and i-Boating can use $ip port 10110, and UDP 10110 and 2000.'
+          : 'The phone is not on the boat hotspot. Home Wi-Fi stays connected because it has internet. Open Wi-Fi settings and tap the boat network.';
+    });
+  }
+
   @override
   void dispose() {
     _linkSubscription?.cancel();
     _pasteController.dispose();
     _disconnect(resetPhase: false);
+    _ui.dispose();
     super.dispose();
   }
 
@@ -746,353 +845,420 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  double get _progress {
+    if (_wifiBusy) return 0.9;
+    switch (_blePhase) {
+      case BlePhase.checkingPermissions:
+        return 0.15;
+      case BlePhase.scanning:
+        return 0.4;
+      case BlePhase.connecting:
+        return 0.6;
+      case BlePhase.confirming:
+        return 0.78;
+      case BlePhase.paired:
+        return 1;
+      case BlePhase.failed:
+      case BlePhase.idle:
+        return _oob == null ? 0 : 0.08;
+    }
+  }
+
+  String get _stepTitle {
+    if (_wifiBusy) return 'Joining the boat Wi-Fi';
+    switch (_blePhase) {
+      case BlePhase.checkingPermissions:
+        return 'Asking for Bluetooth';
+      case BlePhase.scanning:
+        return _bleName == null
+            ? 'Looking for the terminal'
+            : 'Looking for $_bleName';
+      case BlePhase.connecting:
+        return 'Connecting';
+      case BlePhase.confirming:
+        return 'Confirming this boat';
+      case BlePhase.failed:
+        final line = _bleDetail.split('\n').first.trim();
+        return line.isEmpty ? 'Could not connect' : line;
+      case BlePhase.paired:
+        return 'Connected';
+      case BlePhase.idle:
+        return 'Scan the QR code on the terminal';
+    }
+  }
+
+  void _openStatus() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (routeContext) {
+          return ListenableBuilder(
+            listenable: _ui,
+            builder: (_, _) => _statusPage(routeContext),
+          );
+        },
+      ),
+    );
+  }
+
+  void _openNmea() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (routeContext) {
+          return ListenableBuilder(
+            listenable: _ui,
+            builder: (_, _) => NmeaInfoPage(
+              ssid: BoatSession.ssid,
+              ip: BoatSession.ip,
+              onBoat: _wifiJoined,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _openMaintenance() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const MaintenanceMenuPage()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final hasPairingData = _oob != null && _bleName != null;
-    final busy = _blePhase == BlePhase.scanning ||
-        _blePhase == BlePhase.connecting ||
-        _blePhase == BlePhase.confirming ||
-        _blePhase == BlePhase.checkingPermissions;
-    final isPaired = _blePhase == BlePhase.paired;
-    final hits = _nearby.values.toList()
-      ..sort((a, b) => b.rssi.compareTo(a.rssi));
+    if (_blePhase == BlePhase.paired && !_wifiBusy) {
+      return _buildMenu(context);
+    }
+    if (_blePhase == BlePhase.idle && _oob == null) {
+      return _buildWelcome(context);
+    }
+    return _buildConnect(context);
+  }
 
+  PreferredSizeWidget _bar(String title) {
+    return AppBar(
+      title: Text(title),
+      actions: [
+        TextButton(
+          onPressed: _openStatus,
+          child: const Text(
+            'Diagnostics',
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWelcome(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('LMYC Boat Terminal'),
-      ),
+      appBar: _bar('LMYC'),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+        child: Padding(
+          padding: const EdgeInsets.all(28),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 8),
-              Icon(
-                isPaired ? Icons.verified : Icons.sailing,
-                size: 64,
-                color: isPaired
-                    ? const Color(0xFF00B4A6)
-                    : const Color(0xFF001F3F),
-              ),
-              const SizedBox(height: 12),
+              const Spacer(),
+              const Icon(Icons.sailing, size: 64, color: Color(0xFF001F3F)),
+              const SizedBox(height: 20),
               Text(
-                isPaired ? 'Paired' : 'Lower Mainland Yacht Club',
+                'Scan the QR code',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: const Color(0xFF001F3F),
-                    ),
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF001F3F),
+                ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 8),
               Text(
-                isPaired
-                    ? 'You are connected to ${_boatId ?? "the terminal"}'
-                    : 'Companion app for boat check-in and terminal pairing',
+                'Point the camera at the code on the terminal. The app connects on its own.',
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.black54,
-                    ),
+                style: Theme.of(context).textTheme.bodyLarge
+                    ?.copyWith(color: Colors.black54, height: 1.4),
               ),
-              const SizedBox(height: 28),
-
-              Card(
-                elevation: 2,
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            'From QR code',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w600),
-                          ),
-                          const Spacer(),
-                          if (hasPairingData)
-                            _badge('Ready', const Color(0xFF00B4A6)),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      _statusRow('Boat', _boatId),
-                      _statusRow('Terminal', _terminalId),
-                      _statusRow('BLE name', _bleName),
-                      _statusRow('OOB data', _short(_oob, 18)),
-                      _statusRow('Version', _version),
-                      const SizedBox(height: 8),
-                      TextField(
-                        controller: _pasteController,
-                        decoration: const InputDecoration(
-                          labelText: 'Paste lmyc:// URI if camera does not open the app',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        minLines: 1,
-                        maxLines: 3,
-                        onSubmitted: (_) => _applyPastedUri(),
-                      ),
-                      const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: _applyPastedUri,
-                          child: const Text('Apply URI'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              Card(
-                elevation: 2,
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            'Bluetooth',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w600),
-                          ),
-                          const Spacer(),
-                          _badge(_phaseLabel, _phaseColor),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      if (_bleDetail.isNotEmpty)
-                        Text(
-                          _bleDetail,
-                          style: TextStyle(color: _phaseColor, height: 1.35),
-                        ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Heard $_heardCount BLE device(s) · ${_nearby.length} LMYC hit(s)',
-                        style: const TextStyle(color: Colors.black54),
-                      ),
-                      if (_rssi != null) ...[
-                        const SizedBox(height: 8),
-                        _statusRow('RSSI', '$_rssi dBm'),
-                      ],
-                      if (_sessionReply != null) ...[
-                        const SizedBox(height: 4),
-                        _statusRow('Session', _sessionReply),
-                      ],
-                      if (hits.isNotEmpty) ...[
-                        const SizedBox(height: 12),
-                        const Text(
-                          'Nearby terminals',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 6),
-                        ...hits.map((h) {
-                          final match = _bleName != null && h.name == _bleName;
-                          return ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            leading: Icon(
-                              Icons.bluetooth,
-                              color: match
-                                  ? const Color(0xFF00B4A6)
-                                  : const Color(0xFF001F3F),
-                            ),
-                            title: Text(h.name),
-                            subtitle: Text(
-                              '${h.rssi} dBm'
-                              '${h.uuids.isEmpty ? '' : ' · ${h.uuids.length} uuid'}',
-                            ),
-                            trailing: TextButton(
-                              onPressed: busy
-                                  ? null
-                                  : () {
-                                      setState(() {
-                                        _device = h.result.device;
-                                        _rssi = h.rssi;
-                                        _blePhase = BlePhase.connecting;
-                                        _bleDetail =
-                                            'Connecting to ${h.name}…';
-                                      });
-                                      _connectAndConfirm(h.result.device);
-                                    },
-                              child: const Text('Connect'),
-                            ),
-                          );
-                        }),
-                      ],
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: busy
-                              ? null
-                              : () => _startScan(autoConnectExact: false),
-                          icon: const Icon(Icons.radar),
-                          label: Text(busy ? 'Working…' : 'Find terminals'),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: busy
-                              ? null
-                              : isPaired
-                                  ? () => _disconnect()
-                                  : hasPairingData
-                                      ? () => _startScan(autoConnectExact: true)
-                                      : null,
-                          icon: Icon(
-                            isPaired
-                                ? Icons.link_off
-                                : Icons.bluetooth_searching,
-                          ),
-                          label: Text(
-                            isPaired
-                                ? 'Disconnect'
-                                : busy
-                                    ? 'Working…'
-                                    : 'Connect & pair',
-                          ),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF001F3F),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              if (isPaired) ...[
-                const SizedBox(height: 16),
-                Card(
-                  color: const Color(0xFF00B4A6).withValues(alpha: 0.08),
-                  elevation: 0,
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Bench pairing complete',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _wifiDetail.isEmpty
-                              ? 'OOB match confirmed. The app reads the boat '
-                                  'Wi-Fi over Bluetooth and Android asks you to join it.'
-                              : _wifiDetail,
-                          style: const TextStyle(height: 1.4, color: Colors.black87),
-                        ),
-                        if (!_wifiJoined) ...[
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            width: double.infinity,
-                            child: OutlinedButton.icon(
-                              onPressed: _device == null || _wifiBusy
-                                  ? null
-                                  : () => _bringUpBoatWifi(_device!),
-                              icon: const Icon(Icons.wifi),
-                              label: Text(_wifiBusy
-                                  ? 'Joining boat Wi-Fi…'
-                                  : 'Join boat Wi-Fi'),
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 12),
-                        SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: _device == null
-                                ? null
-                                : () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute<void>(
-                                        builder: (_) => NmeaConsolePage(
-                                          device: _device!,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                            icon: const Icon(Icons.ssid_chart),
-                            label: const Text('Sentences'),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF00B4A6),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                  builder: (_) => const BoatLinkPage(
-                                    suggestedIp: '192.168.4.1',
-                                  ),
-                                ),
-                              );
-                            },
-                            icon: const Icon(Icons.router_outlined),
-                            label: const Text('Navionics / snapshot'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const MaintenanceBookPage(
-                          suggestedIp: '192.168.4.1',
-                        ),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.build_outlined),
-                  label: const Text('Maintenance book'),
-                ),
-              ),
-
-              const SizedBox(height: 24),
-              Text(
-                'Find terminals works without a QR. Pairing still needs the QR OOB.\n'
-                'Watch the terminal DIAGNOSTICS card: Advertising → Connected → Paired.',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Colors.black45,
-                    ),
-              ),
+              const Spacer(),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildConnect(BuildContext context) {
+    final failed = _blePhase == BlePhase.failed;
+    return Scaffold(
+      appBar: _bar('LMYC'),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Spacer(),
+              Icon(
+                failed ? Icons.link_off : Icons.sailing,
+                size: 64,
+                color: failed ? Colors.red.shade700 : const Color(0xFF001F3F),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                failed ? 'Could not connect' : 'Connecting',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF001F3F),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _stepTitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 16, height: 1.4),
+              ),
+              const SizedBox(height: 28),
+              if (!failed)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(
+                    value: _progress,
+                    minHeight: 8,
+                    backgroundColor: const Color(0xFFE2E8F0),
+                    color: const Color(0xFF001F3F),
+                  ),
+                ),
+              if (failed) ...[
+                FilledButton(
+                  onPressed: _busy || _oob == null || _bleName == null
+                      ? null
+                      : () => _startScan(autoConnectExact: true),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF001F3F),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text('Try again'),
+                ),
+              ],
+              const Spacer(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMenu(BuildContext context) {
+    final boat = (_boatId == null || _boatId!.isEmpty) ? 'the boat' : _boatId!;
+    return Scaffold(
+      appBar: AppBar(title: Text(boat)),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
+          children: [
+            Text(
+              'Connected',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFF001F3F),
+              ),
+            ),
+            if (_boatReachable != true) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'The phone is not on the boat Wi-Fi yet. Open Boat status to join.',
+                style: TextStyle(color: Colors.black54, height: 1.4),
+              ),
+            ],
+            const SizedBox(height: 28),
+            HomeChoice(
+              icon: Icons.settings_ethernet,
+              title: 'NMEA connection',
+              subtitle: 'Wi-Fi, address, and ports',
+              onTap: _openNmea,
+            ),
+            HomeChoice(
+              icon: Icons.monitor_heart_outlined,
+              title: 'Boat status',
+              subtitle: 'Link and diagnostics',
+              onTap: _openStatus,
+            ),
+            HomeChoice(
+              icon: Icons.handyman_outlined,
+              title: 'Maintenance',
+              subtitle: 'Defects and the log',
+              onTap: _openMaintenance,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _statusPage(BuildContext routeContext) {
+    final hits = _nearby.values.toList()
+      ..sort((a, b) => b.rssi.compareTo(a.rssi));
+    final paired = _blePhase == BlePhase.paired;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Boat status')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Row(
+            children: [
+              Text(
+                paired ? 'Connected' : _phaseLabel,
+                style: Theme.of(routeContext).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF001F3F),
+                ),
+              ),
+              const Spacer(),
+              _badge(_phaseLabel, _phaseColor),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _boatId == null || _boatId!.isEmpty ? 'No boat yet' : _boatId!,
+            style: const TextStyle(color: Colors.black54),
+          ),
+          const SizedBox(height: 20),
+          for (final row in linkRows(
+            blePaired: paired,
+            info: BoatSession.info,
+            joining: _wifiBusy && !_wifiJoined,
+            joined: _wifiJoined,
+            reached: _boatReachable,
+          )) ...[_LinkStatusRow(row: row), const SizedBox(height: 8)],
+          if (_wifiDetail.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(_wifiDetail, style: const TextStyle(height: 1.4)),
+          ],
+          const SizedBox(height: 16),
+          _statusRow('Terminal', _terminalId),
+          _statusRow('Bluetooth', _bleName),
+          if (_rssi != null) _statusRow('Signal', '$_rssi dBm'),
+          if (_sessionReply != null) _statusRow('Session', _sessionReply),
+          if (_bleDetail.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              _bleDetail,
+              style: TextStyle(color: _phaseColor, height: 1.35),
+            ),
+          ],
+          const SizedBox(height: 16),
+          if (paired && _device != null)
+            FilledButton.icon(
+              onPressed: _wifiBusy ? null : () => _bringUpBoatWifi(_device!),
+              icon: const Icon(Icons.wifi),
+              label: Text(_wifiBusy ? 'Joining…' : 'Join boat Wi-Fi'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF001F3F),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          if (_device != null) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.of(routeContext).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => NmeaConsolePage(device: _device!),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.ssid_chart),
+              label: const Text('Sentences'),
+            ),
+          ],
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () {
+              Navigator.of(routeContext).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => BoatLinkPage(suggestedIp: BoatSession.ip),
+                ),
+              );
+            },
+            icon: const Icon(Icons.photo_outlined),
+            label: const Text('Chart snapshot'),
+          ),
+          if (!paired) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.of(routeContext).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        MaintenanceBookPage(suggestedIp: BoatSession.ip),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.build_outlined),
+              label: const Text('Maintenance book'),
+            ),
+          ],
+          if (paired) ...[
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () => _disconnect(),
+              child: const Text('Disconnect'),
+            ),
+          ],
+          const SizedBox(height: 12),
+          ExpansionTile(
+            title: const Text('Find a terminal'),
+            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            children: [
+              TextField(
+                controller: _pasteController,
+                decoration: const InputDecoration(
+                  labelText: 'Paste an lmyc:// code',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                minLines: 1,
+                maxLines: 3,
+                onSubmitted: (_) => _applyPastedUri(),
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _applyPastedUri,
+                  child: const Text('Apply'),
+                ),
+              ),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _busy
+                      ? null
+                      : () => _startScan(autoConnectExact: false),
+                  icon: const Icon(Icons.radar),
+                  label: Text(_busy ? 'Working…' : 'Find terminals'),
+                ),
+              ),
+              ...hits.map((h) {
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(h.name),
+                  subtitle: Text('${h.rssi} dBm'),
+                  trailing: TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () {
+                            setState(() {
+                              _device = h.result.device;
+                              _rssi = h.rssi;
+                              _blePhase = BlePhase.connecting;
+                              _bleDetail = 'Connecting to ${h.name}…';
+                            });
+                            _connectAndConfirm(h.result.device);
+                          },
+                    child: const Text('Connect'),
+                  ),
+                );
+              }),
+            ],
+          ),
+        ],
       ),
     );
   }

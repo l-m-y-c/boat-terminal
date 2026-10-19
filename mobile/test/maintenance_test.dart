@@ -28,30 +28,36 @@ void main() {
     expect(decodedSmall.height, 80);
   });
 
-  test('a photo note is sent with the JPEG and clipped to 120 characters', () async {
-    final seen = <http.Request>[];
-    final client = MockClient((request) async {
-      seen.add(request);
-      return http.Response('OK\n', 200);
-    });
-    final book = TerminalBook(host: '192.168.4.1', client: client);
-    const jpeg = [0xFF, 0xD8, 0xFF, 0xD9];
-    await book.putPhoto(
-      'aabbccddeeff0011',
-      1,
-      jpeg,
-      note: 'Sail is ripped, left hand side',
-    );
-    await book.putPhoto('aabbccddeeff0011', 2, jpeg, note: '   ');
-    await book.putPhoto('aabbccddeeff0011', 3, jpeg, note: 'n' * 150);
-    expect(seen[0].url.path, '/maintenance/photo');
-    expect(seen[0].url.queryParameters['id'], 'aabbccddeeff0011');
-    expect(seen[0].url.queryParameters['n'], '1');
-    expect(seen[0].url.queryParameters['note'], 'Sail is ripped, left hand side');
-    expect(seen[0].bodyBytes, jpeg);
-    expect(seen[1].url.queryParameters.containsKey('note'), isFalse);
-    expect(seen[2].url.queryParameters['note'], 'n' * 120);
-  });
+  test(
+    'a photo note is sent with the JPEG and clipped to 120 characters',
+    () async {
+      final seen = <http.Request>[];
+      final client = MockClient((request) async {
+        seen.add(request);
+        return http.Response('OK\n', 200);
+      });
+      final book = TerminalBook(host: '192.168.4.1', client: client);
+      const jpeg = [0xFF, 0xD8, 0xFF, 0xD9];
+      await book.putPhoto(
+        'aabbccddeeff0011',
+        1,
+        jpeg,
+        note: 'Sail is ripped, left hand side',
+      );
+      await book.putPhoto('aabbccddeeff0011', 2, jpeg, note: '   ');
+      await book.putPhoto('aabbccddeeff0011', 3, jpeg, note: 'n' * 150);
+      expect(seen[0].url.path, '/maintenance/photo');
+      expect(seen[0].url.queryParameters['id'], 'aabbccddeeff0011');
+      expect(seen[0].url.queryParameters['n'], '1');
+      expect(
+        seen[0].url.queryParameters['note'],
+        'Sail is ripped, left hand side',
+      );
+      expect(seen[0].bodyBytes, jpeg);
+      expect(seen[1].url.queryParameters.containsKey('note'), isFalse);
+      expect(seen[2].url.queryParameters['note'], 'n' * 120);
+    },
+  );
 
   test('a blank club API does not open a connection', () async {
     var calls = 0;
@@ -318,14 +324,17 @@ void main() {
     expect(result.message, ClubMaintenanceClient.unreachableMessage);
   });
 
-  testWidgets('the maintenance book is on the home screen before pairing', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(400, 2400));
+  testWidgets('the home screen stays quiet until a QR scan', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(400, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const LmycApp());
     await tester.pump();
-    expect(find.text('Maintenance book'), findsOneWidget);
+    expect(find.text('Scan the QR code'), findsOneWidget);
+    expect(find.text('Find terminals'), findsNothing);
+    expect(find.text('Maintenance book'), findsNothing);
+    await tester.tap(find.text('Diagnostics'));
+    await tester.pumpAndSettle();
+    expect(find.text('Boat status'), findsOneWidget);
     await tester.tap(find.text('Maintenance book'));
     await tester.pumpAndSettle();
     expect(find.text('Boat maintenance book'), findsOneWidget);
@@ -359,10 +368,7 @@ void main() {
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         expect(body['title'], 'Loose cotter pin');
         expect(body['category'], 'other');
-        return http.Response(
-          '{"id":"0011223344556677","sync":"pending"}',
-          200,
-        );
+        return http.Response('{"id":"0011223344556677","sync":"pending"}', 200);
       }
       return http.Response('no ${request.url}', 404);
     });

@@ -69,11 +69,73 @@ BoatWifiInfo? parseWifiBootstrap(String raw) {
   return BoatWifiInfo(ssid: ssid, psk: psk, ip: ip);
 }
 
+enum LinkMark { done, wait, fail, idle }
+
+/// One row on the phone's link card. The terminal shows the same facts.
+class LinkRow {
+  const LinkRow(this.name, this.value, this.mark);
+
+  final String name;
+  final String value;
+  final LinkMark mark;
+}
+
+List<LinkRow> linkRows({
+  required bool blePaired,
+  BoatWifiInfo? info,
+  required bool joining,
+  required bool joined,
+  bool? reached,
+}) {
+  final rows = <LinkRow>[
+    LinkRow(
+      'Bluetooth',
+      blePaired ? 'Paired' : 'Not paired',
+      blePaired ? LinkMark.done : LinkMark.idle,
+    ),
+    LinkRow(
+      'Boat Wi-Fi',
+      info == null ? 'Name not received' : info.ssid,
+      info == null ? LinkMark.wait : LinkMark.done,
+    ),
+  ];
+  if (joined) {
+    rows.add(LinkRow(
+      'Phone Wi-Fi',
+      'On ${info?.ssid ?? 'the boat hotspot'}',
+      LinkMark.done,
+    ));
+  } else if (joining) {
+    rows.add(const LinkRow(
+      'Phone Wi-Fi',
+      'Approve the Android prompt',
+      LinkMark.wait,
+    ));
+  } else if (info != null) {
+    rows.add(const LinkRow('Phone Wi-Fi', 'Not on the boat hotspot', LinkMark.fail));
+  } else {
+    rows.add(const LinkRow('Phone Wi-Fi', 'Waiting for the boat name', LinkMark.idle));
+  }
+  final ip = info?.ip ?? '192.168.4.1';
+  if (reached == true) {
+    rows.add(LinkRow('Reach boat', '$ip port 10110 is open', LinkMark.done));
+  } else if (reached == false) {
+    rows.add(LinkRow(
+      'Reach boat',
+      'No route to $ip. The phone is still on another Wi-Fi network.',
+      LinkMark.fail,
+    ));
+  } else {
+    rows.add(const LinkRow('Reach boat', 'Not checked yet', LinkMark.idle));
+  }
+  return rows;
+}
+
 class BoatWifi {
   static const _channel = MethodChannel('ca.lmyc/boat_wifi');
 
-  /// Asks Android to join [ssid]. The system shows a Connect prompt.
-  /// On success this app's sockets use that network.
+  /// Saves [ssid] as a normal Wi-Fi network for the whole phone.
+  /// Android shows its own prompt. A phone already on home Wi-Fi must tap the boat network.
   static Future<void> join({required String ssid, required String psk}) async {
     await _channel.invokeMethod<void>('connect', {
       'ssid': ssid,

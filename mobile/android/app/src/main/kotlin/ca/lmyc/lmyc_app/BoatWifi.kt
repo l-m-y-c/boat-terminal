@@ -1,28 +1,21 @@
 package ca.lmyc.lmyc_app
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
-import android.net.wifi.WifiNetworkSpecifier
+import android.content.Intent
+import android.net.wifi.WifiManager
+import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
+import android.provider.Settings
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Joins the boat SoftAP for this app only. Android shows one Connect prompt.
- * The boat network has no internet, so the request drops that capability and
- * the process is bound to the resulting network. Other apps keep their own route.
+ * Saves the boat hotspot as a normal Wi-Fi network for the whole phone.
+ * Android will not leave a network that has internet for one that does not,
+ * so a phone already on home Wi-Fi must tap the boat network in Wi-Fi settings.
+ * A process-only join would leave Navionics and i-Boating unable to see it.
  */
 object BoatWifi : MethodChannel.MethodCallHandler {
-    private val main = Handler(Looper.getMainLooper())
-    private var callback: ConnectivityManager.NetworkCallback? = null
-    private var joinedSsid: String? = null
-
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         val activity = currentContext ?: run {
             result.error("wifi", "The app is not ready to join Wi-Fi.", null)
@@ -33,10 +26,6 @@ object BoatWifi : MethodChannel.MethodCallHandler {
                 val ssid = call.argument<String>("ssid")?.trim().orEmpty()
                 val psk = call.argument<String>("psk") ?: ""
                 connect(activity, ssid, psk, result)
-            }
-            "release" -> {
-                release(activity)
-                result.success(null)
             }
             else -> result.notImplemented()
         }
@@ -64,81 +53,37 @@ object BoatWifi : MethodChannel.MethodCallHandler {
             return
         }
         val app = context.applicationContext
-        if (joinedSsid == ssid && callback != null) {
-            result.success(null)
-            return
-        }
-        val cm = app.getSystemService(ConnectivityManager::class.java)
-        release(app)
-
-        val specifier = WifiNetworkSpecifier.Builder()
+        val suggestion = WifiNetworkSuggestion.Builder()
             .setSsid(ssid)
             .setWpa2Passphrase(psk)
+            .setIsInitialAutojoinEnabled(true)
             .build()
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .setNetworkSpecifier(specifier)
-            .build()
-
-        val pending = AtomicBoolean(true)
-        val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                main.post {
-                    val bound = cm.bindProcessToNetwork(network)
-                    if (!pending.compareAndSet(true, false)) {
-                        return@post
-                    }
-                    if (!bound) {
-                        release(app)
-                        result.error(
-                            "wifi",
-                            "Android joined $ssid but this app could not use it.",
-                            null,
-                        )
-                        return@post
-                    }
-                    joinedSsid = ssid
-                    result.success(null)
-                }
-            }
-
-            override fun onUnavailable() {
-                main.post {
-                    if (!pending.compareAndSet(true, false)) {
-                        return@post
-                    }
-                    release(app)
-                    result.error(
-                        "wifi",
-                        "Android did not join $ssid. Tap Connect on the system prompt. " +
-                            "The network has no internet; the book still uses 192.168.4.1.",
-                        null,
-                    )
-                }
-            }
+        val wifi = app.getSystemService(WifiManager::class.java)
+        val status = wifi.addNetworkSuggestions(listOf(suggestion))
+        if (status != WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS &&
+            status != WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_DUPLICATE
+        ) {
+            result.error("wifi", "Android did not save $ssid for this phone.", null)
+            return
         }
-        callback = cb
-        try {
-            cm.requestNetwork(request, cb, 60_000)
-        } catch (e: SecurityException) {
-            release(app)
-            result.error(
-                "wifi",
-                "Android blocked the Wi-Fi request. Allow nearby Wi-Fi for LMYC and try again.",
-                null,
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val intent = Intent(Settings.ACTION_WIFI_ADD_NETWORKS)
+            intent.putParcelableArrayListExtra(
+                Settings.EXTRA_WIFI_NETWORK_LIST,
+                arrayListOf(suggestion),
             )
-        } catch (e: RuntimeException) {
-            release(app)
-            result.error("wifi", "Could not ask Android to join $ssid.", null)
+            try {
+                context.startActivity(intent)
+            } catch (_: RuntimeException) {
+                result.error(
+                    "wifi",
+                    "Saved $ssid, but Android did not show the Wi-Fi prompt. " +
+                        "Open Wi-Fi settings and tap $ssid.",
+                    null,
+                )
+                return
+            }
         }
-    }
-
-    private fun release(context: Context) {
-        val cm = context.getSystemService(ConnectivityManager::class.java)
-        callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
-        callback = null
-        joinedSsid = null
-        runCatching { cm.bindProcessToNetwork(null) }
+        result.success(null)
     }
 }
