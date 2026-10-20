@@ -28,6 +28,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+# The terminal <-> phone contract. firmware/src/protocol.h and
+# mobile/lib/protocol.dart carry the same values, and tools/check_protocol.py
+# fails CI when they drift. Change all three.
 CATEGORIES = {
     "cleanliness",
     "electrical",
@@ -49,8 +52,27 @@ STATUSES = {
     "future-wishlist",
 }
 PHOTO_MAX = 500 * 1024
+PHOTO_COUNT_MAX = 5
+# Text limits are UTF-8 bytes, like the card's fixed buffers.
+TITLE_MAX = 200
+DESC_MAX = 2000
+REPORTER_MAX = 80
+NOTE_MAX = 120
+BODY_MAX = 8192
+ACK_BODY_MAX = 256
 SAILBOAT_ID = int(os.environ.get("LMYC_SAILBOAT_ID", "0") or "0")
 BOAT = os.environ.get("LMYC_BOAT_ID", "BENCH-01")
+
+
+
+def clip_utf8(text: str, limit: int) -> str:
+    """Longest prefix within limit UTF-8 bytes, cut on a character boundary.
+
+    The board truncates by bytes. Slicing characters here let a long accented
+    note pass on the stand-in and come back shorter from the boat.
+    """
+    return text.encode("utf-8")[:limit].decode("utf-8", "ignore")
+
 
 ROOT = tempfile.mkdtemp(prefix="lmyc-maint-")
 LOCK = threading.Lock()
@@ -187,7 +209,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 n = 0
             photo = os.path.join(_item_dir(query.get("id", "")), f"{n}.jpg")
-            if n < 1 or n > 5 or not os.path.isfile(photo):
+            if n < 1 or n > PHOTO_COUNT_MAX or not os.path.isfile(photo):
                 self._json(404, {"error": "no photo"})
                 return
             with open(photo, "rb") as fh:
@@ -222,7 +244,7 @@ class Handler(BaseHTTPRequestHandler):
         self._put_club(int(club.group(1)), int(club.group(2)))
 
     def _post_item(self) -> None:
-        raw = self._read(8192)
+        raw = self._read(BODY_MAX)
         if raw is None:
             self._json(400, {"error": "body size"})
             return
@@ -237,17 +259,14 @@ class Handler(BaseHTTPRequestHandler):
         if not title or category not in CATEGORIES or priority not in PRIORITIES:
             self._json(400, {"error": "title, category, priority"})
             return
-        if len(title) > 200:
-            self._json(400, {"error": "title"})
-            return
         stamp = _now()
         item = {
             "id": secrets.token_hex(8),
             "wp_id": 0,
             "sailboat_id": SAILBOAT_ID,
             "boat": BOAT,
-            "title": title,
-            "description": str(body.get("description", ""))[:2000],
+            "title": clip_utf8(title, TITLE_MAX),
+            "description": clip_utf8(str(body.get("description", "")), DESC_MAX),
             "category": category,
             "priority": priority,
             "status": "reported",
@@ -269,7 +288,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             n = 0
         blob = self._read(PHOTO_MAX)
-        if n < 1 or n > 5 or blob is None or len(blob) < 32:
+        if n < 1 or n > PHOTO_COUNT_MAX or blob is None or len(blob) < 32:
             self._json(400, {"error": "photo size or index"})
             return
         with LOCK:
@@ -284,7 +303,8 @@ class Handler(BaseHTTPRequestHandler):
                 fh.write(blob)
             os.replace(tmp, dest)
             item["photo_count"] = max(int(item.get("photo_count", 0)), n)
-            note = query.get("note", "").replace("\x00", "").strip()[:120]
+            note = query.get("note", "").replace("\x00", "").strip()
+            note = clip_utf8(note, NOTE_MAX)
             if note:
                 item[f"note{n}"] = note
             item["modified"] = _now()
@@ -293,7 +313,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post_ack(self) -> None:
         item_id = self._query().get("id", "")
-        raw = self._read(256)
+        raw = self._read(ACK_BODY_MAX)
         if raw is None:
             self._json(400, {"error": "body"})
             return
@@ -317,7 +337,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"id": item_id, "wp_id": wp_id, "sync": "synced"})
 
     def _post_club(self, sailboat_id: int) -> None:
-        raw = self._read(8192)
+        raw = self._read(BODY_MAX)
         if raw is None:
             self._json(400, {"error": "body size"})
             return
@@ -342,8 +362,8 @@ class Handler(BaseHTTPRequestHandler):
                     "wp_id": wp_id,
                     "local_id": local_id,
                     "sailboat_id": sailboat_id,
-                    "title": str(body.get("title", ""))[:200],
-                    "description": str(body.get("description", ""))[:2000],
+                    "title": clip_utf8(str(body.get("title", "")), TITLE_MAX),
+                    "description": clip_utf8(str(body.get("description", "")), DESC_MAX),
                     "category": str(body.get("category", "")),
                     "priority": str(body.get("priority", "")),
                     "status": "reported",
@@ -354,7 +374,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(201, {"wp_id": wp_id, "sailboat_id": sailboat_id, "local_id": local_id})
 
     def _put_club(self, sailboat_id: int, wp_id: int) -> None:
-        raw = self._read(8192)
+        raw = self._read(BODY_MAX)
         if raw is None:
             self._json(400, {"error": "body size"})
             return
@@ -376,7 +396,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, stored)
 
     def _post_reconcile(self) -> None:
-        raw = self._read(8192)
+        raw = self._read(BODY_MAX)
         if raw is None:
             self._json(400, {"error": "body size"})
             return
@@ -411,12 +431,12 @@ class Handler(BaseHTTPRequestHandler):
                     "wp_id": wp_id,
                     "sailboat_id": int(body.get("sailboat_id") or SAILBOAT_ID),
                     "boat": BOAT,
-                    "title": title[:200],
-                    "description": str(body.get("description", ""))[:2000],
+                    "title": clip_utf8(title, TITLE_MAX),
+                    "description": clip_utf8(str(body.get("description", "")), DESC_MAX),
                     "category": category,
                     "priority": priority,
                     "status": status,
-                    "reporter": str(body.get("reporter", ""))[:80],
+                    "reporter": clip_utf8(str(body.get("reporter", "")), REPORTER_MAX),
                     "created": str(body.get("created") or stamp),
                     "modified": stamp,
                     "sync": "synced",
@@ -432,12 +452,12 @@ class Handler(BaseHTTPRequestHandler):
                 action = "kept"
                 item_id = found["id"]
             else:
-                found["title"] = title[:200]
-                found["description"] = str(body.get("description", ""))[:2000]
+                found["title"] = clip_utf8(title, TITLE_MAX)
+                found["description"] = clip_utf8(str(body.get("description", "")), DESC_MAX)
                 found["category"] = category
                 found["priority"] = priority
                 found["status"] = status
-                found["reporter"] = str(body.get("reporter", ""))[:80]
+                found["reporter"] = clip_utf8(str(body.get("reporter", "")), REPORTER_MAX)
                 found["modified"] = modified
                 found["sync"] = "synced"
                 _save(found)
