@@ -64,7 +64,9 @@ class _NearbyHit {
   String get name {
     final n = result.advertisementData.advName;
     if (n.isNotEmpty) return n;
-    if (result.device.platformName.isNotEmpty) return result.device.platformName;
+    if (result.device.platformName.isNotEmpty) {
+      return result.device.platformName;
+    }
     return '(no name)';
   }
 
@@ -210,8 +212,7 @@ class _HomePageState extends State<HomePage> {
       (u) => u == kLmycService,
     );
     final prefixMatch = names.any(isLmycBleName);
-    final exactMatch =
-        _bleName != null && names.any((n) => n == _bleName);
+    final exactMatch = _bleName != null && names.any((n) => n == _bleName);
     return exactMatch || prefixMatch || uuidMatch;
   }
 
@@ -290,10 +291,10 @@ class _HomePageState extends State<HomePage> {
             _blePhase = BlePhase.failed;
             _bleDetail = _nearby.isEmpty
                 ? 'Heard $_heardCount BLE device(s), 0 named LMYC-*.\n'
-                    'Terminal BLE line should read Advertising.\n'
-                    'Android Settings often hides LE-only devices — use this screen.'
+                      'Terminal BLE line should read Advertising.\n'
+                      'Android Settings often hides LE-only devices — use this screen.'
                 : 'Did not find "$_bleName". Nearby: '
-                    '${_nearby.values.map((h) => h.name).join(", ")}';
+                      '${_nearby.values.map((h) => h.name).join(", ")}';
           });
           return;
         }
@@ -301,7 +302,8 @@ class _HomePageState extends State<HomePage> {
           _device = found!.device;
           _rssi = found.rssi;
           _blePhase = BlePhase.connecting;
-          _bleDetail = 'Found ${found.advertisementData.advName.isNotEmpty ? found.advertisementData.advName : _bleName} '
+          _bleDetail =
+              'Found ${found.advertisementData.advName.isNotEmpty ? found.advertisementData.advName : _bleName} '
               '(${found.rssi} dBm) — connecting…';
         });
         await _connectAndConfirm(found.device);
@@ -312,7 +314,7 @@ class _HomePageState extends State<HomePage> {
         _blePhase = _nearby.isEmpty ? BlePhase.failed : BlePhase.idle;
         _bleDetail = _nearby.isEmpty
             ? 'Heard $_heardCount BLE device(s), 0 LMYC hits.\n'
-                'Confirm the terminal DIAGNOSTICS card says Advertising.'
+                  'Confirm the terminal DIAGNOSTICS card says Advertising.'
             : 'Found ${_nearby.length} LMYC terminal(s). Tap one to connect.';
       });
     } catch (e) {
@@ -336,7 +338,9 @@ class _HomePageState extends State<HomePage> {
         .timeout(const Duration(seconds: 10));
   }
 
-  Future<List<BluetoothService>> _discoverWithRetry(BluetoothDevice device) async {
+  Future<List<BluetoothService>> _discoverWithRetry(
+    BluetoothDevice device,
+  ) async {
     await Future<void>.delayed(const Duration(milliseconds: 1200));
 
     for (var attempt = 1; attempt <= 3; attempt++) {
@@ -375,7 +379,8 @@ class _HomePageState extends State<HomePage> {
         debugPrint('connectionState: $state');
         if (!mounted) return;
         if (state == BluetoothConnectionState.disconnected &&
-            (_blePhase == BlePhase.paired || _blePhase == BlePhase.confirming)) {
+            (_blePhase == BlePhase.paired ||
+                _blePhase == BlePhase.confirming)) {
           setState(() {
             _blePhase = BlePhase.idle;
             _bleDetail = 'Disconnected from terminal';
@@ -428,7 +433,9 @@ class _HomePageState extends State<HomePage> {
           final fromPayload = oobFromPayloadBytes(payload);
           if (fromPayload != null) {
             _oob = fromPayload;
-            debugPrint('OOB from payload URI (${fromPayload.length} hex chars)');
+            debugPrint(
+              'OOB from payload URI (${fromPayload.length} hex chars)',
+            );
           }
         } catch (e) {
           debugPrint('payload read: $e');
@@ -459,8 +466,7 @@ class _HomePageState extends State<HomePage> {
         setState(() {
           _blePhase = BlePhase.idle;
           _sessionReply = 'WAIT (no OOB yet)';
-          _bleDetail =
-              'Link is up. Scan the terminal QR (or paste lmyc://) then tap Pair.';
+          _bleDetail = 'Link is up. Scan the terminal QR (or paste lmyc://) then tap Pair.';
         });
         return;
       }
@@ -613,8 +619,7 @@ class _HomePageState extends State<HomePage> {
       if (wifiChr == null) {
         if (!mounted) return;
         setState(() {
-          _wifiDetail =
-              'This terminal has no Wi-Fi bootstrap yet. Flash the new firmware and pair again.';
+          _wifiDetail = 'This terminal has no Wi-Fi bootstrap yet. Flash the new firmware and pair again.';
         });
         return;
       }
@@ -623,8 +628,7 @@ class _HomePageState extends State<HomePage> {
       if (info == null) {
         if (!mounted) return;
         setState(() {
-          _wifiDetail =
-              'The terminal did not share Wi-Fi yet. Pair again, then tap Join boat Wi-Fi.';
+          _wifiDetail = 'The terminal did not share Wi-Fi yet. Pair again, then tap Join boat Wi-Fi.';
         });
         return;
       }
@@ -715,7 +719,8 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final hasPairingData = _oob != null && _bleName != null;
-    final busy = _blePhase == BlePhase.scanning ||
+    final busy =
+        _blePhase == BlePhase.scanning ||
         _blePhase == BlePhase.connecting ||
         _blePhase == BlePhase.confirming ||
         _blePhase == BlePhase.checkingPermissions;
@@ -724,9 +729,7 @@ class _HomePageState extends State<HomePage> {
       ..sort((a, b) => b.rssi.compareTo(a.rssi));
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('LMYC Boat Terminal'),
-      ),
+      appBar: AppBar(title: const Text('LMYC Boat Terminal')),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -746,9 +749,9 @@ class _HomePageState extends State<HomePage> {
                 isPaired ? 'Paired' : 'Lower Mainland Yacht Club',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: const Color(0xFF001F3F),
-                    ),
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF001F3F),
+                ),
               ),
               const SizedBox(height: 4),
               Text(
@@ -756,9 +759,8 @@ class _HomePageState extends State<HomePage> {
                     ? 'You are connected to ${_boatId ?? "the terminal"}'
                     : 'Companion app for boat check-in and terminal pairing',
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.black54,
-                    ),
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: Colors.black54),
               ),
               const SizedBox(height: 28),
 
@@ -773,9 +775,7 @@ class _HomePageState extends State<HomePage> {
                         children: [
                           Text(
                             'From QR code',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
+                            style: Theme.of(context).textTheme.titleMedium
                                 ?.copyWith(fontWeight: FontWeight.w600),
                           ),
                           const Spacer(),
@@ -827,9 +827,7 @@ class _HomePageState extends State<HomePage> {
                         children: [
                           Text(
                             'Bluetooth',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
+                            style: Theme.of(context).textTheme.titleMedium
                                 ?.copyWith(fontWeight: FontWeight.w600),
                           ),
                           const Spacer(),
@@ -886,10 +884,11 @@ class _HomePageState extends State<HomePage> {
                                         _device = h.result.device;
                                         _rssi = h.rssi;
                                         _blePhase = BlePhase.connecting;
-                                        _bleDetail =
-                                            'Connecting to ${h.name}…';
+                                        _bleDetail = 'Connecting to ${h.name}…';
                                       });
-                                      unawaited(_connectAndConfirm(h.result.device));
+                                      unawaited(
+                                        _connectAndConfirm(h.result.device),
+                                      );
                                     },
                               child: const Text('Connect'),
                             ),
@@ -917,10 +916,10 @@ class _HomePageState extends State<HomePage> {
                           onPressed: busy
                               ? null
                               : isPaired
-                                  ? () => _disconnect()
-                                  : hasPairingData
-                                      ? () => _startScan(autoConnectExact: true)
-                                      : null,
+                              ? () => _disconnect()
+                              : hasPairingData
+                              ? () => _startScan(autoConnectExact: true)
+                              : null,
                           icon: Icon(
                             isPaired
                                 ? Icons.link_off
@@ -930,8 +929,8 @@ class _HomePageState extends State<HomePage> {
                             isPaired
                                 ? 'Disconnect'
                                 : busy
-                                    ? 'Working…'
-                                    : 'Connect & pair',
+                                ? 'Working…'
+                                : 'Connect & pair',
                           ),
                           style: FilledButton.styleFrom(
                             backgroundColor: const Color(0xFF001F3F),
@@ -965,9 +964,12 @@ class _HomePageState extends State<HomePage> {
                         Text(
                           _wifiDetail.isEmpty
                               ? 'OOB match confirmed. The app reads the boat '
-                                  'Wi-Fi over Bluetooth and Android asks you to join it.'
+                                    'Wi-Fi over Bluetooth and Android asks you to join it.'
                               : _wifiDetail,
-                          style: const TextStyle(height: 1.4, color: Colors.black87),
+                          style: const TextStyle(
+                            height: 1.4,
+                            color: Colors.black87,
+                          ),
                         ),
                         if (!_wifiJoined) ...[
                           const SizedBox(height: 12),
@@ -978,9 +980,11 @@ class _HomePageState extends State<HomePage> {
                                   ? null
                                   : () => _bringUpBoatWifi(_device!),
                               icon: const Icon(Icons.wifi),
-                              label: Text(_wifiBusy
-                                  ? 'Joining boat Wi-Fi…'
-                                  : 'Join boat Wi-Fi'),
+                              label: Text(
+                                _wifiBusy
+                                    ? 'Joining boat Wi-Fi…'
+                                    : 'Join boat Wi-Fi',
+                              ),
                             ),
                           ),
                         ],
@@ -1014,9 +1018,8 @@ class _HomePageState extends State<HomePage> {
                             onPressed: () {
                               Navigator.of(context).push(
                                 MaterialPageRoute<void>(
-                                  builder: (_) => BoatLinkPage(
-                                    suggestedIp: BoatSession.ip,
-                                  ),
+                                  builder: (_) =>
+                                      BoatLinkPage(suggestedIp: BoatSession.ip),
                                 ),
                               );
                             },
@@ -1037,9 +1040,8 @@ class _HomePageState extends State<HomePage> {
                   onPressed: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (_) => MaintenanceBookPage(
-                          suggestedIp: BoatSession.ip,
-                        ),
+                        builder: (_) =>
+                            MaintenanceBookPage(suggestedIp: BoatSession.ip),
                       ),
                     );
                   },
@@ -1053,9 +1055,8 @@ class _HomePageState extends State<HomePage> {
                 'Find terminals works without a QR. Pairing still needs the QR OOB.\n'
                 'Watch the terminal DIAGNOSTICS card: Advertising → Connected → Paired.',
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Colors.black45,
-                    ),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: Colors.black45),
               ),
             ],
           ),

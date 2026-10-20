@@ -10,11 +10,7 @@ import 'protocol.dart';
 
 /// Live NMEA tap after BLE pair (GATT …000030 + optional TCP :10110).
 class NmeaConsolePage extends StatefulWidget {
-  const NmeaConsolePage({
-    super.key,
-    required this.device,
-    this.terminalIp,
-  });
+  const NmeaConsolePage({super.key, required this.device, this.terminalIp});
 
   final BluetoothDevice device;
   final String? terminalIp;
@@ -107,7 +103,9 @@ class _NmeaConsolePageState extends State<NmeaConsolePage> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('No NMEA char …000030 — flash boatlink-v1 firmware'),
+              content: Text(
+                'No NMEA char …000030 — flash boatlink-v1 firmware',
+              ),
             ),
           );
         }
@@ -192,7 +190,9 @@ class _NmeaConsolePageState extends State<NmeaConsolePage> {
     final host = _ipController.text.trim();
     if (host.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter the terminal Wi-Fi IP from DIAGNOSTICS')),
+        const SnackBar(
+          content: Text('Enter the terminal Wi-Fi IP from DIAGNOSTICS'),
+        ),
       );
       return;
     }
@@ -236,9 +236,8 @@ class _NmeaConsolePageState extends State<NmeaConsolePage> {
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('TCP connect failed: $e')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('TCP connect failed: $e')));
       }
     }
   }
@@ -254,7 +253,7 @@ class _NmeaConsolePageState extends State<NmeaConsolePage> {
     await Clipboard.setData(ClipboardData(text: text));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Copied ${ _visible.length} lines')),
+        SnackBar(content: Text('Copied ${_visible.length} lines')),
       );
     }
   }

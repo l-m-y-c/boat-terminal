@@ -115,7 +115,12 @@ class TerminalBook {
   /// [n] is 1-based. [jpeg] must already be a JPEG under 500 KB.
   /// [note] is the line that belongs to this photo, such as
   /// "Sail is ripped, left hand side". Blank notes are omitted.
-  Future<void> putPhoto(String id, int n, List<int> jpeg, {String note = ''}) async {
+  Future<void> putPhoto(
+    String id,
+    int n,
+    List<int> jpeg, {
+    String note = '',
+  }) async {
     final query = <String, String>{'id': id, 'n': '$n'};
     final clipped = _clipPhotoNote(note);
     if (clipped.isNotEmpty) {
@@ -262,8 +267,7 @@ class ClubMaintenanceClient {
   }) : baseUrl = clubBaseUrl(rawBaseUrl),
        _client = client ?? http.Client();
 
-  static const offMessage =
-      'Club API is off. The copy stays on the boat.';
+  static const offMessage = 'Club API is off. The copy stays on the boat.';
   static const unreachableMessage =
       'Club host did not answer. Items stay pending on the boat.';
 
@@ -530,9 +534,7 @@ class ClubMaintenanceClient {
       uploaded: upload.uploaded,
       updated: updated,
       added: added,
-      message: parts.isEmpty
-          ? 'Club book matches this boat.'
-          : parts.join(' '),
+      message: parts.isEmpty ? 'Club book matches this boat.' : parts.join(' '),
     );
   }
 
@@ -541,9 +543,7 @@ class ClubMaintenanceClient {
       () => _client
           .get(
             Uri.parse('$baseUrl/wp-json/lmyc/v1/boats/$sailboatId/maintenance'),
-            headers: {
-              if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-            },
+            headers: {if (token.isNotEmpty) 'Authorization': 'Bearer $token'},
           )
           .timeout(timeout),
     );

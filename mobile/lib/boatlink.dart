@@ -40,10 +40,7 @@ Uint8List frameChartSnapshot(Uint8List bytes) {
 
 /// Wi-Fi data plane: Navionics TCP 10110, chart JPEG snapshot, optional GNSS.
 class BoatLinkPage extends StatefulWidget {
-  const BoatLinkPage({
-    super.key,
-    this.suggestedIp,
-  });
+  const BoatLinkPage({super.key, this.suggestedIp});
 
   final String? suggestedIp;
 
@@ -80,9 +77,8 @@ class _BoatLinkPageState extends State<BoatLinkPage> {
   Future<void> _copy(String text) async {
     await Clipboard.setData(ClipboardData(text: text));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Copied $text')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Copied $text')));
     }
   }
 
@@ -101,16 +97,14 @@ class _BoatLinkPageState extends State<BoatLinkPage> {
       }
       final uri = Uri.parse('http://$_host/snapshot');
       final resp = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'image/jpeg'},
-            body: jpeg,
-          )
+          .post(uri, headers: {'Content-Type': 'image/jpeg'}, body: jpeg)
           .timeout(const Duration(seconds: 20));
       if (!mounted) return;
-      setState(() => _status = resp.statusCode == 200
-          ? 'Snapshot sent (${jpeg.length} B). Tap Chart on the 7″.'
-          : 'HTTP ${resp.statusCode}: ${resp.body}');
+      setState(
+        () => _status = resp.statusCode == 200
+            ? 'Snapshot sent (${jpeg.length} B). Tap Chart on the 7″.'
+            : 'HTTP ${resp.statusCode}: ${resp.body}',
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _status = 'Snapshot failed: $e');
@@ -127,8 +121,9 @@ class _BoatLinkPageState extends State<BoatLinkPage> {
           perm == LocationPermission.deniedForever) {
         return 'Location permission denied';
       }
-      final pos = await Geolocator.getCurrentPosition()
-          .timeout(const Duration(seconds: 5));
+      final pos = await Geolocator.getCurrentPosition().timeout(
+        const Duration(seconds: 5),
+      );
       final now = DateTime.now().toUtc();
       final sog = pos.speed * 1.94384;
       final rmc = buildRmc(
@@ -198,14 +193,21 @@ class _BoatLinkPageState extends State<BoatLinkPage> {
             onChanged: (_) => setState(() {}),
             decoration: const InputDecoration(
               labelText: 'Terminal IP',
-              helperText: 'SoftAP is $kSoftApIp  ·  STA IP is on the helm LINK card',
+              helperText:
+                  'SoftAP is $kSoftApIp  ·  STA IP is on the helm LINK card',
               border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 16),
-          const Text('Navionics', style: TextStyle(fontWeight: FontWeight.w600)),
+          const Text(
+            'Navionics',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
           const SizedBox(height: 8),
-          _copyRow('SSID', BoatSession.ssid.isNotEmpty ? BoatSession.ssid : 'LMYC-<boat id>'),
+          _copyRow(
+            'SSID',
+            BoatSession.ssid.isNotEmpty ? BoatSession.ssid : 'LMYC-<boat id>',
+          ),
           _copyRow('TCP', '$_host:$kGatewayTcpPort'),
           _copyRow('UDP', '$kGatewayUdpPort or $kGatewayUdpAltPort'),
           const SizedBox(height: 8),
@@ -229,7 +231,9 @@ class _BoatLinkPageState extends State<BoatLinkPage> {
           OutlinedButton.icon(
             onPressed: _busy ? null : _toggleGnss,
             icon: Icon(_gnssOn ? Icons.gps_fixed : Icons.gps_off),
-            label: Text(_gnssOn ? 'Stop phone GNSS' : 'Push phone GNSS (LOCAL)'),
+            label: Text(
+              _gnssOn ? 'Stop phone GNSS' : 'Push phone GNSS (LOCAL)',
+            ),
           ),
           const SizedBox(height: 8),
           const Text(

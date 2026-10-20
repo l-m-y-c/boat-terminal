@@ -23,9 +23,16 @@ void main() {
     expect(parseWifiBootstrap('WAIT'), isNull);
     expect(parseWifiBootstrap('ERR'), isNull);
     expect(
-      parseWifiBootstrap('{"ssid":"LMYC-BENCH-01","psk":"short","ip":"192.168.4.1"}'),
+      parseWifiBootstrap(
+        '{"ssid":"LMYC-BENCH-01","psk":"short","ip":"192.168.4.1"}',
+      ),
       isNull,
     );
-    expect(parseWifiBootstrap('{"ssid":"LMYC-BENCH-01","psk":"lmycboat","ip":"192.168.4.1"}\u0000WAIT'), isNotNull);
+    expect(
+      parseWifiBootstrap(
+        '{"ssid":"LMYC-BENCH-01","psk":"lmycboat","ip":"192.168.4.1"}\u0000WAIT',
+      ),
+      isNotNull,
+    );
   });
 }

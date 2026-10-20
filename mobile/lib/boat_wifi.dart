@@ -4,11 +4,7 @@ import 'package:flutter/services.dart';
 
 /// SoftAP details the terminal shares on BLE `…000040` after the OOB check.
 class BoatWifiInfo {
-  const BoatWifiInfo({
-    required this.ssid,
-    required this.psk,
-    required this.ip,
-  });
+  const BoatWifiInfo({required this.ssid, required this.psk, required this.ip});
 
   final String ssid;
   final String psk;
@@ -75,10 +71,7 @@ class BoatWifi {
   /// Asks Android to join [ssid]. The system shows a Connect prompt.
   /// On success this app's sockets use that network.
   static Future<void> join({required String ssid, required String psk}) async {
-    await _channel.invokeMethod<void>('connect', {
-      'ssid': ssid,
-      'psk': psk,
-    });
+    await _channel.invokeMethod<void>('connect', {'ssid': ssid, 'psk': psk});
   }
 
   static Future<void> release() async {

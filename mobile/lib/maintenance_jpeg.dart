@@ -7,7 +7,6 @@ import 'protocol.dart';
 /// Long edge the terminal can scale onto the 800×480 panel.
 const int kMaintLongEdge = 2000;
 
-
 /// Decode [bytes], keep aspect, and return a JPEG the card will accept.
 ///
 /// Images already at or under [kMaintLongEdge] are not enlarged. Quality

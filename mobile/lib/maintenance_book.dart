@@ -46,7 +46,6 @@ class MaintenanceBookPage extends StatefulWidget {
 }
 
 class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
-
   final _ipController = TextEditingController();
   final _clubController = TextEditingController();
   final _titleController = TextEditingController();
@@ -70,8 +69,8 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
     _ipController.text = BoatSession.joined
         ? BoatSession.ip
         : (widget.suggestedIp?.isNotEmpty == true
-            ? widget.suggestedIp!
-            : '192.168.4.1');
+              ? widget.suggestedIp!
+              : '192.168.4.1');
     _ownsClient = widget.client == null;
     _client = widget.client ?? http.Client();
   }
@@ -97,7 +96,8 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
   void _report(String message) {
     setState(() => _status = message);
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _joinBoatWifi() async {
@@ -152,7 +152,8 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
       });
       if (done != null) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(done)));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(done)));
       }
     } catch (e) {
       if (!mounted) return;
@@ -195,7 +196,10 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
     });
     try {
       // Decode and re-encode off the UI isolate. A 12 MP photo froze the page.
-      final fitted = await compute(fitMaintenanceJpeg, await picked.readAsBytes());
+      final fitted = await compute(
+        fitMaintenanceJpeg,
+        await picked.readAsBytes(),
+      );
       if (!mounted) return;
       setState(() {
         _photos.add(_PhotoDraft(fitted));
@@ -228,7 +232,9 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
     setState(() {
       _busy = true;
       _progress = _photos.isEmpty ? null : 0;
-      _status = _photos.isEmpty ? 'Saving the note…' : 'Saving the note, then the photos…';
+      _status = _photos.isEmpty
+          ? 'Saving the note…'
+          : 'Saving the note, then the photos…';
     });
     final book = TerminalBook(host: host, client: _client);
     final queued = [for (final photo in _photos) photo.bytes];
@@ -334,10 +340,7 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           LinearProgressIndicator(value: _progress),
-          if (_status.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(_status),
-          ],
+          if (_status.isNotEmpty) ...[const SizedBox(height: 6), Text(_status)],
         ],
       ),
     );
@@ -369,10 +372,10 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
           Text(
             BoatSession.joined
                 ? 'This phone is on ${BoatSession.ssid}. Read Book uses ${BoatSession.ip}. '
-                    'Photos are saved on the boat. Leave Club API blank and the note stays pending.'
+                      'Photos are saved on the boat. Leave Club API blank and the note stays pending.'
                 : 'Pair first. The app then joins the boat Wi-Fi, and Read Book uses that link. '
-                    'Or type a stand-in address (host and port, no http://). '
-                    'Leave Club API blank and the note stays pending.',
+                      'Or type a stand-in address (host and port, no http://). '
+                      'Leave Club API blank and the note stays pending.',
             style: const TextStyle(height: 1.4),
           ),
           if (BoatSession.info != null && !BoatSession.joined) ...[
@@ -418,10 +421,7 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
             icon: const Icon(Icons.cloud_upload_outlined),
             label: const Text('Sync with club'),
           ),
-          if (_status.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(_status),
-          ],
+          if (_status.isNotEmpty) ...[const SizedBox(height: 8), Text(_status)],
           const SizedBox(height: 16),
           if (_items.isEmpty)
             const Text('Nothing loaded yet.')
