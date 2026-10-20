@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +11,8 @@ import 'boat_wifi.dart';
 import 'boatlink.dart';
 import 'maintenance_book.dart';
 import 'nmea_console.dart';
+import 'pairing_link.dart';
+import 'protocol.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -102,16 +103,11 @@ class _HomePageState extends State<HomePage> {
   int _heardCount = 0;
   final Map<String, _NearbyHit> _nearby = {};
 
-  static final Guid kLmycService =
-      Guid('6c6d7963-0001-4000-8000-000000000001');
-  static final Guid kLmycPayloadChr =
-      Guid('6c6d7963-0001-4000-8000-000000000010');
-  static final Guid kLmycSessionChr =
-      Guid('6c6d7963-0001-4000-8000-000000000020');
-  static final Guid kLmycStatusChr =
-      Guid('6c6d7963-0001-4000-8000-000000000021');
-  static final Guid kLmycWifiChr =
-      Guid('6c6d7963-0001-4000-8000-000000000040');
+  static final Guid kLmycService = Guid(kLmycServiceUuid);
+  static final Guid kLmycPayloadChr = Guid(kLmycPayloadUuid);
+  static final Guid kLmycSessionChr = Guid(kLmycSessionUuid);
+  static final Guid kLmycStatusChr = Guid(kLmycStatusUuid);
+  static final Guid kLmycWifiChr = Guid(kLmycWifiUuid);
 
   bool _wifiBusy = false;
   bool _wifiJoined = false;
@@ -120,7 +116,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _initDeepLinks();
+    unawaited(_initDeepLinks());
   }
 
   Future<void> _initDeepLinks() async {
@@ -139,13 +135,20 @@ class _HomePageState extends State<HomePage> {
 
   void _handleIncomingLink(Uri uri) {
     if (uri.scheme != 'lmyc') return;
-    final params = uri.queryParameters;
+    final link = PairingLink.parse(uri);
+    if (link == null) {
+      setState(() {
+        _blePhase = BlePhase.failed;
+        _bleDetail = PairingLink.rejection(uri);
+      });
+      return;
+    }
     setState(() {
-      _version = params['v'];
-      _boatId = params['boat'];
-      _terminalId = params['tid'];
-      _bleName = params['ble'];
-      _oob = params['oob'];
+      _version = link.version;
+      _boatId = link.boatId;
+      _terminalId = link.terminalId;
+      _bleName = link.bleName;
+      _oob = link.oob;
     });
   }
 
@@ -206,7 +209,7 @@ class _HomePageState extends State<HomePage> {
     final uuidMatch = r.advertisementData.serviceUuids.any(
       (u) => u == kLmycService,
     );
-    final prefixMatch = names.any((n) => n.toUpperCase().startsWith('LMYC-'));
+    final prefixMatch = names.any(isLmycBleName);
     final exactMatch =
         _bleName != null && names.any((n) => n == _bleName);
     return exactMatch || prefixMatch || uuidMatch;
@@ -313,6 +316,7 @@ class _HomePageState extends State<HomePage> {
             : 'Found ${_nearby.length} LMYC terminal(s). Tap one to connect.';
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _blePhase = BlePhase.failed;
         _bleDetail = 'Scan error: $e';
@@ -338,9 +342,11 @@ class _HomePageState extends State<HomePage> {
     for (var attempt = 1; attempt <= 3; attempt++) {
       await _ensureConnected(device);
 
-      setState(() {
-        _bleDetail = 'Discovering services (attempt $attempt/3)…';
-      });
+      if (mounted) {
+        setState(() {
+          _bleDetail = 'Discovering services (attempt $attempt/3)…';
+        });
+      }
 
       try {
         final services = await device.discoverServices();
@@ -419,7 +425,7 @@ class _HomePageState extends State<HomePage> {
           debugPrint('payload bytes: ${payload.length}');
           // Bench payload is the live lmyc:// URI (includes current oob=).
           // Prefer it over a stale QR after terminal reboot.
-          final fromPayload = _oobFromPayloadBytes(payload);
+          final fromPayload = oobFromPayloadBytes(payload);
           if (fromPayload != null) {
             _oob = fromPayload;
             debugPrint('OOB from payload URI (${fromPayload.length} hex chars)');
@@ -461,7 +467,7 @@ class _HomePageState extends State<HomePage> {
 
       // Default ATT MTU is 23 → max write payload 20 bytes. Firmware accepts
       // a raw 16-byte OOB write on session; status comes from …000021.
-      final oobBytes = _oobBytesFromHex(_oob!);
+      final oobBytes = oobBytesFromHex(_oob!);
       if (oobBytes == null) {
         setState(() {
           _blePhase = BlePhase.failed;
@@ -482,9 +488,9 @@ class _HomePageState extends State<HomePage> {
       try {
         await statusChr.setNotifyValue(true);
         notifySub = statusChr.onValueReceived.listen((bytes) {
-          final text = _sessionReplyFromBytes(bytes);
+          final text = sessionReplyFromBytes(bytes);
           debugPrint('status notify: ${bytes.length}B raw=$bytes text="$text"');
-          if (_isSessionStatus(text) && !statusCompleter.isCompleted) {
+          if (isSessionStatus(text) && !statusCompleter.isCompleted) {
             statusCompleter.complete(text);
           }
         });
@@ -506,12 +512,12 @@ class _HomePageState extends State<HomePage> {
             Duration(milliseconds: attempt == 0 ? 200 : 150),
           );
           final replyBytes = await statusChr.read();
-          reply = _sessionReplyFromBytes(replyBytes);
+          reply = sessionReplyFromBytes(replyBytes);
           debugPrint(
             'status read #$attempt: ${replyBytes.length}B '
             'raw=$replyBytes text="$reply"',
           );
-          if (_isSessionStatus(reply)) break;
+          if (isSessionStatus(reply)) break;
         }
       } finally {
         await notifySub?.cancel();
@@ -537,7 +543,7 @@ class _HomePageState extends State<HomePage> {
         );
         await _bringUpBoatWifi(device);
       } else {
-        final shown = _isSessionStatus(reply) ? reply : '(no status yet)';
+        final shown = isSessionStatus(reply) ? reply : '(no status yet)';
         setState(() {
           _blePhase = BlePhase.failed;
           _sessionReply = shown;
@@ -547,6 +553,7 @@ class _HomePageState extends State<HomePage> {
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _blePhase = BlePhase.failed;
         _bleDetail = 'Pairing failed: $e';
@@ -658,9 +665,9 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
-    _linkSubscription?.cancel();
+    unawaited(_linkSubscription?.cancel());
     _pasteController.dispose();
-    _disconnect(resetPhase: false);
+    unawaited(_disconnect(resetPhase: false));
     super.dispose();
   }
 
@@ -668,47 +675,6 @@ class _HomePageState extends State<HomePage> {
     if (value == null || value.isEmpty) return '—';
     if (value.length <= max) return value;
     return '${value.substring(0, max)}…';
-  }
-
-  /// Decode QR `oob=` (32 hex chars) to the 16 raw bytes the session char expects.
-  static Uint8List? _oobBytesFromHex(String hex) {
-    final cleaned = hex.trim();
-    if (cleaned.length != 32) return null;
-    final out = Uint8List(16);
-    for (var i = 0; i < 16; i++) {
-      final byte = int.tryParse(cleaned.substring(i * 2, i * 2 + 2), radix: 16);
-      if (byte == null) return null;
-      out[i] = byte;
-    }
-    return out;
-  }
-
-  /// Session replies are ASCII (OK/FAIL/WAIT/ERR). Stop at NUL — NimBLE may
-  /// ship a fixed-size buffer (e.g. "OK\\0T..." from a previous "WAIT").
-  static String _sessionReplyFromBytes(List<int> bytes) {
-    final out = StringBuffer();
-    for (final b in bytes) {
-      if (b == 0) break;
-      if (b >= 32 && b <= 126) out.writeCharCode(b);
-    }
-    return out.toString().trim();
-  }
-
-  static bool _isSessionStatus(String text) =>
-      text == 'OK' ||
-      text == 'FAIL' ||
-      text == 'ERR' ||
-      text == 'WAIT' ||
-      text == 'PONG';
-
-  /// Pull `oob=` from the terminal payload characteristic (lmyc:// URI bytes).
-  static String? _oobFromPayloadBytes(List<int> bytes) {
-    final text = _sessionReplyFromBytes(bytes);
-    final uri = Uri.tryParse(text);
-    if (uri == null || uri.scheme != 'lmyc') return null;
-    final oob = uri.queryParameters['oob'];
-    if (oob == null || oob.length != 32) return null;
-    return oob;
   }
 
   Color get _phaseColor {
@@ -923,7 +889,7 @@ class _HomePageState extends State<HomePage> {
                                         _bleDetail =
                                             'Connecting to ${h.name}…';
                                       });
-                                      _connectAndConfirm(h.result.device);
+                                      unawaited(_connectAndConfirm(h.result.device));
                                     },
                               child: const Text('Connect'),
                             ),
@@ -1029,6 +995,7 @@ class _HomePageState extends State<HomePage> {
                                       MaterialPageRoute<void>(
                                         builder: (_) => NmeaConsolePage(
                                           device: _device!,
+                                          terminalIp: BoatSession.ip,
                                         ),
                                       ),
                                     );
@@ -1047,8 +1014,8 @@ class _HomePageState extends State<HomePage> {
                             onPressed: () {
                               Navigator.of(context).push(
                                 MaterialPageRoute<void>(
-                                  builder: (_) => const BoatLinkPage(
-                                    suggestedIp: '192.168.4.1',
+                                  builder: (_) => BoatLinkPage(
+                                    suggestedIp: BoatSession.ip,
                                   ),
                                 ),
                               );
@@ -1070,8 +1037,8 @@ class _HomePageState extends State<HomePage> {
                   onPressed: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (_) => const MaintenanceBookPage(
-                          suggestedIp: '192.168.4.1',
+                        builder: (_) => MaintenanceBookPage(
+                          suggestedIp: BoatSession.ip,
                         ),
                       ),
                     );

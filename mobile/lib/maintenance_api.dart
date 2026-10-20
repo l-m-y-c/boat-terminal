@@ -3,6 +3,9 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import 'protocol.dart';
+import 'utf8_limit.dart';
+
 /// Host[:port] for the terminal, or for the stand-in on this computer.
 /// A pasted `http://` prefix is stripped. The boat speaks plain HTTP on the LAN.
 String terminalHost(String raw) {
@@ -36,16 +39,16 @@ String clubBaseUrl(String raw) {
   return base;
 }
 
-/// The terminal stores 120 characters beside each photo. The boat's HTTP
-/// server accepts a URI of 512 bytes, and `/maintenance/photo?id=&n=&note=`
-/// already uses about 50 of those, so a heavily encoded note is shortened.
+/// The terminal stores [kMaintPhotoNoteMax] UTF-8 bytes beside each photo.
+/// The boat's HTTP server accepts a URI of 512 bytes, and
+/// `/maintenance/photo?id=&n=&note=` already uses about 50 of those, so a
+/// heavily encoded note is shortened.
 String _clipPhotoNote(String note) {
-  var text = note.trim();
-  if (text.length > 120) {
-    text = text.substring(0, 120);
-  }
+  var text = clipUtf8(note.trim(), kMaintPhotoNoteMax);
   while (text.isNotEmpty && Uri.encodeQueryComponent(text).length > 450) {
-    text = text.substring(0, text.length - 1);
+    // Drop a whole character, never half of a surrogate pair.
+    final runes = text.runes.toList()..removeLast();
+    text = String.fromCharCodes(runes);
   }
   return text;
 }
@@ -243,12 +246,19 @@ class ClubUploadResult {
 /// An empty [baseUrl] does not open a connection. A missing host leaves every
 /// item `pending` on the boat. A 200 or 201 with `wp_id` is acknowledged on
 /// the terminal. Anything else stays pending.
+/// Wraps one club request. The app passes `BoatWifi.viaInternet` so club
+/// calls leave the boat SoftAP. Tests and the stand-in use [directRoute].
+typedef ClubRoute = Future<T> Function<T>(Future<T> Function() call);
+
+Future<T> directRoute<T>(Future<T> Function() call) => call();
+
 class ClubMaintenanceClient {
   ClubMaintenanceClient({
     required String rawBaseUrl,
     this.token = '',
     http.Client? client,
     this.timeout = const Duration(seconds: 12),
+    this.route = directRoute,
   }) : baseUrl = clubBaseUrl(rawBaseUrl),
        _client = client ?? http.Client();
 
@@ -260,6 +270,7 @@ class ClubMaintenanceClient {
   final String baseUrl;
   final String token;
   final Duration timeout;
+  final ClubRoute route;
   final http.Client _client;
 
   bool get configured => baseUrl.isNotEmpty;
@@ -301,22 +312,24 @@ class ClubMaintenanceClient {
       );
       http.Response res;
       try {
-        res = await _client
-            .post(
-              uri,
-              headers: {
-                'Content-Type': 'application/json',
-                if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-              },
-              body: jsonEncode({
-                'local_id': localId,
-                'title': item['title'],
-                'description': item['description'],
-                'category': item['category'],
-                'priority': item['priority'],
-              }),
-            )
-            .timeout(timeout);
+        res = await route(
+          () => _client
+              .post(
+                uri,
+                headers: {
+                  'Content-Type': 'application/json',
+                  if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+                },
+                body: jsonEncode({
+                  'local_id': localId,
+                  'title': item['title'],
+                  'description': item['description'],
+                  'category': item['category'],
+                  'priority': item['priority'],
+                }),
+              )
+              .timeout(timeout),
+        );
       } on Exception {
         return ClubUploadResult(
           configured: true,
@@ -524,14 +537,16 @@ class ClubMaintenanceClient {
   }
 
   Future<List<Map<String, dynamic>>> _fetchBoat(int sailboatId) async {
-    final res = await _client
-        .get(
-          Uri.parse('$baseUrl/wp-json/lmyc/v1/boats/$sailboatId/maintenance'),
-          headers: {
-            if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-          },
-        )
-        .timeout(timeout);
+    final res = await route(
+      () => _client
+          .get(
+            Uri.parse('$baseUrl/wp-json/lmyc/v1/boats/$sailboatId/maintenance'),
+            headers: {
+              if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+            },
+          )
+          .timeout(timeout),
+    );
     if (res.statusCode != 200) {
       throw Exception('HTTP ${res.statusCode}');
     }

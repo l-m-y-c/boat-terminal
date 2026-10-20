@@ -1,5 +1,6 @@
-import 'dart:typed_data';
+import 'dart:async';
 
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -9,10 +10,29 @@ import 'package:permission_handler/permission_handler.dart';
 import 'boat_wifi.dart';
 import 'maintenance_api.dart';
 import 'maintenance_jpeg.dart';
+import 'protocol.dart';
+import 'utf8_formatter.dart';
 
 /// This boat's maintenance book over the terminal Wi-Fi, or a stand-in on a
 /// computer. Photos are stored with the note. The club field stays blank until
 /// lmyc.ca has the JSON route, and a blank field does not call the website.
+/// Book page display order. The set must equal [kMaintCategories] (tested).
+const kBookCategoryOrder = <String>[
+  'engine',
+  'electrical',
+  'hull',
+  'rigging',
+  'plumbing',
+  'interior',
+  'safety-equipment',
+  'sails',
+  'cleanliness',
+  'other',
+];
+
+/// Book page display order. The set must equal [kMaintPriorities] (tested).
+const kBookPriorityOrder = <String>['low', 'medium', 'high', 'critical'];
+
 class MaintenanceBookPage extends StatefulWidget {
   const MaintenanceBookPage({super.key, this.suggestedIp, this.client});
 
@@ -26,19 +46,6 @@ class MaintenanceBookPage extends StatefulWidget {
 }
 
 class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
-  static const _categories = <String>[
-    'engine',
-    'electrical',
-    'hull',
-    'rigging',
-    'plumbing',
-    'interior',
-    'safety-equipment',
-    'sails',
-    'cleanliness',
-    'other',
-  ];
-  static const _priorities = <String>['low', 'medium', 'high', 'critical'];
 
   final _ipController = TextEditingController();
   final _clubController = TextEditingController();
@@ -161,7 +168,7 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
   }
 
   Future<void> _addPhoto(ImageSource source) async {
-    if (_photos.length >= 5) {
+    if (_photos.length >= kMaintPhotoMax) {
       setState(() => _status = 'Five photos is the limit');
       return;
     }
@@ -187,11 +194,12 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
       _status = 'Preparing photo…';
     });
     try {
-      final fitted = fitMaintenanceJpeg(await picked.readAsBytes());
+      // Decode and re-encode off the UI isolate. A 12 MP photo froze the page.
+      final fitted = await compute(fitMaintenanceJpeg, await picked.readAsBytes());
       if (!mounted) return;
       setState(() {
         _photos.add(_PhotoDraft(fitted));
-        _status = '${_photos.length} of 5 photos ready';
+        _status = '${_photos.length} of $kMaintPhotoMax photos ready';
       });
     } catch (e) {
       if (!mounted) return;
@@ -282,6 +290,7 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
     final club = ClubMaintenanceClient(
       rawBaseUrl: _clubController.text,
       client: _client,
+      route: BoatWifi.viaInternet,
     );
     if (!club.configured) {
       _report(ClubMaintenanceClient.offMessage);
@@ -427,7 +436,8 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
           TextField(
             key: const Key('maint-title'),
             controller: _titleController,
-            maxLength: 200,
+            maxLength: kMaintTitleMax,
+            inputFormatters: [Utf8LengthLimitingFormatter(kMaintTitleMax)],
             decoration: const InputDecoration(
               labelText: 'Issue summary',
               border: OutlineInputBorder(),
@@ -441,7 +451,7 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
               border: OutlineInputBorder(),
             ),
             items: [
-              for (final c in _categories)
+              for (final c in kBookCategoryOrder)
                 DropdownMenuItem(value: c, child: Text(c)),
             ],
             onChanged: _busy
@@ -458,7 +468,7 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
               border: OutlineInputBorder(),
             ),
             items: [
-              for (final p in _priorities)
+              for (final p in kBookPriorityOrder)
                 DropdownMenuItem(value: p, child: Text(p)),
             ],
             onChanged: _busy
@@ -472,7 +482,8 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
             controller: _descController,
             minLines: 3,
             maxLines: 6,
-            maxLength: 2000,
+            maxLength: kMaintDescMax,
+            inputFormatters: [Utf8LengthLimitingFormatter(kMaintDescMax)],
             decoration: const InputDecoration(
               labelText: 'Details',
               border: OutlineInputBorder(),
@@ -514,7 +525,10 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
                   Expanded(
                     child: TextField(
                       controller: _photos[i].note,
-                      maxLength: 120,
+                      maxLength: kMaintPhotoNoteMax,
+                      inputFormatters: [
+                        Utf8LengthLimitingFormatter(kMaintPhotoNoteMax),
+                      ],
                       enabled: !_busy,
                       decoration: InputDecoration(
                         labelText: 'Photo ${i + 1} note',
@@ -598,7 +612,7 @@ class _BoatPhotoPageState extends State<_BoatPhotoPage> {
   @override
   void initState() {
     super.initState();
-    _load();
+    unawaited(_load());
   }
 
   Future<void> _load() async {
@@ -628,7 +642,7 @@ class _BoatPhotoPageState extends State<_BoatPhotoPage> {
     final next = _n + delta;
     if (next < 1 || next > _count || _busy) return;
     setState(() => _n = next);
-    _load();
+    unawaited(_load());
   }
 
   @override

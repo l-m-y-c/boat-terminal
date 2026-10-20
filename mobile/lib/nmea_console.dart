@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
+import 'nmea_sentences.dart';
+import 'protocol.dart';
+
 /// Live NMEA tap after BLE pair (GATT …000030 + optional TCP :10110).
 class NmeaConsolePage extends StatefulWidget {
   const NmeaConsolePage({
@@ -16,10 +19,8 @@ class NmeaConsolePage extends StatefulWidget {
   final BluetoothDevice device;
   final String? terminalIp;
 
-  static final Guid kLmycService =
-      Guid('6c6d7963-0001-4000-8000-000000000001');
-  static final Guid kLmycNmeaChr =
-      Guid('6c6d7963-0001-4000-8000-000000000030');
+  static final Guid kLmycService = Guid(kLmycServiceUuid);
+  static final Guid kLmycNmeaChr = Guid(kLmycNmeaUuid);
 
   @override
   State<NmeaConsolePage> createState() => _NmeaConsolePageState();
@@ -30,6 +31,7 @@ class _NmeaConsolePageState extends State<NmeaConsolePage> {
   final TextEditingController _filterController = TextEditingController();
   final TextEditingController _ipController = TextEditingController();
 
+  BluetoothCharacteristic? _nmeaChr;
   StreamSubscription<List<int>>? _notifySub;
   StreamSubscription<BluetoothConnectionState>? _connSub;
   Socket? _tcp;
@@ -57,14 +59,17 @@ class _NmeaConsolePageState extends State<NmeaConsolePage> {
         setState(() => _subscribed = false);
       }
     });
-    _startBle();
+    unawaited(_startBle());
   }
 
   @override
   void dispose() {
-    _notifySub?.cancel();
-    _connSub?.cancel();
-    _tcpSub?.cancel();
+    // Stop the terminal sending notifies nobody reads. Best effort: the link
+    // may already be down.
+    unawaited(_nmeaChr?.setNotifyValue(false).catchError((Object _) => false));
+    unawaited(_notifySub?.cancel());
+    unawaited(_connSub?.cancel());
+    unawaited(_tcpSub?.cancel());
     _tcp?.destroy();
     _filterController.dispose();
     _ipController.dispose();
@@ -88,7 +93,9 @@ class _NmeaConsolePageState extends State<NmeaConsolePage> {
         debugPrint('requestMtu: $e');
       }
 
+      if (!mounted) return;
       final services = await widget.device.discoverServices();
+      if (!mounted) return;
       BluetoothCharacteristic? nmea;
       for (final s in services) {
         if (s.uuid != NmeaConsolePage.kLmycService) continue;
@@ -108,8 +115,14 @@ class _NmeaConsolePageState extends State<NmeaConsolePage> {
       }
 
       await nmea.setNotifyValue(true);
+      if (!mounted) {
+        // Left the page while subscribing. dispose() never saw this char.
+        await nmea.setNotifyValue(false).catchError((Object _) => false);
+        return;
+      }
+      _nmeaChr = nmea;
       _notifySub = nmea.onValueReceived.listen(_onBleBytes);
-      if (mounted) setState(() => _subscribed = true);
+      setState(() => _subscribed = true);
     } catch (e) {
       debugPrint('NMEA BLE subscribe failed: $e');
       if (mounted) {
@@ -135,22 +148,11 @@ class _NmeaConsolePageState extends State<NmeaConsolePage> {
     return out.toString().trim();
   }
 
-  bool _checksumOk(String line) {
-    final star = line.lastIndexOf('*');
-    if (star < 1 || star + 2 >= line.length) return false;
-    if (line[0] != '\$' && line[0] != '!') return false;
-    var cs = 0;
-    for (var i = 1; i < star; i++) {
-      cs ^= line.codeUnitAt(i);
-    }
-    final offered = int.tryParse(line.substring(star + 1, star + 3), radix: 16);
-    return offered != null && offered == cs;
-  }
-
   void _ingest(String line, {required bool fromTcp}) {
-    if (!_checksumOk(line)) {
+    if (!mounted) return;
+    if (!nmeaChecksumOk(line)) {
       _badChecksum++;
-      if (mounted) setState(() {});
+      setState(() {});
       return;
     }
     _received++;
@@ -166,7 +168,7 @@ class _NmeaConsolePageState extends State<NmeaConsolePage> {
     _windowCount++;
 
     if (_paused) {
-      if (mounted) setState(() {});
+      setState(() {});
       return;
     }
     setState(() {
@@ -197,13 +199,17 @@ class _NmeaConsolePageState extends State<NmeaConsolePage> {
     try {
       final socket = await Socket.connect(
         host,
-        10110,
+        kGatewayTcpPort,
         timeout: const Duration(seconds: 5),
       );
       _tcp = socket;
       _tcpSub = socket.listen(
         (data) {
           _tcpAcc += String.fromCharCodes(data);
+          // A talker that never sends a newline must not grow this forever.
+          if (_tcpAcc.length > 4096) {
+            _tcpAcc = _tcpAcc.substring(_tcpAcc.length - 1024);
+          }
           while (true) {
             final cr = _tcpAcc.indexOf('\n');
             if (cr < 0) break;

@@ -1,12 +1,42 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
+
+import 'boat_wifi.dart';
+import 'nmea_sentences.dart';
+import 'protocol.dart';
+
+/// Chart posts the terminal accepts (firmware `kSnapshotJpegMax`).
+const int kSnapshotJpegMax = 220 * 1024;
+
+/// Letterbox [bytes] onto the 800×480 panel and encode a JPEG.
+/// Top level so it can run in a background isolate.
+Uint8List frameChartSnapshot(Uint8List bytes) {
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) {
+    throw const FormatException('Could not decode image');
+  }
+  final framed = img.Image(width: 800, height: 480);
+  img.fill(framed, color: img.ColorRgb8(7, 20, 34));
+  final fitted = img.copyResize(
+    decoded,
+    width: 800,
+    height: 480,
+    maintainAspect: true,
+    interpolation: img.Interpolation.linear,
+  );
+  final ox = ((800 - fitted.width) / 2).round();
+  final oy = ((480 - fitted.height) / 2).round();
+  img.compositeImage(framed, fitted, dstX: ox, dstY: oy);
+  return img.encodeJpg(framed, quality: 72);
+}
 
 /// Wi-Fi data plane: Navionics TCP 10110, chart JPEG snapshot, optional GNSS.
 class BoatLinkPage extends StatefulWidget {
@@ -28,13 +58,14 @@ class _BoatLinkPageState extends State<BoatLinkPage> {
   String _status = '';
   Timer? _gnssTimer;
   bool _gnssOn = false;
+  bool _gnssInFlight = false;
 
   @override
   void initState() {
     super.initState();
     _ipController.text = widget.suggestedIp?.isNotEmpty == true
         ? widget.suggestedIp!
-        : '192.168.4.1';
+        : kSoftApIp;
   }
 
   @override
@@ -57,31 +88,15 @@ class _BoatLinkPageState extends State<BoatLinkPage> {
 
   Future<void> _sendSnapshot() async {
     final picked = await _picker.pickImage(source: ImageSource.gallery);
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
     setState(() {
       _busy = true;
       _status = 'Resizing to 800×480 JPEG…';
     });
     try {
       final bytes = await File(picked.path).readAsBytes();
-      final decoded = img.decodeImage(bytes);
-      if (decoded == null) {
-        throw Exception('Could not decode image');
-      }
-      final framed = img.Image(width: 800, height: 480);
-      img.fill(framed, color: img.ColorRgb8(7, 20, 34));
-      final fitted = img.copyResize(
-        decoded,
-        width: 800,
-        height: 480,
-        maintainAspect: true,
-        interpolation: img.Interpolation.linear,
-      );
-      final ox = ((800 - fitted.width) / 2).round();
-      final oy = ((480 - fitted.height) / 2).round();
-      img.compositeImage(framed, fitted, dstX: ox, dstY: oy);
-      final jpeg = img.encodeJpg(framed, quality: 72);
-      if (jpeg.length > 220 * 1024) {
+      final jpeg = await compute(frameChartSnapshot, bytes);
+      if (jpeg.length > kSnapshotJpegMax) {
         throw Exception('JPEG ${jpeg.length} bytes — pick a simpler image');
       }
       final uri = Uri.parse('http://$_host/snapshot');
@@ -92,69 +107,62 @@ class _BoatLinkPageState extends State<BoatLinkPage> {
             body: jpeg,
           )
           .timeout(const Duration(seconds: 20));
+      if (!mounted) return;
       setState(() => _status = resp.statusCode == 200
           ? 'Snapshot sent (${jpeg.length} B). Tap Chart on the 7″.'
           : 'HTTP ${resp.statusCode}: ${resp.body}');
     } catch (e) {
+      if (!mounted) return;
       setState(() => _status = 'Snapshot failed: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  String _nmeaChecksum(String body) {
-    var cs = 0;
-    for (final c in body.codeUnits) {
-      cs ^= c;
+  /// One RMC + GGA post. Returns a status line; never throws.
+  Future<String> _pushGnssOnce() async {
+    try {
+      final perm = await Geolocator.requestPermission();
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        return 'Location permission denied';
+      }
+      final pos = await Geolocator.getCurrentPosition()
+          .timeout(const Duration(seconds: 5));
+      final now = DateTime.now().toUtc();
+      final sog = pos.speed * 1.94384;
+      final rmc = buildRmc(
+        utc: now,
+        lat: pos.latitude,
+        lon: pos.longitude,
+        sogKn: sog,
+        cogDeg: pos.heading,
+      );
+      final gga = buildGga(
+        utc: now,
+        lat: pos.latitude,
+        lon: pos.longitude,
+        altitudeM: pos.altitude,
+      );
+      final resp = await http
+          .post(Uri.parse('http://$_host/inject'), body: '$rmc\n$gga\n')
+          .timeout(const Duration(seconds: 5));
+      final shownSog = sog.isFinite && sog >= 0 ? sog : 0.0;
+      return 'GNSS ${resp.statusCode}: ${resp.body.trim()}  '
+          'SOG ${shownSog.toStringAsFixed(1)} kn';
+    } catch (e) {
+      return 'GNSS push failed: $e';
     }
-    return cs.toRadixString(16).toUpperCase().padLeft(2, '0');
   }
 
-  String _fmtLat(double lat) {
-    final hemi = lat >= 0 ? 'N' : 'S';
-    final a = lat.abs();
-    final deg = a.floor();
-    final min = (a - deg) * 60.0;
-    return '${deg.toString().padLeft(2, '0')}${min.toStringAsFixed(4).padLeft(7, '0')},$hemi';
-  }
-
-  String _fmtLon(double lon) {
-    final hemi = lon >= 0 ? 'E' : 'W';
-    final a = lon.abs();
-    final deg = a.floor();
-    final min = (a - deg) * 60.0;
-    return '${deg.toString().padLeft(3, '0')}${min.toStringAsFixed(4).padLeft(7, '0')},$hemi';
-  }
-
-  Future<void> _pushGnssOnce() async {
-    final perm = await Geolocator.requestPermission();
-    if (perm == LocationPermission.denied ||
-        perm == LocationPermission.deniedForever) {
-      setState(() => _status = 'Location permission denied');
-      return;
-    }
-    final pos = await Geolocator.getCurrentPosition();
-    final now = DateTime.now().toUtc();
-    final t =
-        '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}.00';
-    final d =
-        '${now.day.toString().padLeft(2, '0')}${now.month.toString().padLeft(2, '0')}${now.year.toString().substring(2)}';
-    final sog = pos.speed.isFinite ? (pos.speed * 1.94384) : 0.0;
-    final cog = pos.heading.isFinite ? pos.heading : 0.0;
-    final lat = _fmtLat(pos.latitude);
-    final lon = _fmtLon(pos.longitude);
-    final rmcBody =
-        'GPRMC,$t,A,$lat,$lon,${sog.toStringAsFixed(1)},${cog.toStringAsFixed(1)},$d,,,A';
-    final ggaBody =
-        'GPGGA,$t,$lat,$lon,1,08,1.0,${pos.altitude.toStringAsFixed(1)},M,,,';
-    final rmc = '\$$rmcBody*${_nmeaChecksum(rmcBody)}';
-    final gga = '\$$ggaBody*${_nmeaChecksum(ggaBody)}';
-    final uri = Uri.parse('http://$_host/inject');
-    final resp = await http
-        .post(uri, body: '$rmc\n$gga\n')
-        .timeout(const Duration(seconds: 5));
-    setState(() =>
-        _status = 'GNSS ${resp.statusCode}: ${resp.body.trim()}  SOG ${sog.toStringAsFixed(1)} kn');
+  /// Timer tick. Skips a tick while the last push is still out, so a slow
+  /// fix or a dead link cannot pile up requests.
+  Future<void> _gnssTick() async {
+    if (_gnssInFlight) return;
+    _gnssInFlight = true;
+    final status = await _pushGnssOnce();
+    _gnssInFlight = false;
+    if (mounted && _gnssOn) setState(() => _status = status);
   }
 
   Future<void> _toggleGnss() async {
@@ -167,10 +175,8 @@ class _BoatLinkPageState extends State<BoatLinkPage> {
       return;
     }
     setState(() => _gnssOn = true);
-    await _pushGnssOnce();
-    _gnssTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      _pushGnssOnce();
-    });
+    _gnssTimer = Timer.periodic(const Duration(seconds: 1), (_) => _gnssTick());
+    await _gnssTick();
   }
 
   @override
@@ -188,24 +194,26 @@ class _BoatLinkPageState extends State<BoatLinkPage> {
           const SizedBox(height: 16),
           TextField(
             controller: _ipController,
+            // The Navionics rows below show this address.
+            onChanged: (_) => setState(() {}),
             decoration: const InputDecoration(
               labelText: 'Terminal IP',
-              helperText: 'SoftAP is 192.168.4.1  ·  STA IP is on the helm LINK card',
+              helperText: 'SoftAP is $kSoftApIp  ·  STA IP is on the helm LINK card',
               border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 16),
           const Text('Navionics', style: TextStyle(fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
-          _copyRow('SSID', 'LMYC-BENCH-01'),
-          _copyRow('TCP', '192.168.4.1:10110'),
-          _copyRow('UDP', '10110 or 2000'),
+          _copyRow('SSID', BoatSession.ssid.isNotEmpty ? BoatSession.ssid : 'LMYC-<boat id>'),
+          _copyRow('TCP', '$_host:$kGatewayTcpPort'),
+          _copyRow('UDP', '$kGatewayUdpPort or $kGatewayUdpAltPort'),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Navionics → Menu → Connected devices → Add a device → '
-            'TCP 192.168.4.1 port 10110. Password is AP_PASSWORD from secrets.h '
+            'TCP $_host port $kGatewayTcpPort. Password is AP_PASSWORD from secrets.h '
             '(default lmycboat).',
-            style: TextStyle(color: Colors.black54, height: 1.35),
+            style: const TextStyle(color: Colors.black54, height: 1.35),
           ),
           const SizedBox(height: 20),
           FilledButton.icon(

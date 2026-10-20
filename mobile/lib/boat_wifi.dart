@@ -85,5 +85,28 @@ class BoatWifi {
     try {
       await _channel.invokeMethod<void>('release');
     } catch (_) {}
+    BoatSession.joined = false;
+  }
+
+  /// Runs [call] on the phone's internet route, then binds back to the boat.
+  ///
+  /// Joining binds every socket in this app to the boat SoftAP, which has no
+  /// internet, so club calls need this. The boat Wi-Fi stays joined. Boat
+  /// calls made while [call] runs would go the wrong way, so keep club work
+  /// sequential with boat work, as `syncBook` does.
+  static Future<T> viaInternet<T>(Future<T> Function() call) async {
+    if (!BoatSession.joined) {
+      return call();
+    }
+    try {
+      await _channel.invokeMethod<void>('useInternet');
+    } catch (_) {}
+    try {
+      return await call();
+    } finally {
+      try {
+        await _channel.invokeMethod<bool>('useBoat');
+      } catch (_) {}
+    }
   }
 }

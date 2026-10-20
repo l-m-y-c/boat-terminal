@@ -17,17 +17,26 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Joins the boat SoftAP for this app only. Android shows one Connect prompt.
  * The boat network has no internet, so the request drops that capability and
  * the process is bound to the resulting network. Other apps keep their own route.
+ *
+ * While the request is held the boat Wi-Fi stays up, so the binding can be
+ * flipped: useInternet unbinds for a club call, useBoat binds back. Without
+ * that the club host is unreachable until the process restarts.
  */
 object BoatWifi : MethodChannel.MethodCallHandler {
     private val main = Handler(Looper.getMainLooper())
     private var callback: ConnectivityManager.NetworkCallback? = null
     private var joinedSsid: String? = null
+    private var boatNetwork: Network? = null
+
+    /** Answers a connect() that has not finished when it is superseded. */
+    private var failPending: ((String) -> Unit)? = null
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         val activity = currentContext ?: run {
             result.error("wifi", "The app is not ready to join Wi-Fi.", null)
             return
         }
+        val app = activity.applicationContext
         when (call.method) {
             "connect" -> {
                 val ssid = call.argument<String>("ssid")?.trim().orEmpty()
@@ -35,8 +44,15 @@ object BoatWifi : MethodChannel.MethodCallHandler {
                 connect(activity, ssid, psk, result)
             }
             "release" -> {
-                release(activity)
+                release(app)
                 result.success(null)
+            }
+            "useInternet" -> {
+                bind(app, null)
+                result.success(null)
+            }
+            "useBoat" -> {
+                result.success(boatNetwork?.let { bind(app, it) } ?: false)
             }
             else -> result.notImplemented()
         }
@@ -44,6 +60,11 @@ object BoatWifi : MethodChannel.MethodCallHandler {
 
     @Volatile
     var currentContext: Context? = null
+
+    private fun bind(context: Context, network: Network?): Boolean {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        return runCatching { cm.bindProcessToNetwork(network) }.getOrDefault(false)
+    }
 
     private fun connect(
         context: Context,
@@ -64,7 +85,8 @@ object BoatWifi : MethodChannel.MethodCallHandler {
             return
         }
         val app = context.applicationContext
-        if (joinedSsid == ssid && callback != null) {
+        if (joinedSsid == ssid && boatNetwork != null && callback != null) {
+            bind(app, boatNetwork)
             result.success(null)
             return
         }
@@ -82,13 +104,26 @@ object BoatWifi : MethodChannel.MethodCallHandler {
             .build()
 
         val pending = AtomicBoolean(true)
+        failPending = { message ->
+            if (pending.compareAndSet(true, false)) {
+                result.error("wifi", message, null)
+            }
+        }
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 main.post {
-                    val bound = cm.bindProcessToNetwork(network)
+                    if (callback !== this) {
+                        return@post
+                    }
+                    boatNetwork = network
+                    val bound = bind(app, network)
+                    if (bound) {
+                        joinedSsid = ssid
+                    }
                     if (!pending.compareAndSet(true, false)) {
                         return@post
                     }
+                    failPending = null
                     if (!bound) {
                         release(app)
                         result.error(
@@ -103,16 +138,31 @@ object BoatWifi : MethodChannel.MethodCallHandler {
                 }
             }
 
+            override fun onLost(network: Network) {
+                main.post {
+                    if (callback !== this || boatNetwork != network) {
+                        return@post
+                    }
+                    /* The request stays registered, so Android may bring the
+                     * boat back and onAvailable binds again. Until then the
+                     * next connect() must not report success. */
+                    boatNetwork = null
+                    joinedSsid = null
+                    bind(app, null)
+                }
+            }
+
             override fun onUnavailable() {
                 main.post {
                     if (!pending.compareAndSet(true, false)) {
                         return@post
                     }
+                    failPending = null
                     release(app)
                     result.error(
                         "wifi",
                         "Android did not join $ssid. Tap Connect on the system prompt. " +
-                            "The network has no internet; the book still uses 192.168.4.1.",
+                            "The network has no internet; the book still uses the boat address.",
                         null,
                     )
                 }
@@ -122,16 +172,18 @@ object BoatWifi : MethodChannel.MethodCallHandler {
         try {
             cm.requestNetwork(request, cb, 60_000)
         } catch (e: SecurityException) {
-            release(app)
-            result.error(
-                "wifi",
-                "Android blocked the Wi-Fi request. Allow nearby Wi-Fi for LMYC and try again.",
-                null,
-            )
+            failNow(app, "Android blocked the Wi-Fi request. Allow nearby Wi-Fi for LMYC and try again.")
         } catch (e: RuntimeException) {
-            release(app)
-            result.error("wifi", "Could not ask Android to join $ssid.", null)
+            failNow(app, "Could not ask Android to join $ssid.")
         }
+    }
+
+    /** Answers the pending connect() once with message, then drops the request. */
+    private fun failNow(context: Context, message: String) {
+        val fail = failPending
+        failPending = null
+        release(context)
+        fail?.invoke(message)
     }
 
     private fun release(context: Context) {
@@ -139,6 +191,9 @@ object BoatWifi : MethodChannel.MethodCallHandler {
         callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         callback = null
         joinedSsid = null
+        boatNetwork = null
+        failPending?.invoke("A newer Wi-Fi request replaced this one.")
+        failPending = null
         runCatching { cm.bindProcessToNetwork(null) }
     }
 }
