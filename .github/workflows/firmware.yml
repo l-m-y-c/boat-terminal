@@ -46,3 +46,7 @@ jobs:
 
       - name: Compile firmware
         run: pio run
+
+      # Uses the NMEA2000 library pio run just fetched. No board needed.
+      - name: Host tests (JSON, N2K -> 0183, AIS)
+        run: CXX=g++ sh test_host/run.sh

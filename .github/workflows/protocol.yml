@@ -1,0 +1,38 @@
+name: Protocol
+
+# The BLE UUIDs, ports and maintenance limits are declared by hand in the
+# firmware, the app and the stand-in. This fails when they drift.
+on:
+  push:
+    branches: [main]
+    paths:
+      - firmware/src/**
+      - mobile/lib/**
+      - tools/**
+      - .github/workflows/protocol.yml
+  pull_request:
+    paths:
+      - firmware/src/**
+      - mobile/lib/**
+      - tools/**
+      - .github/workflows/protocol.yml
+
+jobs:
+  check:
+    name: firmware / app / stand-in agree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compare declarations
+        run: python3 tools/check_protocol.py
+
+      - name: Python scripts compile
+        run: python3 -m py_compile tools/*.py firmware/test_host/*.py firmware/scripts/*.py docs/assets/n2k-power/*.py

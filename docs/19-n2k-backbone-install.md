@@ -20,7 +20,7 @@ flowchart LR
     T2 -. drop .- DEP[Airmar DST810 depth sounder]
     TP -. power cable .- PWR[Switched 12 V<br/>3 A fuse]
     T3 -. drop .- PLOT[Garmin GPSMAP 740s]
-    T4 -. drop .- DCDC[1 A fuse + Pololu D36V28F5<br/>from NET-S / NET-C] --- BT[boat-terminal<br/>Waveshare, bus-powered, listen-only]
+    T4 -. drop .- DCDC[1 A fuse + diode + Pololu APM81815<br/>from NET-S / NET-C] --- BT[boat-terminal<br/>Waveshare, bus-powered, listen-only]
 
     PLOT == Garmin Marine Network ==> RADAR[Radar]
     BT -. WiFi .- EINK[e-Ink display]
@@ -57,12 +57,13 @@ The drop, backbone and Garmin rules come from Garmin's NMEA 2000 technical refer
 | As measured | Micro-C backbone cable | TBD | Length from the mounting plan. |
 | 0–2 | Micro-C drop cables | TBD | The VHF and 740s may come with one. Check what's on the boat. |
 | 1 | Micro-C drop, bare wire one end, or field-attach connector | TBD | For boat-terminal. Power and data wires are used. The drain is cut back. |
-| 1 | 5 V 3.2 A step-down regulator | [Pololu D36V28F5](https://www.pololu.com/product/3782) (#3782) | 12 V to 5 V for boat-terminal. Non-isolated, 5.3–50 V in. See [20](20-n2k-bus-power-supply.md). |
+| 1 | 5 V step-down regulator carrier | [Pololu APM81815, 5V Out](https://www.pololu.com/product/5267) (#5267), US$6.95 | 12 V to 5 V for boat-terminal. Non-isolated, 5.05–72 V in. No reverse protection, hence the diode below. The [D36V28F5](https://www.pololu.com/product/3782) (#3782, US$23.95) is a pricier alternative with it built in. See [20](20-n2k-bus-power-supply.md). |
 | 1 | Waterproof inline ATO/ATC fuse holder | [Blue Sea 5065](https://www.bluesea.com/products/5065/Waterproof_In-Line_ATO_ATC_Fuse_holder) | On NET-S in the boat-terminal drop, before the Pololu. |
 | 1 + spares | 1 A ATO blade fuse, fast-acting | Littelfuse 0287001.PXCN | For the holder above. |
 | 1 | USB-C male to 2 bare wires power pigtail (VBUS and GND only) | Generic 22 AWG | Pololu output into the board's **USB** socket. No CC resistor needed (Waveshare schematic V1.2). Check polarity with a meter. |
-| 0–1 | Bidirectional TVS, optional | Littelfuse P6KE27CA | Soldered across the Pololu VIN/GND pins. Clamps spikes at about 37 V. |
-| 0–1 | 100 µF 50 V electrolytic, optional | Panasonic EEU-FC1H101 | Fit only if the hot-plug test shows VIN over about 35 V. See [20](20-n2k-bus-power-supply.md#bench-test). |
+| 0–1 | 40 V 3 A Schottky diode, recommended | onsemi 1N5822 (SS34 is the SMD equivalent) | In series in NET-S, band towards the Pololu VIN. Reverse-polarity protection. |
+| 0–1 | Bidirectional TVS | Littelfuse P6KE27CA | Fit with the diode, on its bus side. Clamps spikes at about 37 V. Optional if there's no diode. |
+| 0–1 | 100 µF 50 V electrolytic, optional | Panasonic EEU-FC1H101 | Fit only if the hot-plug test shows VIN over about 40 V. See [20](20-n2k-bus-power-supply.md#bench-test). |
 | 1 | Small IP66/67 box with two cable glands | generic | For the Pololu and the drop splices. |
 | 1 | 3D-printed case for the display board, optional | [Printables model 1558735](https://www.printables.com/model/1558735-waveshare-esp32-s3-touch-lcd-7-case) | See the note below. |
 | 1 | Inline fuse holder and 3 A fuse | — | For the power tap. Usually on the kit power cable. Confirm. |
@@ -108,7 +109,7 @@ At the bus, through a DC/DC at 85 % efficiency (a cautious figure; the Pololu do
 
 LEN uses the worst case: 460 mA at 9 V, rounded up to 10 LEN.
 
-With the chosen Pololu D36V28F5 (about 94 % at 9 V from Pololu's efficiency graph), the current at the tee is **about 0.43 A at 9 V**. That includes the fuse and a 6 m drop. Even at 87 % it is 0.46 A. Both are inside 10 LEN (0.50 A). See [20](20-n2k-bus-power-supply.md).
+With the chosen Pololu APM81815 (about 92 % at 0.7 A from Pololu's efficiency graph), the current at the tee is **about 0.44 A at 9 V, or 0.46 A with the reverse-polarity diode fitted**. That includes the fuse and a 6 m drop. Even at 87 % it is 0.47 A, or 0.49 A with the diode. All are inside 10 LEN (0.50 A). See [20](20-n2k-bus-power-supply.md).
 
 If the board measures above about 0.75 A at 5 V, the 9 V bus current passes 0.5 A and the LEN goes to 11–12. The total would then be 17–18 LEN, still inside the 3 A tap. Measure on the bench (section 5) and update this table before commissioning.
 
@@ -122,7 +123,7 @@ Airmar says the DST810 is being replaced by the DST820 by mid-2026. If the club 
 
 boat-terminal takes its power and its data from one drop cable. Its only ground is the bus ground, NET-C. With one ground there is no ground loop, so the onboard TJA1051 does not need isolation. Small bus-powered N2K sensors work the same way.
 
-The board only accepts 5 V, on its USB-C sockets. There is no wide-range DC input on this board. So a DC/DC converter, the Pololu D36V28F5, turns bus power into 5 V. The full design, parts and power bench test are in [20 – N2K Bus Power Supply](20-n2k-bus-power-supply.md).
+The board only accepts 5 V, on its USB-C sockets. There is no wide-range DC input on this board. So a DC/DC converter, the Pololu APM81815, turns bus power into 5 V. The full design, parts and power bench test are in [20 – N2K Bus Power Supply](20-n2k-bus-power-supply.md).
 
 ![boat-terminal N2K bus power wiring](assets/n2k-power/schematic.png)
 
@@ -131,7 +132,7 @@ The same diagram as [SVG](assets/n2k-power/schematic.svg).
 ```mermaid
 flowchart LR
     TEE[Tee] --- DROP[Micro-C drop]
-    DROP -- "NET-S (red)" --> FUSE[1 A ATO fuse<br/>Blue Sea 5065] --> DCDC[Pololu D36V28F5<br/>12 V to 5 V, non-isolated]
+    DROP -- "NET-S (red)" --> FUSE[1 A ATO fuse<br/>Blue Sea 5065] --> DCDC[Diode + Pololu APM81815<br/>12 V to 5 V, non-isolated]
     DROP -- "NET-C (black)" --> DCDC
     DCDC -- "5 V + GND,<br/>2-wire USB-C pigtail" --> USB[Waveshare USB socket]
     DROP -- "CAN-H (white) / CAN-L (blue)" --> CAN[Waveshare CAN header<br/>PH2.0, jumper 13 off]
@@ -141,16 +142,16 @@ flowchart LR
 Wiring:
 
 1. Remove jumper 13, the onboard 120 Ω terminator.
-2. NET-S (red) through the Blue Sea 5065 holder with a 1 A ATO fuse (Littelfuse 0287001.PXCN) to the Pololu VIN.
-3. NET-C (black) to the Pololu GND. Optional: the P6KE27CA TVS across VIN/GND, and the 100 µF cap only if the hot-plug test needs it.
-4. Pololu VOUT and GND to the board through a 2-wire USB-C power pigtail into the socket marked **USB**. That socket's VBUS goes straight onto the board's 5 V rail, and CC1/CC2 already have 5.1 kΩ to ground, so no CC resistor is needed. Leave EN and PG open. Leave the UART socket empty.
+2. NET-S (red) through the Blue Sea 5065 holder with a 1 A ATO fuse (Littelfuse 0287001.PXCN), then the 1N5822 diode (band towards the Pololu), to the Pololu VIN. The Pololu has no reverse protection, so if you leave the diode out, check the drop polarity with a meter before every first connection.
+3. NET-C (black) to the Pololu GND. With the diode, fit the P6KE27CA TVS from NET-S to NET-C on the bus side of the diode. Fit the 100 µF cap across the Pololu VIN/GND only if the hot-plug test needs it.
+4. Pololu VOUT and GND to the board through a 2-wire USB-C power pigtail into the socket marked **USB**. That socket's VBUS goes straight onto the board's 5 V rail, and CC1/CC2 already have 5.1 kΩ to ground, so no CC resistor is needed. Leave EN open. Leave the UART socket empty.
 5. CAN-H (white) and CAN-L (blue) to the board's CAN header (PH2.0, High and Low). Check colours against the cable's own sheet.
 6. Shield / drain (bare): cut it back at the boat-terminal end and insulate it. On N2K the shield is grounded at one point only, the power tap. Devices don't connect it.
 7. Set `NMEA_SOURCE` to `1` (or `2` for AUTO) in `firmware/src/secrets.h`. See [05](05-nmea-connectivity.md#waveshare-listen-only-nmea-2000-firmware).
 
 The Pololu is non-isolated, so its input and output grounds are already common. That matters: the CAN header has no ground pin. The TJA1051 gets its bus reference through the board ground, so board ground must be NET-C.
 
-The Pololu is a bare board. Put it in a small IP66/67 box with the drop splices, on M2 standoffs, and conformal-coat it. Keep the fuse reachable.
+The Pololu is a bare 10 × 19 mm board with no mounting holes. Solder the wires straight to its pins, hold it down with foam tape or sealant in a small IP66/67 box with the drop splices, and conformal-coat it. Keep the fuse reachable.
 
 **The hard rule: no other wired connection while it's on the bus.**
 
@@ -195,7 +196,7 @@ Checks:
 | 1 | `make firmware-test` on a Mac | All checks pass. |
 | 2 | `make firmware` builds | No errors. |
 | 3 | Off the bus: flash with `NMEA_SOURCE 1`. Watch the UART Type-C log. | CAN comes up. EXIO5 goes high. USB CDC drops as expected. |
-| 4 | First run the power-supply bench test in [20](20-n2k-bus-power-supply.md#bench-test). Then unplug the laptop and power the board from the drop through the fuse and Pololu. | Board boots. Screen and Wi-Fi come up. Nothing else is wired to it. |
+| 4 | First run the power-supply bench test in [20](20-n2k-bus-power-supply.md#bench-test). Then unplug the laptop and power the board from the drop through the fuse, diode and Pololu. | Board boots. Screen and Wi-Fi come up. Nothing else is wired to it. |
 | 5 | Current at 12 V into the drop, backlight full, Wi-Fi active (phone streaming TCP 10110) | Note the peak. Update the LEN in section 3. Must stay under 1 A (20 LEN). |
 | 6 | Turn the bench supply down to 9 V | Board keeps running, no resets. Note the current at 9 V. |
 | 7 | Pin handover on GPIO19/20 | Frames count up on the FIX chip or phone. This has never been tested on hardware. |
@@ -227,6 +228,6 @@ Write the as-built order of tees, cable lengths, the measured boat-terminal curr
 ## 7. Open questions
 
 - **boat-terminal current.** The 10 LEN is an estimate. Measure it on the bench (section 5, checks 5 and 6).
-- **Power box and display case.** The Pololu, fuse and splices need a small box near the display. Whether they fit inside the Printables display case hasn't been checked. Openings in the case for the drop and USB-C lead are drilled after printing and sealed with Sikaflex-291.
+- **Power box and display case.** The Pololu, diode, TVS, fuse and splices need a small box near the display. Whether they fit inside the Printables display case hasn't been checked. Openings in the case for the drop and USB-C lead are drilled after printing and sealed with Sikaflex-291.
 - **Hot-plug spike.** Whether the optional 100 µF cap is needed depends on the hot-plug scope test in [20](20-n2k-bus-power-supply.md#bench-test).
 - **Mounting positions and cable lengths.** Needed before ordering backbone cable and extra tees.

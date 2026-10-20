@@ -9,6 +9,7 @@ import 'package:lmyc_app/main.dart';
 import 'package:lmyc_app/maintenance_api.dart';
 import 'package:lmyc_app/maintenance_book.dart';
 import 'package:lmyc_app/maintenance_jpeg.dart';
+import 'package:lmyc_app/protocol.dart';
 
 void main() {
   test('long edge becomes 2000 and a small photo is not enlarged', () {

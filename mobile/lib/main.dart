@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
@@ -14,6 +13,8 @@ import 'boatlink.dart';
 import 'home_flow.dart';
 import 'maintenance_book.dart';
 import 'nmea_console.dart';
+import 'pairing_link.dart';
+import 'protocol.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -65,8 +66,9 @@ class _NearbyHit {
   String get name {
     final n = result.advertisementData.advName;
     if (n.isNotEmpty) return n;
-    if (result.device.platformName.isNotEmpty)
+    if (result.device.platformName.isNotEmpty) {
       return result.device.platformName;
+    }
     return '(no name)';
   }
 
@@ -135,7 +137,6 @@ class _HomePageState extends State<HomePage> {
   String? _terminalId;
   String? _bleName;
   String? _oob;
-  String? _version;
 
   BlePhase _blePhase = BlePhase.idle;
   String _bleDetail = '';
@@ -146,17 +147,11 @@ class _HomePageState extends State<HomePage> {
   int _heardCount = 0;
   final Map<String, _NearbyHit> _nearby = {};
 
-  static final Guid kLmycService = Guid('6c6d7963-0001-4000-8000-000000000001');
-  static final Guid kLmycPayloadChr = Guid(
-    '6c6d7963-0001-4000-8000-000000000010',
-  );
-  static final Guid kLmycSessionChr = Guid(
-    '6c6d7963-0001-4000-8000-000000000020',
-  );
-  static final Guid kLmycStatusChr = Guid(
-    '6c6d7963-0001-4000-8000-000000000021',
-  );
-  static final Guid kLmycWifiChr = Guid('6c6d7963-0001-4000-8000-000000000040');
+  static final Guid kLmycService = Guid(kLmycServiceUuid);
+  static final Guid kLmycPayloadChr = Guid(kLmycPayloadUuid);
+  static final Guid kLmycSessionChr = Guid(kLmycSessionUuid);
+  static final Guid kLmycStatusChr = Guid(kLmycStatusUuid);
+  static final Guid kLmycWifiChr = Guid(kLmycWifiUuid);
 
   bool _wifiBusy = false;
   bool _wifiJoined = false;
@@ -166,7 +161,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _initDeepLinks();
+    unawaited(_initDeepLinks());
   }
 
   Future<void> _initDeepLinks() async {
@@ -197,13 +192,21 @@ class _HomePageState extends State<HomePage> {
 
   void _handleIncomingLink(Uri uri) {
     if (uri.scheme != 'lmyc') return;
-    final params = uri.queryParameters;
+    final link = PairingLink.parse(uri);
+    if (link == null || link.oob == null || link.bleName == null) {
+      setState(() {
+        _blePhase = BlePhase.failed;
+        _bleDetail = link == null
+            ? PairingLink.rejection(uri)
+            : 'The terminal QR is missing a pairing secret.';
+      });
+      return;
+    }
     setState(() {
-      _version = params['v'];
-      _boatId = params['boat'];
-      _terminalId = params['tid'];
-      _bleName = params['ble'];
-      _oob = params['oob'];
+      _boatId = link.boatId;
+      _terminalId = link.terminalId;
+      _bleName = link.bleName;
+      _oob = link.oob;
     });
     _queueAutoConnect();
   }
@@ -217,7 +220,7 @@ class _HomePageState extends State<HomePage> {
       _connectQueued = false;
       if (!mounted || _busy || _blePhase == BlePhase.paired) return;
       if (_oob == null || _bleName == null) return;
-      _startScan(autoConnectExact: true);
+      unawaited(_startScan(autoConnectExact: true));
     });
   }
 
@@ -278,7 +281,7 @@ class _HomePageState extends State<HomePage> {
     final uuidMatch = r.advertisementData.serviceUuids.any(
       (u) => u == kLmycService,
     );
-    final prefixMatch = names.any((n) => n.toUpperCase().startsWith('LMYC-'));
+    final prefixMatch = names.any(isLmycBleName);
     final exactMatch = _bleName != null && names.any((n) => n == _bleName);
     return exactMatch || prefixMatch || uuidMatch;
   }
@@ -494,7 +497,7 @@ class _HomePageState extends State<HomePage> {
           debugPrint('payload bytes: ${payload.length}');
           // Bench payload is the live lmyc:// URI (includes current oob=).
           // Prefer it over a stale QR after terminal reboot.
-          final fromPayload = _oobFromPayloadBytes(payload);
+          final fromPayload = oobFromPayloadBytes(payload);
           if (fromPayload != null) {
             _oob = fromPayload;
             debugPrint(
@@ -537,7 +540,7 @@ class _HomePageState extends State<HomePage> {
 
       // Default ATT MTU is 23 → max write payload 20 bytes. Firmware accepts
       // a raw 16-byte OOB write on session; status comes from …000021.
-      final oobBytes = _oobBytesFromHex(_oob!);
+      final oobBytes = oobBytesFromHex(_oob!);
       if (oobBytes == null) {
         setState(() {
           _blePhase = BlePhase.failed;
@@ -558,9 +561,9 @@ class _HomePageState extends State<HomePage> {
       try {
         await statusChr.setNotifyValue(true);
         notifySub = statusChr.onValueReceived.listen((bytes) {
-          final text = _sessionReplyFromBytes(bytes);
+          final text = sessionReplyFromBytes(bytes);
           debugPrint('status notify: ${bytes.length}B raw=$bytes text="$text"');
-          if (_isSessionStatus(text) && !statusCompleter.isCompleted) {
+          if (isSessionStatus(text) && !statusCompleter.isCompleted) {
             statusCompleter.complete(text);
           }
         });
@@ -582,12 +585,12 @@ class _HomePageState extends State<HomePage> {
             Duration(milliseconds: attempt == 0 ? 200 : 150),
           );
           final replyBytes = await statusChr.read();
-          reply = _sessionReplyFromBytes(replyBytes);
+          reply = sessionReplyFromBytes(replyBytes);
           debugPrint(
             'status read #$attempt: ${replyBytes.length}B '
             'raw=$replyBytes text="$reply"',
           );
-          if (_isSessionStatus(reply)) break;
+          if (isSessionStatus(reply)) break;
         }
       } finally {
         await notifySub?.cancel();
@@ -607,7 +610,7 @@ class _HomePageState extends State<HomePage> {
         });
         await _bringUpBoatWifi(device);
       } else {
-        final shown = _isSessionStatus(reply) ? reply : '(no status yet)';
+        final shown = isSessionStatus(reply) ? reply : '(no status yet)';
         setState(() {
           _blePhase = BlePhase.failed;
           _sessionReply = shown;
@@ -617,6 +620,7 @@ class _HomePageState extends State<HomePage> {
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _blePhase = BlePhase.failed;
         _bleDetail = 'Pairing failed: $e';
@@ -736,7 +740,7 @@ class _HomePageState extends State<HomePage> {
     try {
       final socket = await Socket.connect(
         ip,
-        10110,
+        kGatewayTcpPort,
         timeout: const Duration(seconds: 4),
       );
       socket.destroy();
@@ -749,65 +753,20 @@ class _HomePageState extends State<HomePage> {
       _boatReachable = open;
       _wifiJoined = open;
       _wifiDetail = open
-          ? 'The phone is on the boat hotspot. Navionics and i-Boating can use $ip port 10110, and UDP 10110 and 2000.'
+          ? 'The phone is on the boat hotspot. Navionics and i-Boating can use $ip port $kGatewayTcpPort, and UDP $kGatewayUdpPort and $kGatewayUdpAltPort.'
           : 'The phone is not on the boat hotspot. Home Wi-Fi stays connected because it has internet. Open Wi-Fi settings and tap the boat network.';
     });
   }
 
   @override
   void dispose() {
-    _linkSubscription?.cancel();
+    unawaited(_linkSubscription?.cancel());
+    unawaited(_scanSubscription?.cancel());
+    unawaited(_connSubscription?.cancel());
     _pasteController.dispose();
-    _disconnect(resetPhase: false);
+    unawaited(_disconnect(resetPhase: false));
     _ui.dispose();
     super.dispose();
-  }
-
-  String _short(String? value, [int max = 20]) {
-    if (value == null || value.isEmpty) return '—';
-    if (value.length <= max) return value;
-    return '${value.substring(0, max)}…';
-  }
-
-  /// Decode QR `oob=` (32 hex chars) to the 16 raw bytes the session char expects.
-  static Uint8List? _oobBytesFromHex(String hex) {
-    final cleaned = hex.trim();
-    if (cleaned.length != 32) return null;
-    final out = Uint8List(16);
-    for (var i = 0; i < 16; i++) {
-      final byte = int.tryParse(cleaned.substring(i * 2, i * 2 + 2), radix: 16);
-      if (byte == null) return null;
-      out[i] = byte;
-    }
-    return out;
-  }
-
-  /// Session replies are ASCII (OK/FAIL/WAIT/ERR). Stop at NUL — NimBLE may
-  /// ship a fixed-size buffer (e.g. "OK\\0T..." from a previous "WAIT").
-  static String _sessionReplyFromBytes(List<int> bytes) {
-    final out = StringBuffer();
-    for (final b in bytes) {
-      if (b == 0) break;
-      if (b >= 32 && b <= 126) out.writeCharCode(b);
-    }
-    return out.toString().trim();
-  }
-
-  static bool _isSessionStatus(String text) =>
-      text == 'OK' ||
-      text == 'FAIL' ||
-      text == 'ERR' ||
-      text == 'WAIT' ||
-      text == 'PONG';
-
-  /// Pull `oob=` from the terminal payload characteristic (lmyc:// URI bytes).
-  static String? _oobFromPayloadBytes(List<int> bytes) {
-    final text = _sessionReplyFromBytes(bytes);
-    final uri = Uri.tryParse(text);
-    if (uri == null || uri.scheme != 'lmyc') return null;
-    final oob = uri.queryParameters['oob'];
-    if (oob == null || oob.length != 32) return null;
-    return oob;
   }
 
   Color get _phaseColor {
@@ -1029,7 +988,7 @@ class _HomePageState extends State<HomePage> {
                 FilledButton(
                   onPressed: _busy || _oob == null || _bleName == null
                       ? null
-                      : () => _startScan(autoConnectExact: true),
+                      : () => unawaited(_startScan(autoConnectExact: true)),
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFF001F3F),
                     padding: const EdgeInsets.symmetric(vertical: 14),
@@ -1146,7 +1105,9 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(height: 16),
           if (paired && _device != null)
             FilledButton.icon(
-              onPressed: _wifiBusy ? null : () => _bringUpBoatWifi(_device!),
+              onPressed: _wifiBusy
+                  ? null
+                  : () => unawaited(_bringUpBoatWifi(_device!)),
               icon: const Icon(Icons.wifi),
               label: Text(_wifiBusy ? 'Joining…' : 'Join boat Wi-Fi'),
               style: FilledButton.styleFrom(
@@ -1160,7 +1121,10 @@ class _HomePageState extends State<HomePage> {
               onPressed: () {
                 Navigator.of(routeContext).push(
                   MaterialPageRoute<void>(
-                    builder: (_) => NmeaConsolePage(device: _device!),
+                    builder: (_) => NmeaConsolePage(
+                      device: _device!,
+                      terminalIp: BoatSession.ip,
+                    ),
                   ),
                 );
               },
@@ -1198,7 +1162,7 @@ class _HomePageState extends State<HomePage> {
           if (paired) ...[
             const SizedBox(height: 8),
             TextButton(
-              onPressed: () => _disconnect(),
+              onPressed: () => unawaited(_disconnect()),
               child: const Text('Disconnect'),
             ),
           ],
@@ -1230,7 +1194,7 @@ class _HomePageState extends State<HomePage> {
                 child: OutlinedButton.icon(
                   onPressed: _busy
                       ? null
-                      : () => _startScan(autoConnectExact: false),
+                      : () => unawaited(_startScan(autoConnectExact: false)),
                   icon: const Icon(Icons.radar),
                   label: Text(_busy ? 'Working…' : 'Find terminals'),
                 ),
@@ -1250,7 +1214,7 @@ class _HomePageState extends State<HomePage> {
                               _blePhase = BlePhase.connecting;
                               _bleDetail = 'Connecting to ${h.name}…';
                             });
-                            _connectAndConfirm(h.result.device);
+                            unawaited(_connectAndConfirm(h.result.device));
                           },
                     child: const Text('Connect'),
                   ),
