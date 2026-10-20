@@ -13,9 +13,7 @@
 #include "driver/gpio.h"
 #include "driver/twai.h"
 
-#if __has_include("secrets.h")
-#include "secrets.h"
-#endif
+#include "boat_config.h"
 
 #ifndef NMEA_SOURCE
 #define NMEA_SOURCE NMEA_SOURCE_SIM

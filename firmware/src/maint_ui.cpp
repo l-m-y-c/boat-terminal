@@ -613,15 +613,16 @@ void maint_ui_reload(void)
      * when it changed, or when this is the first look. */
     if (!ready || !g_items_fresh || gen != g_items_gen) {
         g_count = 0;
-        if (ready && maint_store_list_start()) {
+        MaintListCursor cursor;
+        if (ready && maint_store_list_start(&cursor)) {
             MaintItem item;
-            while (g_count < kRows && maint_store_list_next(&item)) {
+            while (g_count < kRows && maint_store_list_next(&cursor, &item)) {
                 if (!is_open(&item)) {
                     continue;
                 }
                 g_items[g_count++] = item;
             }
-            maint_store_list_end();
+            maint_store_list_end(&cursor);
         }
         g_items_fresh = ready;
         g_items_gen = gen;

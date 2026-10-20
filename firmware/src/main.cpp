@@ -14,29 +14,8 @@
  */
 
 #include <Arduino.h>
-#include <SD.h>
-#include <SPI.h>
 #include <cstring>
-#include "esp_event.h"
-#include "esp_netif.h"
-#include "esp_wifi.h"
-#if __has_include("esp_coexist.h")
-#include "esp_coexist.h"
-#define LMYC_HAS_COEX 1
-#endif
-#include "lwip/ip4_addr.h"
-#include "lwip/pbuf.h"
-#include "lwip/netif.h"
 
-/* Arduino-ESP32 3.x liblwip expects this hook even when we use the IDF Wi-Fi API. */
-extern "C" int lwip_hook_ip6_input(struct pbuf *p, struct netif *inp)
-{
-    (void)inp;
-    if (p != nullptr) {
-        pbuf_free(p);
-    }
-    return 1;
-}
 #include <esp_display_panel.hpp>
 #include <lvgl.h>
 #include "lvgl_v8_port.h"
@@ -53,24 +32,18 @@ extern "C" int lwip_hook_ip6_input(struct pbuf *p, struct netif *inp)
 #include "inject.h"
 #include "maint_store.h"
 #include "maint_ui.h"
+#include "net_wifi.h"
+#include "sd_card.h"
 
-#if __has_include("secrets.h")
-#include "secrets.h"
-#else
+#include "boat_config.h"
+#if !LMYC_HAVE_SECRETS
 #error "Copy src/secrets.h.example to src/secrets.h and set WIFI_SSID / WIFI_PASSWORD"
-#endif
-#ifndef AP_PASSWORD
-#define AP_PASSWORD "lmycboat"
 #endif
 
 using namespace esp_panel::drivers;
 using namespace esp_panel::board;
 
 /* TF slot on this Waveshare board is SPI; CS is CH422G EXIO4. */
-static constexpr int kSdMosi = 11;
-static constexpr int kSdSck = 12;
-static constexpr int kSdMiso = 13;
-static constexpr int kSdCsExpander = 4; /* CH422G EXIO4 */
 static constexpr int kCanMuxExpander = 5; /* CH422G EXIO5: high = CAN, low = USB */
 
 static Board *g_board = nullptr;
@@ -184,7 +157,6 @@ static lv_obj_t *g_note_caption = nullptr;
 static lv_obj_t *g_photo_hint = nullptr;
 static lv_obj_t *g_chart_img = nullptr;
 static lv_timer_t *g_status_timer = nullptr;
-static bool g_gateway_started = false;
 static bool g_showing_helm = false;
 static lv_obj_t *g_chart_next = nullptr;
 static lv_obj_t *g_rail_ear = nullptr;
@@ -202,61 +174,6 @@ static lv_coord_t g_rail_y = kTopH;
 static lv_coord_t g_rail_h = kContentH;
 static lv_coord_t g_top_y = 0;
 static uint32_t g_snap_seen = 0;
-static char g_ap_ssid[24] = "LMYC-BOAT";
-static char g_ap_ip[16] = "192.168.4.1";
-
-static String g_sd_summary;
-static bool g_sd_ready = false;
-
-static volatile bool g_wifi_got_ip = false;
-static volatile bool g_wifi_want_reconnect = false;
-static char g_wifi_ip[16] = "-";
-static char g_wifi_line[48] = "Starting...";
-static uint32_t g_wifi_backoff_ms = 1000;
-static uint32_t g_wifi_next_try_ms = 0;
-static int8_t g_wifi_rssi = 0;
-
-static void wifi_event_handler(void * /*arg*/, esp_event_base_t event_base,
-                               int32_t event_id, void *event_data)
-{
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        snprintf(g_wifi_line, sizeof(g_wifi_line), "Connecting...");
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        /* Do not hammer esp_wifi_connect() — that starves BLE advertising. */
-        g_wifi_got_ip = false;
-        strncpy(g_wifi_ip, "-", sizeof(g_wifi_ip));
-        g_wifi_want_reconnect = true;
-        g_wifi_next_try_ms = millis() + g_wifi_backoff_ms;
-        snprintf(g_wifi_line, sizeof(g_wifi_line), "Retry %lus",
-                 static_cast<unsigned long>((g_wifi_backoff_ms + 999) / 1000));
-        if (g_wifi_backoff_ms < 16000) {
-            g_wifi_backoff_ms *= 2;
-        }
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
-        snprintf(g_wifi_line, sizeof(g_wifi_line), "AP %s", g_ap_ssid);
-        Serial.printf("Wi-Fi AP %s  %s\n", g_ap_ssid, g_ap_ip);
-        if (!g_gateway_started) {
-            gateway_begin();
-            hub_http_start();
-            g_gateway_started = true;
-        }
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        auto *event = static_cast<ip_event_got_ip_t *>(event_data);
-        snprintf(g_wifi_ip, sizeof(g_wifi_ip), IPSTR, IP2STR(&event->ip_info.ip));
-        g_wifi_got_ip = true;
-        g_wifi_want_reconnect = false;
-        g_wifi_backoff_ms = 1000;
-        snprintf(g_wifi_line, sizeof(g_wifi_line), "STA+AP");
-        Serial.printf("Wi-Fi STA IP %s  AP %s\n", g_wifi_ip, g_ap_ip);
-        if (!g_gateway_started) {
-            gateway_begin();
-            hub_http_start();
-            g_gateway_started = true;
-        }
-    }
-}
-
 static void set_label(lv_obj_t *label, const char *text)
 {
     if (label != nullptr) {
@@ -275,55 +192,6 @@ static void select_can(bool can_mode)
     }
     expander->pinMode(kCanMuxExpander, OUTPUT);
     expander->digitalWrite(kCanMuxExpander, can_mode ? HIGH : LOW);
-}
-
-static void init_sd_card(void)
-{
-    g_sd_ready = false;
-
-    auto *expander_dev = (g_board != nullptr) ? g_board->getIO_Expander() : nullptr;
-    auto *expander = (expander_dev != nullptr) ? expander_dev->getBase() : nullptr;
-    if (expander == nullptr) {
-        g_sd_summary = "No IO expander";
-        Serial.println(g_sd_summary);
-        return;
-    }
-
-    expander->pinMode(kSdCsExpander, OUTPUT);
-    expander->digitalWrite(kSdCsExpander, LOW);
-    delay(20);
-
-    SPI.begin(kSdSck, kSdMiso, kSdMosi, -1);
-    /* 4 MHz made a photo write or read feel stuck. 16 MHz is inside the SD SPI limit. */
-    if (!SD.begin(-1, SPI, 16000000)) {
-        g_sd_summary = "Need FAT32 (not exFAT)";
-        Serial.println("SD: mount failed (FAT32 card seated?)");
-        expander->digitalWrite(kSdCsExpander, HIGH);
-        return;
-    }
-
-    uint8_t type = SD.cardType();
-    if (type == CARD_NONE) {
-        g_sd_summary = "Slot empty";
-        Serial.println("SD: CARD_NONE");
-        return;
-    }
-
-    const char *type_name = "Unknown";
-    if (type == CARD_MMC) {
-        type_name = "MMC";
-    } else if (type == CARD_SD) {
-        type_name = "SD";
-    } else if (type == CARD_SDHC) {
-        type_name = "SDHC";
-    }
-
-    const uint64_t bytes = SD.cardSize();
-    const unsigned long mb = static_cast<unsigned long>(bytes / (1024ULL * 1024ULL));
-    g_sd_summary = String(type_name) + "  " + String(mb) + " MB";
-    g_sd_ready = true;
-    Serial.printf("SD: %s\n", g_sd_summary.c_str());
-    maint_store_begin();
 }
 
 static void refresh_chrome(void);
@@ -605,18 +473,7 @@ static void paint_chip(lv_obj_t *chip, uint32_t bg)
     }
 }
 
-static void update_wifi_line(char *wifi, size_t cap)
-{
-    if (g_wifi_got_ip) {
-        wifi_ap_record_t ap = {};
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-            g_wifi_rssi = ap.rssi;
-            snprintf(wifi, cap, "Up  %d dBm", static_cast<int>(ap.rssi));
-            return;
-        }
-    }
-    snprintf(wifi, cap, "%s", g_wifi_line);
-}
+static void update_wifi_line(char *wifi, size_t cap) { net_wifi_status(wifi, cap); }
 
 static void update_helm_labels(void)
 {
@@ -682,14 +539,14 @@ static void update_helm_labels(void)
              static_cast<unsigned long>(gateway_client_count()));
     set_label(g_helm_tcp, buf);
     char ip_line[40];
-    if (g_wifi_got_ip) {
-        snprintf(ip_line, sizeof(ip_line), "STA %s", g_wifi_ip);
+    if (net_wifi_sta_up()) {
+        snprintf(ip_line, sizeof(ip_line), "STA %s", net_wifi_sta_ip());
     } else {
         snprintf(ip_line, sizeof(ip_line), "STA --");
     }
     set_label(g_helm_ip, ip_line);
     char ap_line[40];
-    snprintf(ap_line, sizeof(ap_line), "AP %s", g_ap_ip);
+    snprintf(ap_line, sizeof(ap_line), "AP %s", net_wifi_ap_ip());
     set_label(g_helm_ap, ap_line);
     set_label(g_helm_peer, pairing_peer());
     if (g_gnss_btn_lbl != nullptr) {
@@ -766,7 +623,7 @@ static void update_status_labels(void)
     if (http_last[0] == '\0') {
         if (hub_http_listening()) {
             snprintf(http_last, sizeof(http_last),
-                     "HTTP: listening %s, no request yet", g_ap_ip);
+                     "HTTP: listening %s, no request yet", net_wifi_ap_ip());
         } else {
             snprintf(http_last, sizeof(http_last), "HTTP: server not started");
         }
@@ -780,7 +637,7 @@ static void update_status_labels(void)
                  "No request has reached this boat.\n"
                  "Read Book is GET /maintenance\n"
                  "on Wi-Fi %s at %s.",
-                 g_ap_ssid, g_ap_ip);
+                 net_wifi_ap_ssid(), net_wifi_ap_ip());
     }
     maint_ui_set_http(http_last, http_log);
     present_snapshot_image();
@@ -817,7 +674,7 @@ static void update_status_labels(void)
     update_wifi_line(wifi, sizeof(wifi));
 
     set_label(g_wifi_value, wifi);
-    set_label(g_ip_value, g_wifi_ip);
+    set_label(g_ip_value, net_wifi_sta_ip());
     set_label(g_ble_value, pairing_status());
     set_label(g_mac_value, pairing_mac());
     set_label(g_peer_value, pairing_peer());
@@ -827,7 +684,7 @@ static void update_status_labels(void)
     set_label(g_rx_value, pairing_last_rx());
     set_label(g_adv_value, pairing_adv_layout());
     set_label(g_heap_value, heap);
-    set_label(g_sd_value, g_sd_summary.c_str());
+    set_label(g_sd_value, sd_card_summary());
     set_label(g_nmea_value, nmea);
     set_label(g_hint_value, pairing_hint());
     set_label(g_log_value, pairing_event_log());
@@ -1890,48 +1747,6 @@ static void on_nmea_sentence(const char *sentence, size_t /*len*/, void * /*ctx*
     pairing_nmea_notify(sentence);
 }
 
-static void start_wifi_client(void)
-{
-    snprintf(g_ap_ssid, sizeof(g_ap_ssid), "LMYC-%s", LMYC_BOAT_ID);
-    Serial.printf("Wi-Fi: AP '%s' + STA '%s'\n", g_ap_ssid, WIFI_SSID);
-
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_ap();
-    esp_netif_create_default_wifi_sta();
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, nullptr, nullptr));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, nullptr, nullptr));
-
-    wifi_config_t ap = {};
-    strncpy(reinterpret_cast<char *>(ap.ap.ssid), g_ap_ssid, sizeof(ap.ap.ssid));
-    ap.ap.ssid_len = static_cast<uint8_t>(strlen(g_ap_ssid));
-    strncpy(reinterpret_cast<char *>(ap.ap.password), AP_PASSWORD, sizeof(ap.ap.password));
-    ap.ap.max_connection = 4;
-    ap.ap.channel = 6;
-    ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
-
-    wifi_config_t sta = {};
-    strncpy(reinterpret_cast<char *>(sta.sta.ssid), WIFI_SSID, sizeof(sta.sta.ssid));
-    strncpy(reinterpret_cast<char *>(sta.sta.password), WIFI_PASSWORD,
-            sizeof(sta.sta.password));
-    sta.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
-    pairing_set_wifi_bootstrap(g_ap_ssid, AP_PASSWORD, g_ap_ip);
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
-#ifdef LMYC_HAS_COEX
-    esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
-#endif
-    ESP_ERROR_CHECK(esp_wifi_start());
-}
-
 void setup()
 {
     Serial.begin(115200);
@@ -1969,7 +1784,10 @@ void setup()
     create_ui();
     lvgl_port_unlock();
 
-    init_sd_card();
+    {
+        auto *expander_dev = g_board->getIO_Expander();
+        sd_card_init(expander_dev != nullptr ? expander_dev->getBase() : nullptr);
+    }
     nmea_init();
     nmea_state_init();
     nmea_io_init();
@@ -1980,7 +1798,7 @@ void setup()
     hub_http_init();
     nmea_set_sink(on_nmea_sentence, nullptr);
     pairing_init();
-    start_wifi_client();
+    net_wifi_start();
     /* After Wi-Fi logs. N2K/AUTO may release USB Serial onto the CAN mux. */
     n2k_init(select_can);
 
@@ -2020,14 +1838,10 @@ void loop()
         }
     }
 
-    if (g_wifi_want_reconnect && millis() >= g_wifi_next_try_ms) {
-        g_wifi_want_reconnect = false;
-        snprintf(g_wifi_line, sizeof(g_wifi_line), "Retrying...");
-        Serial.println("Wi-Fi: reconnect (backoff)");
-        esp_wifi_connect();
-    }
+    net_wifi_poll();
 
     nmea_io_poll();
+    inject_poll();
     n2k_poll();
     if (nmea_sim_enabled() && nmea_io_quiet()) {
         nmea_sim_poll();

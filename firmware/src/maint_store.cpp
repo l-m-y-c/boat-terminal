@@ -1,27 +1,45 @@
 #include "maint_store.h"
 
-#if __has_include("secrets.h")
-#include "secrets.h"
-#endif
-#include "pairing.h"
+#include "json_lite.h"
+
+#include "boat_config.h"
 
 #include <Arduino.h>
 #include <SD.h>
 #include <esp_random.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <cstdio>
 #include <cstring>
 
-static bool parse_string_field(const char *json, const char *key, char *out, size_t cap);
-static uint32_t parse_u32_field(const char *json, const char *key);
-
 static bool g_ready = false;
 static uint32_t g_generation = 0;
-static File g_list_dir;
 static File g_photo;
 static char g_photo_tmp[48];
 static char g_photo_dst[48];
 static char g_photo_id[kMaintIdHex + 1];
 static uint8_t g_photo_n = 0;
+
+/* Recursive: reconcile and photo_finish load and save inside the lock.
+ * Readers never see item.json between save's remove and rename. */
+static SemaphoreHandle_t g_lock = nullptr;
+
+struct StoreLock {
+    StoreLock()
+    {
+        if (g_lock != nullptr) {
+            xSemaphoreTakeRecursive(g_lock, portMAX_DELAY);
+        }
+    }
+    ~StoreLock()
+    {
+        if (g_lock != nullptr) {
+            xSemaphoreGiveRecursive(g_lock);
+        }
+    }
+    StoreLock(const StoreLock &) = delete;
+    StoreLock &operator=(const StoreLock &) = delete;
+};
 
 bool maint_store_ready(void) { return g_ready; }
 uint32_t maint_store_generation(void) { return g_generation; }
@@ -41,37 +59,25 @@ bool maint_id_ok(const char *id)
     return id[kMaintIdHex] == '\0';
 }
 
-bool maint_category_ok(const char *category)
+template <size_t N>
+static bool one_of(const char *value, const char *const (&list)[N])
 {
-    static const char *kOk[] = {
-        "cleanliness", "electrical", "engine", "hull", "interior",
-        "other", "plumbing", "rigging", "safety-equipment", "sails",
-    };
-    if (category == nullptr) {
+    if (value == nullptr) {
         return false;
     }
-    for (const char *s : kOk) {
-        if (strcmp(category, s) == 0) {
+    for (const char *s : list) {
+        if (strcmp(value, s) == 0) {
             return true;
         }
     }
     return false;
 }
 
-bool maint_priority_ok(const char *priority)
-{
-    return priority != nullptr &&
-           (strcmp(priority, "critical") == 0 || strcmp(priority, "high") == 0 ||
-            strcmp(priority, "medium") == 0 || strcmp(priority, "low") == 0);
-}
+bool maint_category_ok(const char *category) { return one_of(category, kMaintCategories); }
 
-bool maint_status_ok(const char *status)
-{
-    return status != nullptr &&
-           (strcmp(status, "reported") == 0 || strcmp(status, "in-progress") == 0 ||
-            strcmp(status, "scheduled") == 0 || strcmp(status, "completed") == 0 ||
-            strcmp(status, "future-wishlist") == 0);
-}
+bool maint_priority_ok(const char *priority) { return one_of(priority, kMaintPriorities); }
+
+bool maint_status_ok(const char *status) { return one_of(status, kMaintStatuses); }
 
 static bool item_dir(const char *id, char *out, size_t cap)
 {
@@ -87,6 +93,10 @@ static bool item_json_path(const char *id, char *out, size_t cap)
 
 bool maint_store_begin(void)
 {
+    if (g_lock == nullptr) {
+        g_lock = xSemaphoreCreateRecursiveMutex();
+    }
+    StoreLock lock;
     g_ready = false;
     if (!SD.exists("/maint") && !SD.mkdir("/maint")) {
         Serial.println("maint: mkdir /maint failed");
@@ -96,52 +106,6 @@ bool maint_store_begin(void)
     Serial.printf("maint: /maint ready, sailboat_id=%u\n",
                   static_cast<unsigned>(LMYC_SAILBOAT_ID));
     return true;
-}
-
-static bool append_ch(char *dst, size_t cap, size_t *used, char c)
-{
-    if (*used + 1 >= cap) {
-        return false;
-    }
-    dst[(*used)++] = c;
-    dst[*used] = '\0';
-    return true;
-}
-
-static bool append_str(char *dst, size_t cap, size_t *used, const char *s)
-{
-    while (*s != '\0') {
-        if (!append_ch(dst, cap, used, *s++)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool append_json_str(char *dst, size_t cap, size_t *used, const char *s)
-{
-    if (!append_ch(dst, cap, used, '"')) {
-        return false;
-    }
-    for (; *s != '\0'; ++s) {
-        const unsigned char c = static_cast<unsigned char>(*s);
-        if (c == '"' || c == '\\') {
-            if (!append_ch(dst, cap, used, '\\') || !append_ch(dst, cap, used, static_cast<char>(c))) {
-                return false;
-            }
-        } else if (c == '\n') {
-            if (!append_str(dst, cap, used, "\\n")) {
-                return false;
-            }
-        } else if (c == '\r') {
-            continue;
-        } else if (c < 0x20) {
-            continue;
-        } else if (!append_ch(dst, cap, used, static_cast<char>(c))) {
-            return false;
-        }
-    }
-    return append_ch(dst, cap, used, '"');
 }
 
 static void new_id(char out[kMaintIdHex + 1])
@@ -154,6 +118,7 @@ static void new_id(char out[kMaintIdHex + 1])
 
 bool maint_store_save(const MaintItem *item)
 {
+    StoreLock lock;
     if (!g_ready || item == nullptr || !maint_id_ok(item->id)) {
         return false;
     }
@@ -177,22 +142,22 @@ bool maint_store_save(const MaintItem *item)
     }
     size_t n = 0;
     json[0] = '\0';
-    bool ok = append_ch(json, kJsonCap, &n, '{');
+    bool ok = json_append_ch(json, kJsonCap, &n, '{');
     auto field_str = [&](const char *key, const char *val, bool comma) {
         if (comma) {
-            ok = ok && append_ch(json, kJsonCap, &n, ',');
+            ok = ok && json_append_ch(json, kJsonCap, &n, ',');
         }
-        ok = ok && append_json_str(json, kJsonCap, &n, key);
-        ok = ok && append_ch(json, kJsonCap, &n, ':');
-        ok = ok && append_json_str(json, kJsonCap, &n, val);
+        ok = ok && json_append_string(json, kJsonCap, &n, key);
+        ok = ok && json_append_ch(json, kJsonCap, &n, ':');
+        ok = ok && json_append_string(json, kJsonCap, &n, val);
     };
     auto field_u32 = [&](const char *key, uint32_t val) {
         char num[16];
         snprintf(num, sizeof(num), "%lu", static_cast<unsigned long>(val));
-        ok = ok && append_ch(json, kJsonCap, &n, ',');
-        ok = ok && append_json_str(json, kJsonCap, &n, key);
-        ok = ok && append_ch(json, kJsonCap, &n, ':');
-        ok = ok && append_str(json, kJsonCap, &n, num);
+        ok = ok && json_append_ch(json, kJsonCap, &n, ',');
+        ok = ok && json_append_string(json, kJsonCap, &n, key);
+        ok = ok && json_append_ch(json, kJsonCap, &n, ':');
+        ok = ok && json_append_raw(json, kJsonCap, &n, num);
     };
     field_str("id", item->id, false);
     field_u32("wp_id", item->wp_id);
@@ -213,7 +178,7 @@ bool maint_store_save(const MaintItem *item)
         snprintf(key, sizeof(key), "note%d", i + 1);
         field_str(key, item->photo_note[i], true);
     }
-    ok = ok && append_str(json, kJsonCap, &n, "}\n");
+    ok = ok && json_append_raw(json, kJsonCap, &n, "}\n");
     if (!ok) {
         free(json);
         return false;
@@ -246,19 +211,20 @@ bool maint_item_from_json(const char *json, MaintItem *out)
         return false;
     }
     memset(out, 0, sizeof(*out));
-    parse_string_field(json, "title", out->title, sizeof(out->title));
-    parse_string_field(json, "description", out->description, sizeof(out->description));
-    parse_string_field(json, "category", out->category, sizeof(out->category));
-    parse_string_field(json, "priority", out->priority, sizeof(out->priority));
-    parse_string_field(json, "reporter", out->reporter, sizeof(out->reporter));
-    parse_string_field(json, "created", out->created, sizeof(out->created));
-    parse_string_field(json, "modified", out->modified, sizeof(out->modified));
+    json_get_string(json, "title", out->title, sizeof(out->title));
+    json_get_string(json, "description", out->description, sizeof(out->description));
+    json_get_string(json, "category", out->category, sizeof(out->category));
+    json_get_string(json, "priority", out->priority, sizeof(out->priority));
+    json_get_string(json, "reporter", out->reporter, sizeof(out->reporter));
+    json_get_string(json, "created", out->created, sizeof(out->created));
+    json_get_string(json, "modified", out->modified, sizeof(out->modified));
     return out->title[0] != '\0' && maint_category_ok(out->category) &&
            maint_priority_ok(out->priority);
 }
 
 bool maint_store_create(MaintItem *item)
 {
+    StoreLock lock;
     if (!g_ready || item == nullptr) {
         return false;
     }
@@ -285,9 +251,9 @@ bool maint_club_item_from_json(const char *json, MaintItem *out)
     if (!maint_item_from_json(json, out)) {
         return false;
     }
-    out->wp_id = parse_u32_field(json, "wp_id");
-    out->sailboat_id = parse_u32_field(json, "sailboat_id");
-    parse_string_field(json, "status", out->status, sizeof(out->status));
+    out->wp_id = json_get_u32(json, "wp_id");
+    out->sailboat_id = json_get_u32(json, "sailboat_id");
+    json_get_string(json, "status", out->status, sizeof(out->status));
     if (out->wp_id == 0) {
         return false;
     }
@@ -302,6 +268,7 @@ static void copy_field(char *dst, size_t cap, const char *src)
 bool maint_store_reconcile(const MaintItem *incoming, char *out_id, size_t id_cap,
                            const char **action)
 {
+    StoreLock lock;
     if (!g_ready || incoming == nullptr || out_id == nullptr || id_cap < kMaintIdHex + 1 ||
         incoming->wp_id == 0 || incoming->title[0] == '\0' ||
         !maint_category_ok(incoming->category) || !maint_priority_ok(incoming->priority)) {
@@ -312,15 +279,16 @@ bool maint_store_reconcile(const MaintItem *incoming, char *out_id, size_t id_ca
     }
 
     char found[kMaintIdHex + 1] = "";
-    if (maint_store_list_start()) {
+    MaintListCursor cursor;
+    if (maint_store_list_start(&cursor)) {
         MaintItem item;
-        while (maint_store_list_next(&item)) {
+        while (maint_store_list_next(&cursor, &item)) {
             if (item.wp_id == incoming->wp_id) {
                 copy_field(found, sizeof(found), item.id);
                 break;
             }
         }
-        maint_store_list_end();
+        maint_store_list_end(&cursor);
     }
 
     if (found[0] == '\0') {
@@ -385,62 +353,9 @@ bool maint_store_reconcile(const MaintItem *incoming, char *out_id, size_t id_ca
     return true;
 }
 
-static const char *find_key(const char *json, const char *key)
-{
-    char pat[40];
-    snprintf(pat, sizeof(pat), "\"%s\"", key);
-    const char *p = strstr(json, pat);
-    if (p == nullptr) {
-        return nullptr;
-    }
-    p += strlen(pat);
-    while (*p == ' ' || *p == '\t') {
-        ++p;
-    }
-    if (*p != ':') {
-        return nullptr;
-    }
-    ++p;
-    while (*p == ' ' || *p == '\t') {
-        ++p;
-    }
-    return p;
-}
-
-static bool parse_string_field(const char *json, const char *key, char *out, size_t cap)
-{
-    const char *p = find_key(json, key);
-    if (p == nullptr || *p != '"') {
-        out[0] = '\0';
-        return false;
-    }
-    ++p;
-    size_t n = 0;
-    while (*p != '\0' && *p != '"') {
-        char c = *p++;
-        if (c == '\\' && *p != '\0') {
-            const char e = *p++;
-            c = (e == 'n') ? '\n' : e;
-        }
-        if (n + 1 < cap) {
-            out[n++] = c;
-        }
-    }
-    out[n] = '\0';
-    return true;
-}
-
-static uint32_t parse_u32_field(const char *json, const char *key)
-{
-    const char *p = find_key(json, key);
-    if (p == nullptr) {
-        return 0;
-    }
-    return static_cast<uint32_t>(strtoul(p, nullptr, 10));
-}
-
 bool maint_store_load(const char *id, MaintItem *out)
 {
+    StoreLock lock;
     if (!g_ready || out == nullptr || !maint_id_ok(id)) {
         return false;
     }
@@ -461,48 +376,53 @@ bool maint_store_load(const char *id, MaintItem *out)
     in.close();
     json[n] = '\0';
     memset(out, 0, sizeof(*out));
-    parse_string_field(json, "id", out->id, sizeof(out->id));
+    json_get_string(json, "id", out->id, sizeof(out->id));
     if (!maint_id_ok(out->id)) {
         snprintf(out->id, sizeof(out->id), "%s", id);
     }
-    out->wp_id = parse_u32_field(json, "wp_id");
-    out->sailboat_id = parse_u32_field(json, "sailboat_id");
-    parse_string_field(json, "title", out->title, sizeof(out->title));
-    parse_string_field(json, "description", out->description, sizeof(out->description));
-    parse_string_field(json, "category", out->category, sizeof(out->category));
-    parse_string_field(json, "priority", out->priority, sizeof(out->priority));
-    parse_string_field(json, "status", out->status, sizeof(out->status));
-    parse_string_field(json, "reporter", out->reporter, sizeof(out->reporter));
-    parse_string_field(json, "created", out->created, sizeof(out->created));
-    parse_string_field(json, "modified", out->modified, sizeof(out->modified));
-    parse_string_field(json, "sync", out->sync_state, sizeof(out->sync_state));
-    out->photo_count = static_cast<uint8_t>(parse_u32_field(json, "photo_count"));
+    out->wp_id = json_get_u32(json, "wp_id");
+    out->sailboat_id = json_get_u32(json, "sailboat_id");
+    json_get_string(json, "title", out->title, sizeof(out->title));
+    json_get_string(json, "description", out->description, sizeof(out->description));
+    json_get_string(json, "category", out->category, sizeof(out->category));
+    json_get_string(json, "priority", out->priority, sizeof(out->priority));
+    json_get_string(json, "status", out->status, sizeof(out->status));
+    json_get_string(json, "reporter", out->reporter, sizeof(out->reporter));
+    json_get_string(json, "created", out->created, sizeof(out->created));
+    json_get_string(json, "modified", out->modified, sizeof(out->modified));
+    json_get_string(json, "sync", out->sync_state, sizeof(out->sync_state));
+    out->photo_count = static_cast<uint8_t>(json_get_u32(json, "photo_count"));
     for (int i = 0; i < static_cast<int>(kMaintPhotoMax); ++i) {
         char key[8];
         snprintf(key, sizeof(key), "note%d", i + 1);
-        parse_string_field(json, key, out->photo_note[i], sizeof(out->photo_note[i]));
+        json_get_string(json, key, out->photo_note[i], sizeof(out->photo_note[i]));
     }
     free(json);
     return out->title[0] != '\0';
 }
 
-bool maint_store_list_start(void)
+bool maint_store_list_start(MaintListCursor *cursor)
 {
-    maint_store_list_end();
+    if (cursor == nullptr) {
+        return false;
+    }
+    maint_store_list_end(cursor);
     if (!g_ready) {
         return false;
     }
-    g_list_dir = SD.open("/maint");
-    return static_cast<bool>(g_list_dir);
+    StoreLock lock;
+    cursor->dir = SD.open("/maint");
+    return static_cast<bool>(cursor->dir);
 }
 
-bool maint_store_list_next(MaintItem *out)
+bool maint_store_list_next(MaintListCursor *cursor, MaintItem *out)
 {
-    if (!g_list_dir) {
+    if (cursor == nullptr || !cursor->dir) {
         return false;
     }
+    StoreLock lock;
     for (;;) {
-        File entry = g_list_dir.openNextFile();
+        File entry = cursor->dir.openNextFile();
         if (!entry) {
             return false;
         }
@@ -524,10 +444,11 @@ bool maint_store_list_next(MaintItem *out)
     }
 }
 
-void maint_store_list_end(void)
+void maint_store_list_end(MaintListCursor *cursor)
 {
-    if (g_list_dir) {
-        g_list_dir.close();
+    if (cursor != nullptr && cursor->dir) {
+        StoreLock lock;
+        cursor->dir.close();
     }
 }
 
@@ -545,6 +466,7 @@ bool maint_store_photo_path(const char *id, uint8_t n, char *out, size_t cap)
 
 bool maint_store_set_photo_note(const char *id, uint8_t n, const char *note)
 {
+    StoreLock lock;
     MaintItem item;
     if (!maint_store_load(id, &item) || n == 0 || n > kMaintPhotoMax) {
         return false;
@@ -556,6 +478,7 @@ bool maint_store_set_photo_note(const char *id, uint8_t n, const char *note)
 
 bool maint_store_photo_begin(const char *id, uint8_t n)
 {
+    StoreLock lock;
     maint_store_photo_abort();
     MaintItem item;
     char dir[40];
@@ -574,6 +497,7 @@ bool maint_store_photo_begin(const char *id, uint8_t n)
 
 bool maint_store_photo_write(const uint8_t *data, size_t n)
 {
+    StoreLock lock;
     if (!g_photo || data == nullptr || n == 0) {
         return false;
     }
@@ -582,6 +506,7 @@ bool maint_store_photo_write(const uint8_t *data, size_t n)
 
 bool maint_store_photo_finish(void)
 {
+    StoreLock lock;
     if (!g_photo) {
         return false;
     }
@@ -607,6 +532,7 @@ bool maint_store_photo_finish(void)
 
 void maint_store_photo_abort(void)
 {
+    StoreLock lock;
     if (g_photo) {
         g_photo.close();
         if (g_photo_tmp[0] != '\0') {

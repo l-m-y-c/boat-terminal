@@ -104,7 +104,7 @@ Layout (FAT32; exFAT will not mount on this firmware):
 /maint/<id>/1.jpg
 ```
 
-`item.json` carries `id`, `wp_id` (0 until the website accepts it), `sailboat_id`, `title`, `description`, `category`, `priority`, `status`, `reporter`, `created`, `modified`, `sync` (`pending` or `synced`), `photos`, and `note1` … `note5` (the line that belongs to `1.jpg` … `5.jpg`, for example "Sail is ripped, left hand side"). Writes go to a temporary file and are renamed into place after they are flushed, so an engine-start voltage dip does not tear the record.
+`item.json` carries `id`, `wp_id` (0 until the website accepts it), `sailboat_id`, `title`, `description`, `category`, `priority`, `status`, `reporter`, `created`, `modified`, `sync` (`pending` or `synced`), `photo_count`, and `note1` … `note5` (the line that belongs to `1.jpg` … `5.jpg`, for example "Sail is ripped, left hand side"). Writes go to a temporary file and are renamed into place after they are flushed, so an engine-start voltage dip does not tear the record.
 
 ### Who reads it
 

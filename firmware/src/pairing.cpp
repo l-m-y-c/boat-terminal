@@ -12,6 +12,8 @@
 
 #include "pairing.h"
 
+#include "protocol.h"
+
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <cstdio>
@@ -20,15 +22,6 @@
 #include <esp_mac.h>
 #include <esp_random.h>
 
-static constexpr const char *kLmycServiceUuid = "6c6d7963-0001-4000-8000-000000000001";
-static constexpr const char *kLmycPayloadUuid = "6c6d7963-0001-4000-8000-000000000010";
-static constexpr const char *kLmycSessionUuid = "6c6d7963-0001-4000-8000-000000000020";
-/* Read/notify only — never written by the phone (avoids Android write-cache garbage). */
-static constexpr const char *kLmycStatusUuid = "6c6d7963-0001-4000-8000-000000000021";
-/* One NMEA sentence per notify. Drop on BLE if longer than ATT payload. */
-static constexpr const char *kLmycNmeaUuid = "6c6d7963-0001-4000-8000-000000000030";
-/* SoftAP bootstrap. Readable only after OOB confirmation. */
-static constexpr const char *kLmycWifiUuid = "6c6d7963-0001-4000-8000-000000000040";
 static constexpr size_t kEventLogLines = 5;
 static constexpr size_t kEventLineLen = 40;
 static constexpr size_t kRxAccMax = 80;
@@ -70,7 +63,7 @@ static NimBLECharacteristic *g_nmea_chr = nullptr;
 static NimBLECharacteristic *g_wifi_chr = nullptr;
 static char g_wifi_ssid[33] = "";
 static char g_wifi_psk[64] = "";
-static char g_wifi_ip[16] = "192.168.4.1";
+static char g_wifi_ip[16] = "";
 static char g_wifi_json[280] = "WAIT";
 static uint32_t g_nmea_window_ms = 0;
 static uint8_t g_nmea_window_count = 0;
@@ -201,7 +194,7 @@ static void build_ble_identity(void)
 {
     uint8_t mac[6] = {};
     esp_read_mac(mac, ESP_MAC_BT);
-    snprintf(g_ble_name, sizeof(g_ble_name), "LMYC-%02X%02X", mac[4], mac[5]);
+    snprintf(g_ble_name, sizeof(g_ble_name), "%s%02X%02X", kLmycBlePrefix, mac[4], mac[5]);
     snprintf(g_mac_str, sizeof(g_mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
@@ -293,7 +286,7 @@ static void publish_wifi_chr(void)
     char ip[40];
     json_escape(g_wifi_ssid, ssid, sizeof(ssid));
     json_escape(g_wifi_psk, psk, sizeof(psk));
-    json_escape(g_wifi_ip[0] != '\0' ? g_wifi_ip : "192.168.4.1", ip, sizeof(ip));
+    json_escape(g_wifi_ip[0] != '\0' ? g_wifi_ip : kSoftApIp, ip, sizeof(ip));
     const int wrote = snprintf(g_wifi_json, sizeof(g_wifi_json),
                                "{\"ssid\":\"%s\",\"psk\":\"%s\",\"ip\":\"%s\"}",
                                ssid, psk, ip);
@@ -657,7 +650,7 @@ void pairing_set_wifi_bootstrap(const char *ssid, const char *psk, const char *i
     snprintf(g_wifi_ssid, sizeof(g_wifi_ssid), "%s", ssid != nullptr ? ssid : "");
     snprintf(g_wifi_psk, sizeof(g_wifi_psk), "%s", psk != nullptr ? psk : "");
     snprintf(g_wifi_ip, sizeof(g_wifi_ip), "%s",
-             (ip != nullptr && ip[0] != '\0') ? ip : "192.168.4.1");
+             (ip != nullptr && ip[0] != '\0') ? ip : kSoftApIp);
     publish_wifi_chr();
 }
 

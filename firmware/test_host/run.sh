@@ -1,5 +1,6 @@
 #!/bin/sh
-# Host test for the NMEA 2000 -> 0183 converter and AIS packer. No board needed.
+# Host tests for the NMEA 2000 -> 0183 converter, AIS packer, and the
+# maintenance book's JSON reader/writer. No board needed.
 # Uses the NMEA2000 library PlatformIO already fetched (run `make firmware` once).
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
@@ -11,7 +12,11 @@ if [ -z "$lib" ]; then
 fi
 out="${TMPDIR:-/tmp}/boat-terminal-host-test"
 mkdir -p "$out"
-${CXX:-clang++} -std=gnu++17 -O1 -Wall -Wno-unused-parameter -w \
+cxx=${CXX:-c++}
+$cxx -std=gnu++17 -O1 -Wall -Wextra -Werror -I "$fw/src" \
+    "$here/test_json_lite.cpp" "$fw/src/json_lite.cpp" -o "$out/test_json_lite"
+"$out/test_json_lite"
+$cxx -std=gnu++17 -O1 -Wall -Wno-unused-parameter -w \
     -include cstdlib -I "$here/stub" -I "$fw/src" -I "$lib" \
     "$here/test_n2k_0183.cpp" "$fw/src/n2k_to_0183.cpp" "$fw/src/ais0183.cpp" "$fw/src/nmea.cpp" \
     "$lib/N2kMsg.cpp" "$lib/N2kMessages.cpp" "$lib/N2kTimer.cpp" "$lib/N2kStream.cpp" \

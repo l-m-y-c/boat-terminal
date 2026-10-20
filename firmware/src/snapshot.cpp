@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <cstring>
 #include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 extern "C" {
 #include "rom/tjpgd.h"
@@ -17,6 +19,27 @@ static int g_off_x = 0;
 static int g_off_y = 0;
 static uint8_t *g_pool = nullptr;
 
+/* The HTTP task (chart posts) and loop() (book photos and thumbnails) both
+ * decode. They share g_pool, g_pixels, the offsets and g_thumb_dst. */
+static SemaphoreHandle_t g_decode_lock = nullptr;
+
+struct DecodeLock {
+    DecodeLock()
+    {
+        if (g_decode_lock != nullptr) {
+            xSemaphoreTake(g_decode_lock, portMAX_DELAY);
+        }
+    }
+    ~DecodeLock()
+    {
+        if (g_decode_lock != nullptr) {
+            xSemaphoreGive(g_decode_lock);
+        }
+    }
+    DecodeLock(const DecodeLock &) = delete;
+    DecodeLock &operator=(const DecodeLock &) = delete;
+};
+
 struct JpegSrc {
     const uint8_t *data;
     size_t len;
@@ -25,6 +48,9 @@ struct JpegSrc {
 
 void snapshot_init(void)
 {
+    if (g_decode_lock == nullptr) {
+        g_decode_lock = xSemaphoreCreateMutex();
+    }
     g_have = false;
     g_pixels = nullptr;
     memset(&g_dsc, 0, sizeof(g_dsc));
@@ -88,6 +114,7 @@ bool snapshot_load_jpeg_limited(const uint8_t *jpeg, size_t len, size_t limit)
     if (jpeg == nullptr || len < 32 || len > limit) {
         return false;
     }
+    DecodeLock lock;
     if (g_pixels == nullptr) {
         g_pixels = static_cast<uint16_t *>(
             heap_caps_malloc(kSnapshotWidth * kSnapshotHeight * sizeof(uint16_t),
@@ -206,6 +233,7 @@ bool snapshot_load_jpeg_thumb(const uint8_t *jpeg, size_t len, size_t limit,
     if (jpeg == nullptr || dst == nullptr || len < 32 || len > limit || dst_w < 1 || dst_h < 1) {
         return false;
     }
+    DecodeLock lock;
     if (g_pool == nullptr) {
         g_pool = static_cast<uint8_t *>(
             heap_caps_malloc(16384, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));

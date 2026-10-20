@@ -1,6 +1,7 @@
 #include "hub_http.h"
 
 #include "inject.h"
+#include "json_lite.h"
 #include "maint_store.h"
 #include "nmea.h"
 #include "pairing.h"
@@ -14,10 +15,6 @@
 #include <esp_heap_caps.h>
 #include <freertos/portmacro.h>
 #include <cstring>
-
-#ifndef AP_PASSWORD
-#define AP_PASSWORD "lmycboat"
-#endif
 
 static httpd_handle_t g_httpd = nullptr;
 static char g_last_err[48] = "";
@@ -256,8 +253,7 @@ static esp_err_t post_inject(httpd_req_t *req)
         if (eol != nullptr) {
             *eol = '\0';
         }
-        if (p[0] != '\0' && inject_is_gnss_sentence(p)) {
-            nmea_feed_line(p);
+        if (p[0] != '\0' && inject_is_gnss_sentence(p) && inject_submit(p)) {
             ++accepted;
         }
         if (eol == nullptr) {
@@ -316,21 +312,22 @@ static esp_err_t get_maintenance(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr_chunk(req, "[");
     bool first = true;
-    if (maint_store_list_start()) {
+    MaintListCursor cursor;
+    if (maint_store_list_start(&cursor)) {
         MaintItem item;
-        while (maint_store_list_next(&item)) {
+        while (maint_store_list_next(&cursor, &item)) {
             if (!first) {
                 httpd_resp_sendstr_chunk(req, ",");
             }
             char path[56];
             snprintf(path, sizeof(path), "/maint/%s/item.json", item.id);
             if (send_sd_file(req, path) != ESP_OK) {
-                maint_store_list_end();
+                maint_store_list_end(&cursor);
                 return trace.fail500(req);
             }
             first = false;
         }
-        maint_store_list_end();
+        maint_store_list_end(&cursor);
     }
     httpd_resp_sendstr_chunk(req, "]");
     return trace.ok(httpd_resp_sendstr_chunk(req, nullptr));
@@ -396,7 +393,8 @@ static esp_err_t post_maintenance(httpd_req_t *req)
     if (!maint_store_ready()) {
         return trace.fail(req, HTTPD_404_NOT_FOUND, "no card");
     }
-    if (req->content_len == 0 || req->content_len > 4096) {
+    /* 200 + 2000 characters can pass 4 KB as UTF-8. Matches the stand-in. */
+    if (req->content_len == 0 || req->content_len > kMaintBodyMax) {
         return trace.fail(req, HTTPD_400_BAD_REQUEST, "body size");
     }
     char *body = static_cast<char *>(malloc(req->content_len + 1));
@@ -569,15 +567,7 @@ static esp_err_t post_maintenance_ack(httpd_req_t *req)
         got += static_cast<size_t>(r);
     }
     body[got] = '\0';
-    const char *key = strstr(body, "\"wp_id\"");
-    uint32_t wp_id = 0;
-    if (key != nullptr) {
-        key += 7;
-        while (*key == ' ' || *key == '\t' || *key == ':') {
-            ++key;
-        }
-        wp_id = static_cast<uint32_t>(strtoul(key, nullptr, 10));
-    }
+    const uint32_t wp_id = json_get_u32(body, "wp_id");
     if (wp_id == 0) {
         return trace.fail(req, HTTPD_400_BAD_REQUEST, "wp_id");
     }
@@ -605,7 +595,7 @@ static esp_err_t post_maintenance_reconcile(httpd_req_t *req)
     if (!maint_store_ready()) {
         return trace.fail(req, HTTPD_404_NOT_FOUND, "no card");
     }
-    if (req->content_len == 0 || req->content_len > 8192) {
+    if (req->content_len == 0 || req->content_len > kMaintBodyMax) {
         return trace.fail(req, HTTPD_400_BAD_REQUEST, "body size");
     }
     char *body = static_cast<char *>(malloc(req->content_len + 1));

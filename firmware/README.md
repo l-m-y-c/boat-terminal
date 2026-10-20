@@ -87,8 +87,13 @@ firmware/
 ├── assets/
 │   └── lmyc-logo.png       # Source logo
 ├── scripts/                # (optional) image conversion helpers
+├── test_host/              # Host tests, no board: `make firmware-test`
 ├── src/
 │   ├── main.cpp            # UI shell + timers (keep thin)
+│   ├── boat_config.h       # Per-boat settings. The only file that includes secrets.h
+│   ├── protocol.h          # UUIDs, ports, book limits shared with the app (checked in CI)
+│   ├── net_wifi.*          # SoftAP + STA, reconnect backoff, starts gateway + HTTP
+│   ├── sd_card.*           # TF card mount (CS on the IO expander)
 │   ├── pairing.*           # BLE identity, OOB, GATT
 │   ├── nmea.*              # Line assembler + checksum
 │   ├── nmea_sim.*          # 1 Hz canned talker (FIX: SIM)
@@ -102,6 +107,7 @@ firmware/
 │   ├── snapshot.*          # 800×480 JPEG for the Chart page and book photos
 │   ├── inject.*            # Phone GNSS, armed only from the 7″
 │   ├── maint_store.*       # This boat's maintenance book on the TF card
+│   ├── json_lite.*         # Flat JSON reader/writer for item.json (host-tested)
 │   ├── maint_ui.*          # Open-item picker, item detail, photo thumbnails
 │   ├── lmyc_logo.c / .h    # Logo as LVGL RGB565+A image
 │   ├── lvgl_v8_port.*      # Official LVGL port
@@ -110,6 +116,20 @@ firmware/
 │   └── esp_utils_conf.h
 └── README.md
 ```
+
+### Which task runs what
+
+Five FreeRTOS tasks touch this code. Shared state needs an owner or a lock.
+
+| Task | Runs | Owns |
+|------|------|------|
+| Arduino `loop()` | `nmea_io`, `n2k`, `nmea_sim`, `inject_poll`, `gateway`, `net_wifi_poll`, book photo decodes | The NMEA parser and its sink (`nmea_state`, gateway sockets, BLE tap) |
+| LVGL (`lvgl_v8_port`) | Every `lv_*` call, the 1 s status timer, `maint_ui` | All LVGL objects. Other tasks take `lvgl_port_lock()` first |
+| HTTP (`esp_http_server`) | `hub_http` handlers | Nothing. It queues GNSS for `loop()` (`inject_submit`) |
+| NimBLE host | `pairing` callbacks | The pairing status strings |
+| Wi-Fi events | `net_wifi` event handler | Flags only. Services start from `net_wifi_poll()` |
+
+`snapshot` decodes and `maint_store` card access are locked internally, because both the HTTP task and `loop()`/LVGL use them. A book listing uses a `MaintListCursor` owned by the caller.
 
 ### BoatLink (Navionics + snapshots)
 

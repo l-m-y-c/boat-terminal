@@ -3,9 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
-static constexpr uint16_t kGatewayTcpPort = 10110;
-static constexpr uint16_t kGatewayUdpPort = 10110;
-static constexpr uint16_t kGatewayUdpAltPort = 2000;
+#include "protocol.h" /* kGatewayTcpPort, kGatewayUdpPort, kGatewayUdpAltPort */
+
 static constexpr size_t kGatewayMaxClients = 4;
 
 void gateway_init(void);

@@ -3,14 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-/* Bench identity. A production unit gets a provisioned boat id + device key. */
-#ifndef LMYC_BOAT_ID
-#define LMYC_BOAT_ID "BENCH-01"
-#endif
-
-#ifndef LMYC_TERMINAL_ID
-#define LMYC_TERMINAL_ID "WS7-001"
-#endif
+#include "boat_config.h" /* LMYC_BOAT_ID, LMYC_TERMINAL_ID */
 
 /* 16-byte OOB secret, hex-encoded in the QR. Regenerated on each boot. */
 static constexpr size_t kPairingOobBytes = 16;

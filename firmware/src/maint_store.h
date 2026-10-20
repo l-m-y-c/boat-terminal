@@ -1,5 +1,7 @@
 #pragma once
 
+#include <FS.h>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -7,19 +9,12 @@
  *   /maint/<16 hex>/item.json
  *   /maint/<16 hex>/1.jpg …
  * See docs/18-maintenance-handoff-and-auth.md.
- * LMYC_SAILBOAT_ID may be set in secrets.h before this header is included. */
+ * LMYC_SAILBOAT_ID comes from boat_config.h. */
 
-#ifndef LMYC_SAILBOAT_ID
-#define LMYC_SAILBOAT_ID 0
-#endif
+#include "boat_config.h"
+#include "protocol.h" /* kMaint* limits and the category/priority/status lists */
 
 static constexpr size_t kMaintIdHex = 16;
-static constexpr size_t kMaintTitleMax = 200;
-static constexpr size_t kMaintDescMax = 2000;
-static constexpr size_t kMaintReporterMax = 80;
-static constexpr size_t kMaintPhotoMax = 5;
-static constexpr size_t kMaintPhotoBytesMax = 500 * 1024;
-static constexpr size_t kMaintPhotoNoteMax = 120;
 
 struct MaintItem {
     char id[kMaintIdHex + 1];
@@ -56,10 +51,16 @@ bool maint_store_create(MaintItem *item);
 bool maint_store_load(const char *id, MaintItem *out);
 bool maint_store_save(const MaintItem *item);
 
-/* Open /maint. Returns false when there is no next directory. */
-bool maint_store_list_start(void);
-bool maint_store_list_next(MaintItem *out);
-void maint_store_list_end(void);
+/* Each caller owns its cursor. The HTTP task and the LVGL task both list
+ * the book, and a shared directory handle let one walk the other's place. */
+struct MaintListCursor {
+    fs::File dir;
+};
+
+/* Open /maint. list_next returns false when there is no next item. */
+bool maint_store_list_start(MaintListCursor *cursor);
+bool maint_store_list_next(MaintListCursor *cursor, MaintItem *out);
+void maint_store_list_end(MaintListCursor *cursor);
 
 /* Stream a photo onto the card. n is 1-based. */
 bool maint_store_photo_begin(const char *id, uint8_t n);
