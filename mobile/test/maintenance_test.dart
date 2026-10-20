@@ -325,12 +325,16 @@ void main() {
     expect(result.message, ClubMaintenanceClient.unreachableMessage);
   });
 
-  testWidgets('the home screen stays quiet until a QR scan', (tester) async {
+  testWidgets('the home screen offers Discover and the QR, nothing else', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(400, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const LmycApp());
     await tester.pump();
-    expect(find.text('Scan the QR code'), findsOneWidget);
+    expect(find.text('Find your boat'), findsOneWidget);
+    expect(find.text('Discover'), findsOneWidget);
+    expect(find.text('Scan QR code'), findsOneWidget);
     expect(find.text('Find terminals'), findsNothing);
     expect(find.text('Maintenance book'), findsNothing);
     await tester.tap(find.text('Diagnostics'));

@@ -12,6 +12,15 @@ void main() {
     expect(info.ip, '192.168.4.1');
   });
 
+  test('only an LMYC hotspot is saved on the phone', () {
+    expect(
+      parseWifiBootstrap(
+        '{"ssid":"CoffeeShop","psk":"lmycboat","ip":"192.168.4.1"}',
+      ),
+      isNull,
+    );
+  });
+
   test('a passphrase with quotes still parses', () {
     final info = parseWifiBootstrap(
       '{"ssid":"LMYC-BENCH-01","psk":"ab\\"cd\\\\ef","ip":"192.168.4.1"}',

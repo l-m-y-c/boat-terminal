@@ -29,7 +29,8 @@ static constexpr size_t kRxAccMax = 80;
 static char g_oob_hex[(kPairingOobBytes * 2) + 1];
 static uint8_t g_oob_raw[kPairingOobBytes];
 static char g_payload[kPairingPayloadMax];
-static char g_ble_name[24];
+/* LMYC-<boat, up to 16>-<4 hex>: 26 characters fills the name in a 31-byte ADV. */
+static char g_ble_name[27];
 static char g_mac_str[18] = "--:--:--:--:--:--";
 static char g_status_buf[48] = "Idle";
 static char g_last_event[48] = "boot";
@@ -194,7 +195,10 @@ static void build_ble_identity(void)
 {
     uint8_t mac[6] = {};
     esp_read_mac(mac, ESP_MAC_BT);
-    snprintf(g_ble_name, sizeof(g_ble_name), "%s%02X%02X", kLmycBlePrefix, mac[4], mac[5]);
+    /* The boat name lets a phone tell neighbours apart. The MAC tail keeps two
+     * bench boards with the same boat ID distinct. */
+    snprintf(g_ble_name, sizeof(g_ble_name), "%s%.16s-%02X%02X", kLmycBlePrefix,
+             LMYC_BOAT_ID, mac[4], mac[5]);
     snprintf(g_mac_str, sizeof(g_mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }

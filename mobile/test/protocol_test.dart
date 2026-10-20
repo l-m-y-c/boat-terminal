@@ -73,6 +73,29 @@ void main() {
       expect(isLmycBleName('lmyc-d649'), isTrue);
       expect(isLmycBleName('Pixel Buds'), isFalse);
     });
+
+    test('the payload link also carries the boat and terminal', () {
+      final link = linkFromPayloadBytes(utf8.encode('$good\u0000junk'));
+      expect(link?.boatId, isNotNull);
+      expect(link?.terminalId, isNotNull);
+    });
+
+    test('a Discover row shows the boat name from the BLE name', () {
+      final named = TerminalName.parse('LMYC-BENCH-01-3F2A');
+      expect(named.boat, 'BENCH-01');
+      expect(named.tag, '3F2A');
+      expect(named.title, 'BENCH-01');
+
+      final old = TerminalName.parse('LMYC-D649');
+      expect(old.boat, isNull);
+      expect(old.title, 'Terminal D649');
+    });
+
+    test('signal strength reads as words', () {
+      expect(signalWord(-50), 'Strong signal');
+      expect(signalWord(-72), 'Good signal');
+      expect(signalWord(-90), 'Weak signal');
+    });
   });
 
   group('NMEA sentences', () {

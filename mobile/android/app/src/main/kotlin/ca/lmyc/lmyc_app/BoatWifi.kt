@@ -1,5 +1,6 @@
 package ca.lmyc.lmyc_app
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.wifi.WifiManager
@@ -16,6 +17,11 @@ import io.flutter.plugin.common.MethodChannel
  * A process-only join would leave Navionics and i-Boating unable to see it.
  */
 object BoatWifi : MethodChannel.MethodCallHandler {
+    private const val ADD_NETWORKS_REQUEST = 4410
+
+    /** The connect() call waiting for the user to answer the Android prompt. */
+    private var pending: MethodChannel.Result? = null
+
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         val activity = currentContext ?: run {
             result.error("wifi", "The app is not ready to join Wi-Fi.", null)
@@ -27,12 +33,22 @@ object BoatWifi : MethodChannel.MethodCallHandler {
                 val psk = call.argument<String>("psk") ?: ""
                 connect(activity, ssid, psk, result)
             }
+            "openSettings" -> openSettings(activity, result)
             else -> result.notImplemented()
         }
     }
 
     @Volatile
     var currentContext: Context? = null
+
+    /** Answers connect() with whether the user tapped Save on the prompt. */
+    fun onActivityResult(requestCode: Int, resultCode: Int): Boolean {
+        if (requestCode != ADD_NETWORKS_REQUEST) return false
+        val waiting = pending ?: return true
+        pending = null
+        waiting.success(if (resultCode == Activity.RESULT_OK) "saved" else "declined")
+        return true
+    }
 
     private fun connect(
         context: Context,
@@ -66,24 +82,43 @@ object BoatWifi : MethodChannel.MethodCallHandler {
             result.error("wifi", "Android did not save $ssid for this phone.", null)
             return
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val intent = Intent(Settings.ACTION_WIFI_ADD_NETWORKS)
-            intent.putParcelableArrayListExtra(
-                Settings.EXTRA_WIFI_NETWORK_LIST,
-                arrayListOf(suggestion),
-            )
-            try {
-                context.startActivity(intent)
-            } catch (_: RuntimeException) {
-                result.error(
-                    "wifi",
-                    "Saved $ssid, but Android did not show the Wi-Fi prompt. " +
-                        "Open Wi-Fi settings and tap $ssid.",
-                    null,
-                )
-                return
-            }
+        val activity = context as? Activity
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || activity == null) {
+            result.success("saved")
+            return
         }
-        result.success(null)
+        val intent = Intent(Settings.ACTION_WIFI_ADD_NETWORKS)
+        intent.putParcelableArrayListExtra(
+            Settings.EXTRA_WIFI_NETWORK_LIST,
+            arrayListOf(suggestion),
+        )
+        pending?.success("declined")
+        pending = result
+        try {
+            activity.startActivityForResult(intent, ADD_NETWORKS_REQUEST)
+        } catch (_: RuntimeException) {
+            pending = null
+            result.error(
+                "wifi",
+                "Saved $ssid, but Android did not show the Wi-Fi prompt. " +
+                    "Open Wi-Fi settings and tap $ssid.",
+                null,
+            )
+        }
+    }
+
+    /** The Wi-Fi panel over the app, or the full Wi-Fi settings page. */
+    private fun openSettings(context: Context, result: MethodChannel.Result) {
+        val action = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Settings.Panel.ACTION_WIFI
+        } else {
+            Settings.ACTION_WIFI_SETTINGS
+        }
+        try {
+            context.startActivity(Intent(action))
+            result.success(null)
+        } catch (_: RuntimeException) {
+            result.error("wifi", "Android did not open Wi-Fi settings.", null)
+        }
     }
 }

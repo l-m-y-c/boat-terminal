@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
+import 'protocol.dart';
+
 /// SoftAP details the terminal shares on BLE `…000040` after the OOB check.
 class BoatWifiInfo {
   const BoatWifiInfo({required this.ssid, required this.psk, required this.ip});
@@ -53,7 +55,9 @@ BoatWifiInfo? parseWifiBootstrap(String raw) {
   final ssid = decoded['ssid'];
   final psk = decoded['psk'];
   final ip = decoded['ip'];
-  if (ssid is! String || ssid.isEmpty || ssid.length > 32) {
+  // Only an LMYC hotspot is saved, so a look-alike terminal cannot plant
+  // another network name on the phone.
+  if (ssid is! String || !ssid.startsWith(kLmycBlePrefix) || ssid.length > 32) {
     return null;
   }
   if (psk is! String || psk.length < 8 || psk.length > 63) {
@@ -137,9 +141,19 @@ class BoatWifi {
   static const _channel = MethodChannel('ca.lmyc/boat_wifi');
 
   /// Saves [ssid] as a normal Wi-Fi network for the whole phone.
-  /// Android shows its own prompt. A phone already on home Wi-Fi must tap the boat network.
-  static Future<void> join({required String ssid, required String psk}) async {
-    await _channel.invokeMethod<void>('connect', {'ssid': ssid, 'psk': psk});
+  /// Android shows its own prompt. False when the user closed it without saving.
+  /// A phone already on home Wi-Fi must still tap the boat network.
+  static Future<bool> join({required String ssid, required String psk}) async {
+    final answer = await _channel.invokeMethod<String>('connect', {
+      'ssid': ssid,
+      'psk': psk,
+    });
+    return answer != 'declined';
+  }
+
+  /// Opens the Wi-Fi list so the user can move the phone onto the boat.
+  static Future<void> openSettings() async {
+    await _channel.invokeMethod<void>('openSettings');
   }
 
   /// Runs [call] on whatever network the phone is using.
