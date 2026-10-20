@@ -1,0 +1,43 @@
+name: Mobile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - mobile/**
+      - .github/workflows/mobile.yml
+  pull_request:
+    paths:
+      - mobile/**
+      - .github/workflows/mobile.yml
+
+jobs:
+  test:
+    name: analyze + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.7
+          cache: true
+
+      - name: Dependencies
+        run: flutter pub get
+
+      - name: Format
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
