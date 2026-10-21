@@ -87,6 +87,9 @@ void net_wifi_start(void)
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    /* The config is set from secrets.h on every boot. Keeping it in RAM means
+     * Wi-Fi never writes flash, and a flash write pauses the CAN interrupt. */
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, nullptr, nullptr));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(

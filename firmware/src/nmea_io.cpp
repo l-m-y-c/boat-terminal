@@ -23,6 +23,15 @@ static void command_log(const char *msg)
 /* Commands share the console with pasted sentences.
  * The NMEA assembler ignores anything that does not start with '$' or '!'.
  * A line that does not fit is dropped whole, not run as a clipped command. */
+/* Pasted sentences are a bench tool. On a live bus they would sit beside
+ * real instrument data, so they are dropped there. */
+static void feed_byte(uint8_t byte)
+{
+    if (n2k_source() == DataSource::Simulator) {
+        nmea_feed_bytes(&byte, 1);
+    }
+}
+
 static void take_byte(int b)
 {
     if (b < 0) {
@@ -47,8 +56,7 @@ static void take_byte(int b)
         g_nmea_line = false;
         g_cmd_overflow = false;
         if (was_nmea) {
-            const uint8_t byte = static_cast<uint8_t>(b);
-            nmea_feed_bytes(&byte, 1);
+            feed_byte(static_cast<uint8_t>(b));
         }
         return;
     }
@@ -56,8 +64,7 @@ static void take_byte(int b)
         g_nmea_line = true;
     }
     if (g_nmea_line) {
-        const uint8_t byte = static_cast<uint8_t>(b);
-        nmea_feed_bytes(&byte, 1);
+        feed_byte(static_cast<uint8_t>(b));
         g_last_rx_ms = millis();
         return;
     }
@@ -87,12 +94,12 @@ void nmea_io_init(void)
      * The socket marked USB is native CDC; opening it from the Mac resets
      * the chip into the ROM download bootloader. */
     Serial0.begin(115200, SERIAL_8N1, 44, 43);
-    command_log("UART console: NMEA DEMO | NMEA PGN <num> [src=N] <hex> | NMEA SIM");
+    command_log("UART console: NMEA SIM | NMEA N2K | NMEA STATS | NMEA DEMO | NMEA PGN <num> [src=N] <hex>");
     /*
      * TODO(slice-d): Wire Waveshare RS485 UART + DE/RE once pins are confirmed
      * against the wiki / esp_panel_board_custom_conf.h. Do not drive a TX pin
      * until inject policy (Slice C) and listen-only Slice D are gated.
-     * Until then, Slice A uses nmea_sim only — no boat-facing talker.
+     * Until then the only boat-facing source is the NMEA 2000 header.
      */
 }
 

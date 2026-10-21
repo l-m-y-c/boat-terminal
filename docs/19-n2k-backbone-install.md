@@ -147,7 +147,7 @@ Wiring:
 4. Pololu VOUT and GND to the board through a 2-wire USB-C power pigtail into the socket marked **USB**. That socket's VBUS goes straight onto the board's 5 V rail, and CC1/CC2 already have 5.1 kΩ to ground, so no CC resistor is needed. Leave EN open. Leave the UART socket empty.
 5. CAN-H (white) and CAN-L (blue) to the board's CAN header (PH2.0, High and Low). Check colours against the cable's own sheet.
 6. Shield / drain (bare): cut it back at the boat-terminal end and insulate it. On N2K the shield is grounded at one point only, the power tap. Devices don't connect it.
-7. Set `NMEA_SOURCE` to `1` (or `2` for AUTO) in `firmware/src/secrets.h`. See [05](05-nmea-connectivity.md#waveshare-listen-only-nmea-2000-firmware).
+7. On the terminal, tap the **SIMULATION** badge and choose **NMEA 2000**. The choice is saved, so do it once, on the bench, before the drop goes on. (`NMEA_SOURCE 1` in `firmware/src/secrets.h` does the same for a freshly erased board.) See [05](05-nmea-connectivity.md#data-source-simulator-or-nmea-2000).
 
 The Pololu is non-isolated, so its input and output grounds are already common. That matters: the CAN header has no ground pin. The TJA1051 gets its bus reference through the board ground, so board ground must be NET-C.
 
@@ -195,7 +195,7 @@ Checks:
 |---|-------|------|
 | 1 | `make firmware-test` on a Mac | All checks pass. |
 | 2 | `make firmware` builds | No errors. |
-| 3 | Off the bus: flash with `NMEA_SOURCE 1`. Watch the UART Type-C log. | CAN comes up. EXIO5 goes high. USB CDC drops as expected. |
+| 3 | Off the bus: choose **NMEA 2000** on **Data source** and confirm. Watch the UART Type-C log. | The terminal restarts. CAN comes up. EXIO5 goes high. USB CDC drops as expected. The badge reads **NMEA 2000 NO DATA**. |
 | 4 | First run the power-supply bench test in [20](20-n2k-bus-power-supply.md#bench-test). Then unplug the laptop and power the board from the drop through the fuse, diode and Pololu. | Board boots. Screen and Wi-Fi come up. Nothing else is wired to it. |
 | 5 | Current at 12 V into the drop, backlight full, Wi-Fi active (phone streaming TCP 10110) | Note the peak. Update the LEN in section 3. Must stay under 1 A (20 LEN). |
 | 6 | Turn the bench supply down to 9 V | Board keeps running, no resets. Note the current at 9 V. |
@@ -206,7 +206,11 @@ Checks:
 | 11 | Phone on BoatLink, TCP 10110 | RMC, DPT and AIVDM sentences arrive. |
 | 12 | FIX chip | Shows BOAT while frames flow. |
 
-Test `NMEA SIM` and back to `NMEA N2K` off the bus, on USB, where the console is reachable.
+Test switching to the simulator and back on **Data source** off the bus, where USB is reachable. Each switch restarts the terminal.
+
+The terminal never acknowledges frames. On a bench bus with one sender and the terminal, the sender gets no ACK and resends every frame, so the terminal sees duplicates and the sender's error counter climbs. Keep a second listening node on the bench bus, such as the USB sniffer, which acknowledges. On the boat the other devices do this.
+
+While frames flow, open **Data source** on the glass, or **Boat data** on the phone. **Lost frames** must stay at 0, and the buffer peak should stay far below 2048. `NMEA STATS` on the UART console prints the same counters.
 
 ## 6. Commissioning on the boat
 

@@ -106,11 +106,13 @@ void nmea_state_note(const char *sentence)
         if (parse_float(fields[7], &sog)) {
             g_inst.sog_kn = sog;
             g_inst.have_sog = true;
+            g_inst.sog_ms = now;
             g_inst.updated_ms = now;
         }
         if (parse_float(fields[8], &cog)) {
             g_inst.cog_deg = cog;
             g_inst.have_cog = true;
+            g_inst.cog_ms = now;
             g_inst.updated_ms = now;
         }
     } else if ((strcmp(formatter, "DPT") == 0 || strcmp(formatter, "DBT") == 0) &&
@@ -121,11 +123,13 @@ void nmea_state_note(const char *sentence)
             if (parse_float(fields[3], &d)) {
                 g_inst.depth_m = d;
                 g_inst.have_depth = true;
+                g_inst.depth_ms = now;
                 g_inst.updated_ms = now;
             }
         } else if (parse_float(fields[1], &d)) {
             g_inst.depth_m = d;
             g_inst.have_depth = true;
+            g_inst.depth_ms = now;
             g_inst.updated_ms = now;
         }
     } else if (strcmp(formatter, "VTG") == 0 && nfields > 5) {
@@ -135,11 +139,13 @@ void nmea_state_note(const char *sentence)
         if (parse_float(fields[5], &sog)) {
             g_inst.sog_kn = sog;
             g_inst.have_sog = true;
+            g_inst.sog_ms = now;
             g_inst.updated_ms = now;
         }
         if (parse_float(fields[1], &cog)) {
             g_inst.cog_deg = cog;
             g_inst.have_cog = true;
+            g_inst.cog_ms = now;
             g_inst.updated_ms = now;
         }
     } else if (strcmp(formatter, "MWV") == 0 && nfields > 4) {
@@ -154,12 +160,18 @@ void nmea_state_note(const char *sentence)
             }
             g_inst.aws_kn = spd;
             g_inst.have_wind = true;
+            g_inst.wind_ms = now;
             g_inst.updated_ms = now;
         }
     }
 }
 
 const NmeaInstruments *nmea_state_instruments(void) { return &g_inst; }
+
+bool nmea_state_fresh(uint32_t stamp_ms)
+{
+    return stamp_ms != 0 && (millis() - stamp_ms) <= kNmeaInstrumentStaleMs;
+}
 size_t nmea_state_talker_count(void) { return g_talker_n; }
 const NmeaTalkerInfo *nmea_state_talker(size_t index)
 {

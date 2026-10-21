@@ -79,20 +79,42 @@ class NmeaInfoPage extends StatelessWidget {
     required this.ssid,
     required this.ip,
     required this.onBoat,
+    this.simulated = false,
   });
 
   final String ssid;
   final String ip;
   final bool onBoat;
 
+  /// The terminal is on its simulator, so chart apps get made-up data.
+  final bool simulated;
+
   @override
   Widget build(BuildContext context) {
     final network = ssid.isEmpty ? 'Not received yet' : ssid;
     return Scaffold(
-      appBar: AppBar(title: const Text('NMEA connection')),
+      appBar: AppBar(title: const Text('Chart apps')),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
+          if (simulated) ...[
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFB7791F).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: const Color(0xFFB7791F).withValues(alpha: 0.4),
+                ),
+              ),
+              child: const Text(
+                'The terminal is simulating a boat. Chart apps will show '
+                'simulated position, depth and wind, not the boat\'s.',
+                style: TextStyle(height: 1.4, color: Color(0xFF7A4F0E)),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
           Text(
             onBoat
                 ? 'This phone is on the boat Wi-Fi.'

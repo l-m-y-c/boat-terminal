@@ -24,7 +24,6 @@
 #include "pairing.h"
 #include "nmea.h"
 #include "nmea_io.h"
-#include "nmea_sim.h"
 #include "n2k.h"
 #include "n2k_to_0183.h"
 #include "nmea_state.h"
@@ -36,6 +35,7 @@
 #include "maint_ui.h"
 #include "net_wifi.h"
 #include "sd_card.h"
+#include "terminal_stats.h"
 
 #include "boat_config.h"
 #if !LMYC_HAVE_SECRETS
@@ -66,7 +66,7 @@ static lv_obj_t *g_pgn_value = nullptr;
 static lv_obj_t *g_hint_value = nullptr;
 static lv_obj_t *g_log_value = nullptr;
 
-enum class Screen : uint8_t { Home, Instruments, Reports, Charts, Diagnostics };
+enum class Screen : uint8_t { Home, Instruments, Reports, Charts, Diagnostics, Data };
 
 /* The rail parks off the right edge with a 44 px ear left on the glass.
  * Content stays full width under that ear. Opening the rail overlays it. */
@@ -95,13 +95,19 @@ static Screen g_screen = Screen::Home;
 static lv_obj_t *g_page_home = nullptr;
 static lv_obj_t *g_page_helm = nullptr;
 static lv_obj_t *g_page_diag = nullptr;
+static lv_obj_t *g_page_data = nullptr;
 static lv_obj_t *g_topbar = nullptr;
+static lv_obj_t *g_top_rule = nullptr;
+static lv_obj_t *g_mode_badge = nullptr;
+static lv_obj_t *g_mode_dot = nullptr;
+static lv_obj_t *g_mode_lbl = nullptr;
 static lv_obj_t *g_rail = nullptr;
 static lv_obj_t *g_rail_home = nullptr;
 static lv_obj_t *g_rail_instr = nullptr;
 static lv_obj_t *g_rail_reports = nullptr;
 static lv_obj_t *g_rail_charts = nullptr;
 static lv_obj_t *g_rail_diag = nullptr;
+static lv_obj_t *g_rail_data = nullptr;
 static lv_obj_t *g_rail_debug = nullptr;
 static lv_obj_t *g_rail_items = nullptr;
 static lv_obj_t *g_crumb_home = nullptr;
@@ -202,6 +208,7 @@ static void select_can(bool can_mode)
 }
 
 static void refresh_chrome(void);
+static void update_data_views(void);
 static void hide_status_pop(void);
 static void apply_home_qr(void);
 static void set_rail_open(bool open);
@@ -243,6 +250,7 @@ static void apply_pages(void)
     hide_page(g_page_book);
     hide_page(g_page_chart);
     hide_page(g_page_diag);
+    hide_page(g_page_data);
 
     switch (g_screen) {
     case Screen::Home:
@@ -266,6 +274,9 @@ static void apply_pages(void)
         break;
     case Screen::Diagnostics:
         show_page(g_page_diag);
+        break;
+    case Screen::Data:
+        show_page(g_page_data);
         break;
     }
     g_showing_helm = g_screen == Screen::Instruments;
@@ -311,6 +322,7 @@ static void on_show_home(lv_event_t * /*e*/) { go(Screen::Home); }
 static void on_show_helm(lv_event_t * /*e*/) { go(Screen::Instruments); }
 static void on_show_book(lv_event_t * /*e*/) { go(Screen::Reports); }
 static void on_show_diag(lv_event_t * /*e*/) { go(Screen::Diagnostics); }
+static void on_show_data(lv_event_t * /*e*/) { go(Screen::Data); }
 
 static void present_snapshot_image(void)
 {
@@ -355,7 +367,7 @@ static void on_toggle_gnss(lv_event_t * /*e*/)
 {
     const bool next = !inject_local_armed();
     inject_set_local(next);
-    nmea_sim_set_emit_gnss(!next);
+    n2k_set_sim_gnss(!next);
 }
 
 static void on_show_chart(lv_event_t * /*e*/)
@@ -434,6 +446,9 @@ static void refresh_chrome(void)
         case Screen::Diagnostics:
             leaf = "Diagnostics";
             break;
+        case Screen::Data:
+            leaf = "Data source";
+            break;
         case Screen::Charts:
             leaf = "Charts";
             break;
@@ -470,6 +485,7 @@ static void refresh_chrome(void)
     show_obj(g_rail_reports, g_screen == Screen::Reports);
     show_obj(g_rail_charts, g_screen == Screen::Charts);
     show_obj(g_rail_diag, g_screen == Screen::Diagnostics);
+    show_obj(g_rail_data, g_screen == Screen::Data);
     if (g_screen == Screen::Reports) {
         show_obj(g_rail_items, maint_ui_showing_detail());
         show_obj(g_rail_debug, !maint_ui_showing_detail());
@@ -517,28 +533,28 @@ static void update_helm_labels(void)
     const NmeaInstruments *inst = nmea_state_instruments();
     char buf[48];
 
-    if (inst->have_depth) {
+    if (inst->have_depth && nmea_state_fresh(inst->depth_ms)) {
         snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(inst->depth_m));
     } else {
         snprintf(buf, sizeof(buf), "—");
     }
     set_label(g_tile_depth, buf);
 
-    if (inst->have_sog) {
+    if (inst->have_sog && nmea_state_fresh(inst->sog_ms)) {
         snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(inst->sog_kn));
     } else {
         snprintf(buf, sizeof(buf), "—");
     }
     set_label(g_tile_sog, buf);
 
-    if (inst->have_cog) {
+    if (inst->have_cog && nmea_state_fresh(inst->cog_ms)) {
         snprintf(buf, sizeof(buf), "%.0f", static_cast<double>(inst->cog_deg));
     } else {
         snprintf(buf, sizeof(buf), "—");
     }
     set_label(g_tile_cog, buf);
 
-    if (inst->have_wind) {
+    if (inst->have_wind && nmea_state_fresh(inst->wind_ms)) {
         snprintf(buf, sizeof(buf), "%.0f", static_cast<double>(inst->aws_kn));
         set_label(g_tile_wind, buf);
         snprintf(buf, sizeof(buf), "%+.0f° AWA", static_cast<double>(inst->awa_deg));
@@ -628,6 +644,7 @@ static void apply_home_qr(void)
 static void update_status_labels(void)
 {
     apply_pages();
+    update_data_views();
 
     const bool phone = inject_local_armed();
     const char *tag = phone ? "PHONE" : n2k_fix_tag();
@@ -1021,6 +1038,455 @@ static void build_diag_page(lv_obj_t *parent)
     lv_label_set_long_mode(g_log_value, LV_LABEL_LONG_DOT);
     lv_obj_set_size(g_log_value, 320, 64);
     lv_obj_align(g_log_value, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+}
+
+/* ---- Data source ------------------------------------------------------
+ * The badge on the top bar says on every screen whether the numbers are
+ * simulated or live. The Data source page switches between the two and
+ * shows the receive path's counters. */
+
+static constexpr uint32_t kAmber = 0xF0C674;
+static constexpr uint32_t kGreen = 0x3DDC97;
+static constexpr uint32_t kRed = 0xFF8A80;
+static constexpr uint32_t kMuted = 0x8FA3B8;
+
+enum Metric : uint8_t {
+    kMetricMps,
+    kMetricFps,
+    kMetricPeak,
+    kMetricLost,
+    kMetricBuffer,
+    kMetricErrors,
+    kMetricPgns,
+    kMetricDevices,
+    kMetricApps,
+    kMetricCount
+};
+
+static lv_obj_t *g_metric[kMetricCount] = {};
+static lv_obj_t *g_src_panel[2] = {};
+static lv_obj_t *g_src_active[2] = {};
+static lv_obj_t *g_src_use[2] = {};
+static lv_obj_t *g_bus_state = nullptr;
+static lv_obj_t *g_bus_sub = nullptr;
+static lv_obj_t *g_bus_foot = nullptr;
+static lv_obj_t *g_confirm = nullptr;
+static lv_obj_t *g_confirm_title = nullptr;
+static lv_obj_t *g_confirm_body = nullptr;
+static lv_obj_t *g_restarting = nullptr;
+static lv_obj_t *g_restarting_lbl = nullptr;
+static DataSource g_confirm_target = DataSource::Simulator;
+
+/* 1234567 -> "1,234,567". */
+static void fmt_count(uint32_t v, char *out, size_t cap)
+{
+    char raw[16];
+    snprintf(raw, sizeof(raw), "%lu", static_cast<unsigned long>(v));
+    const size_t n = strlen(raw);
+    size_t o = 0;
+    for (size_t i = 0; i < n && o + 2 < cap; ++i) {
+        if (i > 0 && (n - i) % 3 == 0) {
+            out[o++] = ',';
+        }
+        out[o++] = raw[i];
+    }
+    out[o] = '\0';
+}
+
+struct ModeLook {
+    const char *text;
+    uint32_t bg;
+    uint32_t dot;
+};
+
+static ModeLook mode_look(const N2kStats &s)
+{
+    switch (s.state) {
+    case BusState::Simulated:
+        return {"SIMULATION", 0x5A4718, kAmber};
+    case BusState::Paused:
+        return {"SIMULATION  PAUSED", 0x5A4718, kAmber};
+    case BusState::Live:
+        return {"LIVE  NMEA 2000", 0x174A36, kGreen};
+    case BusState::Opening:
+        return {"NMEA 2000  STARTING", 0x1E3A5F, kMuted};
+    case BusState::Waiting:
+    case BusState::Quiet:
+        return {"NMEA 2000  NO DATA", 0x5C2626, kRed};
+    case BusState::BusOff:
+    case BusState::Failed:
+        return {"NMEA 2000  BUS FAULT", 0x5C2626, kRed};
+    }
+    return {"", 0x1E3A5F, kMuted};
+}
+
+static void show_restarting(DataSource next)
+{
+    if (g_restarting == nullptr) {
+        return;
+    }
+    char line[96];
+    snprintf(line, sizeof(line), "Restarting on %s" "\n\n" "Phones reconnect on their own.",
+             n2k_source_name(next));
+    set_label(g_restarting_lbl, line);
+    lv_obj_clear_flag(g_restarting, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(g_restarting);
+}
+
+static void hide_confirm(void)
+{
+    if (g_confirm != nullptr) {
+        lv_obj_add_flag(g_confirm, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void ask_switch(DataSource next)
+{
+    if (g_confirm == nullptr || next == n2k_source() || n2k_restart_pending()) {
+        return;
+    }
+    g_confirm_target = next;
+    if (next == DataSource::Nmea2000) {
+        set_label(g_confirm_title, "Switch to NMEA 2000?");
+        set_label(g_confirm_body,
+                  "The simulator stops and the terminal listens to the boat's backbone. "
+                  "It never transmits.\n\n"
+                  "The terminal restarts. USB serial moves to the UART socket.");
+    } else {
+        set_label(g_confirm_title, "Switch to the simulator?");
+        set_label(g_confirm_body,
+                  "Chart apps and the phone will get simulated data, not the boat's. "
+                  "Use it on the bench, never under way.\n\n"
+                  "The terminal restarts.");
+    }
+    set_rail_open(false);
+    hide_status_pop();
+    lv_obj_clear_flag(g_confirm, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(g_confirm);
+}
+
+static void on_use_n2k(lv_event_t * /*e*/) { ask_switch(DataSource::Nmea2000); }
+static void on_use_sim(lv_event_t * /*e*/) { ask_switch(DataSource::Simulator); }
+static void on_confirm_cancel(lv_event_t * /*e*/) { hide_confirm(); }
+
+static void on_confirm_go(lv_event_t * /*e*/)
+{
+    if (n2k_switch_source(g_confirm_target)) {
+        hide_confirm();
+        show_restarting(g_confirm_target);
+        return;
+    }
+    set_label(g_confirm_body, "The terminal could not save the choice. Nothing changed.");
+}
+
+static void on_mode_badge(lv_event_t * /*e*/)
+{
+    if (g_screen != Screen::Data) {
+        go(Screen::Data);
+    }
+}
+
+static void update_data_views(void)
+{
+    N2kStats s;
+    n2k_stats(&s);
+    const ModeLook look = mode_look(s);
+    if (g_mode_badge != nullptr) {
+        lv_obj_set_style_bg_color(g_mode_badge, lv_color_hex(look.bg), 0);
+        lv_obj_set_style_bg_color(g_mode_dot, lv_color_hex(look.dot), 0);
+        set_label(g_mode_lbl, look.text);
+    }
+    if (g_top_rule != nullptr) {
+        lv_obj_set_style_bg_color(g_top_rule, lv_color_hex(look.dot), 0);
+    }
+    if (g_screen != Screen::Data || g_page_data == nullptr) {
+        return;
+    }
+
+    const int active = s.source == DataSource::Simulator ? 0 : 1;
+    for (int i = 0; i < 2; ++i) {
+        const bool on = i == active;
+        show_obj(g_src_active[i], on);
+        show_obj(g_src_use[i], !on && !n2k_restart_pending());
+        lv_obj_set_style_border_color(g_src_panel[i], lv_color_hex(on ? look.dot : 0x1E3A5F), 0);
+    }
+
+    const bool sim = s.source == DataSource::Simulator;
+    uint32_t state_color = kGreen;
+    if (sim) {
+        state_color = kAmber;
+    } else if (s.state != BusState::Live) {
+        state_color = s.state == BusState::Opening ? kMuted : kRed;
+    }
+    set_label(g_bus_state, n2k_state_name(s.state));
+    lv_obj_set_style_text_color(g_bus_state, lv_color_hex(state_color), 0);
+    set_label(g_bus_sub, sim ? "Virtual bus. CAN closed. Not the boat's data."
+                             : "250 kbit/s, listen-only. Nothing is transmitted.");
+
+    char v[32];
+    snprintf(v, sizeof(v), "%lu", static_cast<unsigned long>(s.messages_per_s));
+    set_label(g_metric[kMetricMps], v);
+    snprintf(v, sizeof(v), "%lu", static_cast<unsigned long>(s.frames_per_s));
+    set_label(g_metric[kMetricFps], v);
+    snprintf(v, sizeof(v), "%lu", static_cast<unsigned long>(s.frames_per_s_peak));
+    set_label(g_metric[kMetricPeak], v);
+    const uint32_t lost = s.lost_queue + s.lost_driver + s.lost_controller;
+    fmt_count(lost, v, sizeof(v));
+    set_label(g_metric[kMetricLost], v);
+    lv_obj_set_style_text_color(g_metric[kMetricLost], lv_color_hex(lost == 0 ? kGreen : kRed), 0);
+    snprintf(v, sizeof(v), "%lu / %lu", static_cast<unsigned long>(s.queue_peak),
+             static_cast<unsigned long>(s.queue_capacity));
+    set_label(g_metric[kMetricBuffer], v);
+    lv_obj_set_style_text_color(g_metric[kMetricBuffer],
+                                lv_color_hex(s.queue_peak * 2 > s.queue_capacity ? kAmber : 0xFFFFFF), 0);
+    fmt_count(s.bus_errors, v, sizeof(v));
+    set_label(g_metric[kMetricErrors], v);
+    lv_obj_set_style_text_color(g_metric[kMetricErrors], lv_color_hex(s.bus_errors == 0 ? 0xFFFFFF : kAmber),
+                                0);
+    snprintf(v, sizeof(v), "%lu", static_cast<unsigned long>(s.pgn_types));
+    set_label(g_metric[kMetricPgns], v);
+    snprintf(v, sizeof(v), "%lu", static_cast<unsigned long>(s.devices));
+    set_label(g_metric[kMetricDevices], v);
+
+    GatewayStats g = {};
+    gateway_stats(&g);
+    snprintf(v, sizeof(v), "%lu", static_cast<unsigned long>(g.clients));
+    set_label(g_metric[kMetricApps], v);
+
+    char frames[16], sent[16], age[24];
+    fmt_count(s.frames, frames, sizeof(frames));
+    fmt_count(g.sentences, sent, sizeof(sent));
+    if (s.last_frame_ms == UINT32_MAX) {
+        snprintf(age, sizeof(age), "none yet");
+    } else if (s.last_frame_ms < 1000) {
+        snprintf(age, sizeof(age), "%lu ms ago", static_cast<unsigned long>(s.last_frame_ms));
+    } else {
+        snprintf(age, sizeof(age), "%lu s ago", static_cast<unsigned long>(s.last_frame_ms / 1000));
+    }
+    char foot[200];
+    snprintf(foot, sizeof(foot),
+             "%s frames since boot, last %s.\n%s sentences to chart apps, %lu not delivered.",
+             frames, age, sent, static_cast<unsigned long>(g.lost_tcp + g.lost_udp));
+    set_label(g_bus_foot, foot);
+}
+
+static lv_obj_t *make_metric(lv_obj_t *parent, const char *caption, lv_coord_t x, lv_coord_t y,
+                             lv_coord_t w)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_size(box, w, 72);
+    lv_obj_set_pos(box, x, y);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x0B1C30), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_radius(box, 10, 0);
+    lv_obj_set_style_pad_all(box, 10, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(box, on_dismiss_rail, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *cap = lv_label_create(box);
+    lv_label_set_text(cap, caption);
+    lv_obj_set_style_text_color(cap, lv_color_hex(kMuted), 0);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
+    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    lv_obj_t *val = lv_label_create(box);
+    lv_label_set_text(val, "—");
+    lv_label_set_long_mode(val, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(val, w - 20);
+    lv_obj_set_style_text_color(val, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(val, &lv_font_montserrat_24, 0);
+    lv_obj_align(val, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    return val;
+}
+
+static void make_source_option(lv_obj_t *card, int index, const char *title, const char *body,
+                               const char *use, lv_event_cb_t cb, uint32_t accent, lv_coord_t y)
+{
+    lv_obj_t *panel = lv_obj_create(card);
+    lv_obj_set_size(panel, 268, 150);
+    lv_obj_set_pos(panel, 0, y);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x0B1C30), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(panel, 2, 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0x1E3A5F), 0);
+    lv_obj_set_style_radius(panel, 12, 0);
+    lv_obj_set_style_pad_all(panel, 12, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(panel, on_dismiss_rail, LV_EVENT_CLICKED, nullptr);
+    g_src_panel[index] = panel;
+
+    lv_obj_t *head = lv_label_create(panel);
+    lv_label_set_text(head, title);
+    lv_obj_set_style_text_color(head, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(head, &lv_font_montserrat_22, 0);
+    lv_obj_align(head, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    lv_obj_t *text = lv_label_create(panel);
+    lv_label_set_text(text, body);
+    lv_label_set_long_mode(text, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(text, 240);
+    lv_obj_set_style_text_color(text, lv_color_hex(kMuted), 0);
+    lv_obj_set_style_text_font(text, &lv_font_montserrat_14, 0);
+    lv_obj_align(text, LV_ALIGN_TOP_LEFT, 0, 32);
+
+    lv_obj_t *chip = lv_obj_create(panel);
+    lv_obj_set_size(chip, 84, 30);
+    lv_obj_align(chip, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(chip, lv_color_hex(accent), 0);
+    lv_obj_set_style_bg_opa(chip, LV_OPA_20, 0);
+    lv_obj_set_style_border_width(chip, 0, 0);
+    lv_obj_set_style_radius(chip, 15, 0);
+    lv_obj_set_style_pad_all(chip, 0, 0);
+    lv_obj_clear_flag(chip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(chip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *chip_lbl = lv_label_create(chip);
+    lv_label_set_text(chip_lbl, "ACTIVE");
+    lv_obj_set_style_text_color(chip_lbl, lv_color_hex(accent), 0);
+    lv_obj_set_style_text_font(chip_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_center(chip_lbl);
+    g_src_active[index] = chip;
+
+    lv_obj_t *btn = make_ghost_btn(panel, use, cb, 170);
+    lv_obj_set_height(btn, 40);
+    lv_obj_align(btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    g_src_use[index] = btn;
+}
+
+static lv_obj_t *make_overlay(void)
+{
+    lv_obj_t *scrim = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(scrim, 800, 480);
+    lv_obj_set_pos(scrim, 0, 0);
+    lv_obj_set_style_bg_color(scrim, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(scrim, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(scrim, 0, 0);
+    lv_obj_set_style_radius(scrim, 0, 0);
+    lv_obj_clear_flag(scrim, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(scrim, LV_OBJ_FLAG_HIDDEN);
+    return scrim;
+}
+
+static void build_data_page(lv_obj_t *parent)
+{
+    lv_obj_t *source = make_card(parent, "DATA SOURCE", 300, kContentH);
+    lv_obj_set_pos(source, 8, 0);
+    make_source_option(source, 1, "NMEA 2000",
+                       "Live from the boat's backbone. Listen-only: this terminal never transmits.",
+                       "Use NMEA 2000", on_use_n2k, kGreen, 30);
+    make_source_option(source, 0, "Simulator",
+                       "A boat sailing English Bay on a virtual bus. For the bench, never aboard.",
+                       "Use simulator", on_use_sim, kAmber, 190);
+    lv_obj_t *hint = lv_label_create(source);
+    lv_label_set_text(hint, "Switching restarts the terminal. Phones reconnect on their own.");
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(hint, 268);
+    lv_obj_set_style_text_color(hint, lv_color_hex(kMuted), 0);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
+    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, 352);
+
+    const lv_coord_t bus_x = 316;
+    const lv_coord_t bus_w = kContentW - bus_x - 8;
+    lv_obj_t *bus = make_card(parent, "BUS", bus_w, kContentH);
+    lv_obj_set_pos(bus, bus_x, 0);
+    g_bus_state = lv_label_create(bus);
+    lv_label_set_text(g_bus_state, "—");
+    lv_obj_set_style_text_font(g_bus_state, &lv_font_montserrat_28, 0);
+    lv_obj_align(g_bus_state, LV_ALIGN_TOP_LEFT, 0, 26);
+    g_bus_sub = lv_label_create(bus);
+    lv_label_set_text(g_bus_sub, "");
+    lv_obj_set_style_text_color(g_bus_sub, lv_color_hex(kMuted), 0);
+    lv_obj_set_style_text_font(g_bus_sub, &lv_font_montserrat_14, 0);
+    lv_obj_align(g_bus_sub, LV_ALIGN_TOP_LEFT, 0, 64);
+
+    const lv_coord_t inner = bus_w - 32;
+    const lv_coord_t gap = 8;
+    const lv_coord_t mw = (inner - gap * 2) / 3;
+    static const char *const kCaptions[kMetricCount] = {
+        "Messages / s", "Frames / s", "Peak frames / s", "Lost frames", "Buffer peak",
+        "Bus errors",   "PGN types",  "Devices",         "Chart apps",
+    };
+    for (int i = 0; i < kMetricCount; ++i) {
+        const lv_coord_t x = (i % 3) * (mw + gap);
+        const lv_coord_t y = 92 + (i / 3) * (72 + gap);
+        g_metric[i] = make_metric(bus, kCaptions[i], x, y, mw);
+    }
+
+    g_bus_foot = lv_label_create(bus);
+    lv_label_set_text(g_bus_foot, "");
+    lv_label_set_long_mode(g_bus_foot, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_bus_foot, inner);
+    lv_obj_set_style_text_color(g_bus_foot, lv_color_hex(kMuted), 0);
+    lv_obj_set_style_text_font(g_bus_foot, &lv_font_montserrat_14, 0);
+    lv_obj_align(g_bus_foot, LV_ALIGN_TOP_LEFT, 0, 342);
+
+    /* Confirm before a restart. */
+    g_confirm = make_overlay();
+    lv_obj_add_event_cb(g_confirm, on_confirm_cancel, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *box = lv_obj_create(g_confirm);
+    lv_obj_set_size(box, 500, 270);
+    lv_obj_center(box);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x12243A), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_radius(box, 16, 0);
+    lv_obj_set_style_pad_all(box, 24, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    g_confirm_title = lv_label_create(box);
+    lv_obj_set_style_text_color(g_confirm_title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(g_confirm_title, &lv_font_montserrat_24, 0);
+    lv_obj_align(g_confirm_title, LV_ALIGN_TOP_LEFT, 0, 0);
+    g_confirm_body = lv_label_create(box);
+    lv_label_set_long_mode(g_confirm_body, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_confirm_body, 452);
+    lv_obj_set_style_text_color(g_confirm_body, lv_color_hex(0xD5DEE8), 0);
+    lv_obj_set_style_text_font(g_confirm_body, &lv_font_montserrat_16, 0);
+    lv_obj_align(g_confirm_body, LV_ALIGN_TOP_LEFT, 0, 44);
+    lv_obj_t *cancel = make_ghost_btn(box, "Cancel", on_confirm_cancel, 150);
+    lv_obj_set_height(cancel, 48);
+    lv_obj_align(cancel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_t *go_btn = make_ghost_btn(box, "Switch and restart", on_confirm_go, 220);
+    lv_obj_set_height(go_btn, 48);
+    lv_obj_set_style_bg_color(go_btn, lv_color_hex(0x0E5C55), 0);
+    lv_obj_align(go_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+
+    g_restarting = make_overlay();
+    lv_obj_set_style_bg_opa(g_restarting, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(g_restarting, lv_color_hex(0x071422), 0);
+    g_restarting_lbl = lv_label_create(g_restarting);
+    lv_obj_set_style_text_align(g_restarting_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(g_restarting_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(g_restarting_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_center(g_restarting_lbl);
+}
+
+static void build_mode_badge(lv_obj_t *bar)
+{
+    g_mode_badge = lv_obj_create(bar);
+    lv_obj_set_size(g_mode_badge, 244, 40);
+    lv_obj_set_pos(g_mode_badge, 152, 8);
+    lv_obj_set_style_bg_color(g_mode_badge, lv_color_hex(0x1E3A5F), 0);
+    lv_obj_set_style_bg_opa(g_mode_badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_mode_badge, 0, 0);
+    lv_obj_set_style_radius(g_mode_badge, 20, 0);
+    lv_obj_set_style_pad_all(g_mode_badge, 0, 0);
+    lv_obj_clear_flag(g_mode_badge, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(g_mode_badge, on_mode_badge, LV_EVENT_CLICKED, nullptr);
+
+    g_mode_dot = lv_obj_create(g_mode_badge);
+    lv_obj_set_size(g_mode_dot, 12, 12);
+    lv_obj_align(g_mode_dot, LV_ALIGN_LEFT_MID, 16, 0);
+    lv_obj_set_style_radius(g_mode_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(g_mode_dot, 0, 0);
+    lv_obj_set_style_bg_opa(g_mode_dot, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(g_mode_dot, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(g_mode_dot, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_mode_lbl = lv_label_create(g_mode_badge);
+    lv_label_set_text(g_mode_lbl, "");
+    lv_obj_set_style_text_color(g_mode_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(g_mode_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_align(g_mode_lbl, LV_ALIGN_LEFT_MID, 38, 0);
 }
 
 static void open_helm_sub(lv_obj_t *page)
@@ -1657,6 +2123,13 @@ static void create_ui(void)
     build_diag_page(g_page_diag);
     lv_obj_add_flag(g_page_diag, LV_OBJ_FLAG_HIDDEN);
 
+    g_page_data = lv_obj_create(scr);
+    place_content(g_page_data);
+    lv_obj_set_style_bg_opa(g_page_data, LV_OPA_TRANSP, 0);
+    build_data_page(g_page_data);
+    lv_obj_add_event_cb(g_page_data, on_dismiss_rail, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_flag(g_page_data, LV_OBJ_FLAG_HIDDEN);
+
     g_page_home = lv_obj_create(scr);
     place_content(g_page_home);
     lv_obj_set_style_bg_color(g_page_home, lv_color_hex(0x071422), 0);
@@ -1676,14 +2149,15 @@ static void create_ui(void)
     lv_obj_set_style_radius(g_topbar, 0, 0);
     lv_obj_set_style_pad_all(g_topbar, 0, 0);
     lv_obj_clear_flag(g_topbar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *rule = lv_obj_create(g_topbar);
-    lv_obj_set_size(rule, 800, 1);
-    lv_obj_align(rule, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(rule, lv_color_hex(0x1E3A5F), 0);
-    lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(rule, 0, 0);
-    lv_obj_set_style_radius(rule, 0, 0);
-    lv_obj_clear_flag(rule, LV_OBJ_FLAG_SCROLLABLE);
+    /* Tinted with the data source: amber simulated, green live, red no data. */
+    g_top_rule = lv_obj_create(g_topbar);
+    lv_obj_set_size(g_top_rule, 800, 2);
+    lv_obj_align(g_top_rule, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(g_top_rule, lv_color_hex(0x1E3A5F), 0);
+    lv_obj_set_style_bg_opa(g_top_rule, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_top_rule, 0, 0);
+    lv_obj_set_style_radius(g_top_rule, 0, 0);
+    lv_obj_clear_flag(g_top_rule, LV_OBJ_FLAG_SCROLLABLE);
 
     g_chip_fix = make_icon_chip(g_topbar, 0x6B5420, LV_SYMBOL_GPS, on_fix_chip);
     lv_obj_set_pos(g_chip_fix, 8, 8);
@@ -1691,6 +2165,7 @@ static void create_ui(void)
     lv_obj_set_pos(g_chip_link, 56, 8);
     g_chip_qr = make_icon_chip(g_topbar, 0x0E5C55, "QR", on_qr_chip);
     lv_obj_set_pos(g_chip_qr, 104, 8);
+    build_mode_badge(g_topbar);
 
     g_crumb_home = make_crumb_btn(g_topbar, "Home", on_show_home, kCrumbHomeX, kCrumbHomeW,
                                   &lv_font_montserrat_16);
@@ -1751,7 +2226,12 @@ static void create_ui(void)
 
     g_rail_diag = rail_group(g_rail);
     rail_action(g_rail_diag, "Reset BLE", on_reset_ble, 8);
+    rail_action(g_rail_diag, "Data source", on_show_data, 60);
     lv_obj_add_flag(g_rail_diag, LV_OBJ_FLAG_HIDDEN);
+
+    g_rail_data = rail_group(g_rail);
+    rail_action(g_rail_data, "Diagnostics", on_show_diag, 8);
+    lv_obj_add_flag(g_rail_data, LV_OBJ_FLAG_HIDDEN);
 
     g_rail_ear = lv_obj_create(g_rail);
     lv_obj_set_size(g_rail_ear, kEarW, kContentH);
@@ -1835,6 +2315,9 @@ void setup()
             delay(1000);
         }
     }
+    /* The board init drives every CH422G pin high, and EXIO5 high wires
+     * GPIO19/20 to the CAN transceiver. Put USB back until n2k_init decides. */
+    select_can(false);
 
     lvgl_port_init(g_board->getLCD(), g_board->getTouch());
 
@@ -1852,16 +2335,16 @@ void setup()
     nmea_init();
     nmea_state_init();
     nmea_io_init();
-    nmea_sim_init();
     inject_init();
     snapshot_init();
     gateway_init();
     hub_http_init();
     nmea_set_sink(on_nmea_sentence, nullptr);
+    /* Before BLE, Wi-Fi or HTTP start their tasks. On NMEA 2000 this ends
+     * USB Serial, which must not happen while another task is printing. */
+    n2k_init(select_can);
     pairing_init();
     net_wifi_start();
-    /* After Wi-Fi logs. N2K/AUTO may release USB Serial onto the CAN mux. */
-    n2k_init(select_can);
 
     auto boot_log = [](const char *msg) {
         if (n2k_using_uart()) {
@@ -1871,14 +2354,12 @@ void setup()
         }
     };
     boot_log("UI ready. BLE name is in the primary ADV packet; scan in the LMYC app.");
-    if (n2k_source() == NMEA_SOURCE_N2K) {
+    if (n2k_source() == DataSource::Nmea2000) {
         boot_log(n2k_using_uart()
                      ? "NMEA source N2K listen-only. Serial log is on the UART Type-C socket."
                      : "NMEA source N2K selected, but CAN did not open. USB serial stays up.");
-    } else if (n2k_source() == NMEA_SOURCE_AUTO) {
-        boot_log("NMEA source AUTO — simulator until NMEA 2000 frames, then FIX: BOAT.");
     } else {
-        boot_log("NMEA sim on (FIX: SIM) — RMC/GGA/DPT/MWV @ 1 Hz until a real talker appears.");
+        boot_log("NMEA source simulator (FIX: SIM). Change it on Data source, or NMEA N2K on the console.");
     }
 }
 
@@ -1904,10 +2385,13 @@ void loop()
     nmea_io_poll();
     inject_poll();
     n2k_poll();
-    if (nmea_sim_enabled() && nmea_io_quiet()) {
-        nmea_sim_poll();
-    }
     gateway_poll();
+
+    static uint32_t stats_ms = 0;
+    if (millis() - stats_ms >= 1000) {
+        stats_ms = millis();
+        terminal_stats_refresh();
+    }
 
     delay(5);
 }

@@ -6,6 +6,7 @@
 #include "nmea.h"
 #include "pairing.h"
 #include "snapshot.h"
+#include "terminal_stats.h"
 #include "gateway.h"
 
 #include <SD.h>
@@ -175,17 +176,19 @@ static esp_err_t get_root(httpd_req_t *req)
 static esp_err_t get_status(httpd_req_t *req)
 {
     HttpTrace trace(req);
-    char json[320];
+    char data[kTerminalStatsMax];
+    terminal_stats_copy(data, sizeof(data));
+    char json[320 + kTerminalStatsMax];
     snprintf(json, sizeof(json),
              "{\"boat\":\"%s\",\"sailboat_id\":%lu,\"tcp\":%lu,\"nmea_good\":%lu,\"nmea_bad\":%lu,"
-             "\"inject_local\":%s,\"snapshot\":%s}\n",
+             "\"inject_local\":%s,\"snapshot\":%s,\"data\":%s}\n",
              LMYC_BOAT_ID,
              static_cast<unsigned long>(LMYC_SAILBOAT_ID),
              static_cast<unsigned long>(gateway_client_count()),
              static_cast<unsigned long>(nmea_good_count()),
              static_cast<unsigned long>(nmea_bad_count()),
              inject_local_armed() ? "true" : "false",
-             snapshot_has_image() ? "true" : "false");
+             snapshot_has_image() ? "true" : "false", data);
     httpd_resp_set_type(req, "application/json");
     return trace.ok(httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN));
 }

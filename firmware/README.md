@@ -16,7 +16,7 @@ PlatformIO project for the **interactive cabin terminal**:
 - **MicroSD (TF slot)** — mount FAT32 card (exFAT will not work)
 - Credentials live in `src/secrets.h` (gitignored). Copy `src/secrets.h.example`.
 
-Bench pairing is QR + BLE OOB via the Flutter app in `../mobile`. **Slice A** adds an NMEA 0183 simulator (FIX: SIM), TCP gateway on port **10110**, and BLE notify `…000030` for a phone sentence console. Real RS485 listen is TODO(slice-d).
+Bench pairing is Discover or QR + BLE OOB via the Flutter app in `../mobile`. Instrument data comes from one of two sources, chosen on the glass and saved: a **simulator** (a virtual NMEA 2000 bus) or the boat's **NMEA 2000** backbone, listen-only. The top bar says which on every screen. Data goes out on TCP **10110**, UDP 10110/2000, and BLE notify `…000030`. Real RS485 listen is TODO(slice-d).
 
 ## Prerequisites (macOS)
 
@@ -96,13 +96,14 @@ firmware/
 │   ├── sd_card.*           # TF card mount (CS on the IO expander)
 │   ├── pairing.*           # BLE identity, OOB, GATT
 │   ├── nmea.*              # Line assembler + checksum
-│   ├── nmea_sim.*          # 1 Hz canned talker (FIX: SIM)
 │   ├── nmea_state.*        # Latest fix / depth / wind for the helm
-│   ├── nmea_io.*           # USB + UART0 console, NMEA SIM|N2K|AUTO|DEMO|PGN
-│   ├── n2k.*               # NMEA 2000 listen-only (no transmit)
+│   ├── nmea_io.*           # USB + UART0 console, NMEA SIM|N2K|STATS|DEMO|PGN
+│   ├── n2k.*               # Data source, CAN receive task, frame queue, counters (no transmit)
+│   ├── n2k_sim.*           # Simulator on a virtual bus, CAN framing (host-tested)
+│   ├── terminal_stats.*    # Counters as JSON for BLE …000050 and /status.json
 │   ├── n2k_to_0183.*       # PGN → 0183 into the existing sink
 │   ├── ais0183.*           # !AIVDM / !AIVDO packer
-│   ├── gateway.*           # TCP/UDP 10110
+│   ├── gateway.*           # TCP/UDP 10110, an output queue per chart app
 │   ├── hub_http.*          # GET /  POST /snapshot  POST /inject  /maintenance
 │   ├── snapshot.*          # 800×480 JPEG for the Chart page and book photos
 │   ├── inject.*            # Phone GNSS, armed only from the 7″
@@ -119,11 +120,13 @@ firmware/
 
 ### Which task runs what
 
-Five FreeRTOS tasks touch this code. Shared state needs an owner or a lock.
+Seven FreeRTOS tasks touch this code. Shared state needs an owner or a lock.
 
 | Task | Runs | Owns |
 |------|------|------|
-| Arduino `loop()` | `nmea_io`, `n2k`, `nmea_sim`, `inject_poll`, `gateway`, `net_wifi_poll`, book photo decodes | The NMEA parser and its sink (`nmea_state`, gateway sockets, BLE tap) |
+| Arduino `loop()` | `nmea_io`, `n2k_poll` (drains the frame queue), `inject_poll`, `gateway`, `net_wifi_poll`, `terminal_stats_refresh`, book photo decodes | The NMEA 2000 stack, the NMEA parser and its sink (`nmea_state`, gateway sockets, BLE tap) |
+| `n2k_rx` (NMEA 2000 only) | TWAI receive, driver counters, bus-off handling | The CAN controller. Frames go to `loop()` through the frame queue |
+| `n2k_sim` (simulator only) | `n2k_sim_step` every 10 ms | The simulator's state. Frames go through the same queue |
 | LVGL (`lvgl_v8_port`) | Every `lv_*` call, the 1 s status timer, `maint_ui` | All LVGL objects. Other tasks take `lvgl_port_lock()` first |
 | HTTP (`esp_http_server`) | `hub_http` handlers | Nothing. It queues GNSS for `loop()` (`inject_submit`) |
 | NimBLE host | `pairing` callbacks | The pairing status strings |
@@ -151,32 +154,33 @@ The terminal runs **APSTA**: SoftAP `LMYC-<boat>` (password `AP_PASSWORD` in `se
 
 **Reports** on the rail lists open items (completed and future-wishlist are skipped). The list is one screen: a header names Title, Category, and Priority, and each row is one line in those columns. A camera mark in its own column means that report has photos. Opening Reports reads the open items from the card once and keeps that copy in RAM until the phone writes the book. The photos themselves are decoded from the card when a report is opened. A long title or category ends in an ellipsis. Priority is a chip with the word on it: Critical and High are amber, Medium is teal, Low is gray. A mounted card with nothing open says **No open reports**. An empty slot says **No card in the slot**. Tap a row for that item. The item is wells: the field name is small and gray, the value is white. Category, priority, status, and reporter sit in a two-by-two band, and priority uses the same chip. The description well shows about four lines. The page scrolls, and that is the only scrollbar. When the title or the description is longer than its well, tap it. A reader covers the page with the full text and its own scroll. **Close** returns to the same report. Swipe right on that page for the next open report, wrapping after the last. One report stays put, and the reader stays on its report. Photos stack under that. Each picture takes half the width and keeps its shape. The note fills a well of the same height beside it, clipped when it is long. Tap the picture to open that JPEG on the whole glass, on the picture. Tap the note to open it already on the note. Swipe right to move between the photo and the note; the two keep rotating. Swipe left opens the rail. The note screen says **No note for this photo** when none was stored. **Back** on the chart rail returns to the item and does not reload the list. **Next photo** steps through that item and lands back on the picture. **Items** on the reports rail returns to the list. The breadcrumb reads **Reports** on the list, **Reports > Details** on a report, and **Reports > Details > Photo** on a picture. **Reports** reloads the list. **Details** returns to the open report. **Home** in the top bar always returns to the landing screen. **Debug** on the reports rail lists the last HTTP requests. The chart snapshot and the book share one canvas: opening a maintenance photo replaces the chart image until the next snapshot arrives. **Charts** from home shows that snapshot fitted to the page, as one picture, and **Back** returns home.
 
-No RS485 TX. Sim still provides depth/wind when GNSS is LOCAL.
+No RS485 TX. The simulator still provides depth and wind when GNSS is LOCAL.
 
-### NMEA (Slice A)
+### NMEA out
 
-With no RS485 talker, firmware emits `$GPRMC` / `$GPGGA` / `$GPDPT` / `$WIMWV` at 1 Hz and labels the UI **FIX: SIM**. Sentences go to:
+Both sources come out of the same converter as 0183 sentences, about once a second per instrument, and AIS as it arrives. Sentences go to:
 
 - TCP **10110** (CRLF) for `nc <ip> 10110` / Navionics later
+- UDP broadcast to `192.168.4.255` ports 10110 and 2000
 - BLE notify `6c6d7963-0001-4000-8000-000000000030` (dropped if longer than ATT payload)
+
+Each value on the Instruments tiles goes blank (`—`) when it is more than 5 s old.
 
 **Instruments** is Depth, Speed, Course, and Wind, four tiles that fill the page. The readings are Montserrat 96. Captions and units stay at 16. The crumb on that page adds the fix tag (`SIM`, `PLAY`, `N2K`, `BOAT`, or `PHONE`). A list icon and a Wi-Fi icon at the top right open NMEA detail and the link summary on their own screens. The Wi-Fi icon is amber while no phone is associated to the hotspot and green when one is. The link screen reads Bluetooth, the hotspot name, phones on it, NMEA listeners on TCP 10110, and Uplink for the terminal's own upstream network. The list shows the NMEA 2000 types seen on the bus, then the 0183 talkers. **Close** returns to the instruments. The full radio and boat detail stays on Diagnostics.
 
-### NMEA 2000 listen-only
+### Data source
 
-`NMEA_SOURCE` in `secrets.h` (copied from `secrets.h.example`):
+The badge on the top bar reads **SIMULATION** (amber), **LIVE NMEA 2000** (green), or **NMEA 2000 NO DATA** / **BUS FAULT** (red), and the line under the bar matches. Tap it for **Data source** (also on the Diagnostics rail): the two sources, the active one marked, and the bus counters: messages and frames a second, peak, lost frames, buffer peak against 2048, bus errors, PGN types, devices, chart apps, and sentences delivered. Choose the other source and confirm; the choice is saved and the terminal restarts into it.
 
-| Value | Behavior |
-|-------|----------|
-| `0` | Simulator. USB serial stays up. Default for the bench and for CI. |
-| `1` | Listen on the CAN header. No transmit. |
-| `2` | Simulator until a CAN frame arrives, then the bus. |
+`NMEA_SOURCE` in `secrets.h` is only the first-boot default (`0` simulator, `1` NMEA 2000; the old `2` AUTO now means `1`). A live bus never falls back to simulated data.
 
-On the serial console: `NMEA SIM`, `NMEA N2K`, `NMEA AUTO`, `NMEA DEMO`, or `NMEA PGN <number> [src=N] <hex>`. `DEMO` and `PGN` do not open CAN. They pause the 1 Hz simulator and feed reassembled PGNs through the same converter. The fix tag becomes `PLAY` and the source line `PLAY - CAN off`. `make n2k-demo` (or `python3 tools/n2k_play.py`) writes `NMEA DEMO` to the UART Type-C socket, the CH343 on GPIO43/44. Leave the cable in that socket. Opening the USB socket from the Mac resets the chip into download. The demo is depth 42.0 m, course 90°, speed 7.5 kn, wind 18 kn at 40° apparent, heading 45° true, and PGN 130816 so an unknown type is listed. `NMEA SIM` turns the simulator back on. `python3 tools/n2k_play.py PGN 130816 src=4 dead` sends one hex payload.
+On the serial console: `NMEA SIM` or `NMEA N2K` (save and restart), `NMEA STATS`, `NMEA DEMO`, or `NMEA PGN <number> [src=N] <hex>`. `DEMO` and `PGN` run only on the simulator: they pause it and feed reassembled PGNs through the converter. The badge reads **SIMULATION PAUSED** and the fix tag `PLAY`. `make n2k-demo` (or `python3 tools/n2k_play.py`) writes `NMEA DEMO` to the UART Type-C socket, the CH343 on GPIO43/44. Leave the cable in that socket. Opening the USB socket from the Mac resets the chip into download. The demo is depth 42.0 m, course 90°, speed 7.5 kn, wind 18 kn at 40° apparent, heading 45° true, and PGN 130816 so an unknown type is listed. `NMEA SIM` resumes the simulator. `python3 tools/n2k_play.py PGN 130816 src=4 dead` sends one hex payload.
+
+The receive path, and why it loses nothing, is in [doc 05](../docs/05-nmea-connectivity.md#receive-path-nothing-is-dropped-uncounted).
 
 The header is GPIO20 TX / GPIO19 RX through the onboard TJA1051. Those pins are also USB. CH422G EXIO5 high selects CAN, and the log moves to the UART Type-C socket (GPIO43/44). Remove the 120 Ω terminator jumper. The onboard transceiver is **not isolated**. On the boat, power the board from the NMEA 2000 drop (NET-S / NET-C through a fuse and a 12 V to 5 V DC/DC into the USB socket) and wire nothing else to it: no USB lead, RS485 or other 12 V while it's on the bus. Flash and read the log off the bus. If the board must keep its own power, it needs an isolated CAN interface instead. Wiring is in [doc 19](../docs/19-n2k-backbone-install.md#4-boat-terminal-connection). Details and the PGN → 0183 table are in [doc 05](../docs/05-nmea-connectivity.md).
 
-The FIX chip reads `SIM`, `PLAY` (canned PGNs, CAN still closed), `N2K` (selected, no frames yet), `BOAT` (frames flowing), or `PHONE` (gated GNSS). Tap that icon and the line under the bar adds the source (`SIM - CAN off`, `PLAY - CAN off`, `N2K - listening - 1482 frames`, `quiet`, or `bus-off`) and each PGN seen: number, name, source address, age, and how many. The same list is under the Instruments list icon. Diagnostics has the source on the NMEA row and the type names on the PGN row. With `NMEA_SOURCE` left unset the line stays `SIM - CAN off` and `No N2K messages`, and the tiles keep the simulator. Depth, speed, course, and wind update from the converted sentences. Phones keep using TCP 10110 and the BLE NMEA notify.
+The FIX chip reads `SIM`, `PLAY` (simulator paused for canned PGNs), `N2K` (NMEA 2000 chosen, nothing arriving), `BOAT` (frames flowing), or `PHONE` (gated GNSS). Tap that icon and the line under the bar adds the source (`NMEA 2000 - Live - 312 frames/s - 0 lost`) and each PGN seen: number, name, source address, age, and how many. The same list is under the Instruments list icon. Phones keep using TCP 10110 and the BLE NMEA notify.
 
 Pairing GATT is `…000020` / `…000021`. After OOB OK, `…000040` serves the SoftAP name, passphrase, and `192.168.4.1` so the phone can join. That read is `WAIT` until the pair succeeds.
 

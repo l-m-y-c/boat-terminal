@@ -28,6 +28,8 @@ DART_FILES = [
     ROOT / "mobile/lib/boatlink.dart",
 ]
 STAND_IN = ROOT / "tools/maint_card_server.py"
+STATS_C = ROOT / "firmware/src/terminal_stats.cpp"
+STATS_DART = ROOT / "mobile/lib/terminal_stats.dart"
 
 # Names checked between firmware and app. Every one must exist on both sides.
 SHARED = [
@@ -37,6 +39,7 @@ SHARED = [
     "kLmycStatusUuid",
     "kLmycNmeaUuid",
     "kLmycWifiUuid",
+    "kLmycStatsUuid",
     "kLmycBlePrefix",
     "kSoftApIp",
     "kGatewayTcpPort",
@@ -151,6 +154,17 @@ def read_stand_in(path: Path) -> dict[str, object]:
     return out
 
 
+def stats_fields() -> tuple[set[str], set[str], set[str]]:
+    """Keys the firmware prints, keys the app reads, and the state codes of each."""
+    c = STATS_C.read_text()
+    dart = STATS_DART.read_text()
+    printed = set(re.findall(r'\\"([a-z_]+)\\":', c))
+    read = set(re.findall(r"n\('([a-z_]+)'\)", dart)) | set(re.findall(r"decoded\['([a-z_]+)'\]", dart))
+    c_states = set(re.findall(r'return "([a-z_]+)";', c.split("state_code", 1)[1].split("}\n", 1)[0]))
+    dart_states = set(re.findall(r"'([a-z_]+)': BusState\.", dart))
+    return printed, read, c_states ^ dart_states
+
+
 def main() -> int:
     firmware = read_c(C_FILES)
     app = read_dart(DART_FILES)
@@ -178,12 +192,21 @@ def main() -> int:
         if not same:
             problems.append(f"{py_name}: stand-in {py!r} != firmware {name} {fw!r}")
 
+    printed, read, state_drift = stats_fields()
+    for key in sorted(read - printed):
+        problems.append(f"stats JSON: the app reads {key!r}, which {STATS_C.name} does not print")
+    for code in sorted(state_drift - {"unknown"}):
+        problems.append(f"stats JSON: state {code!r} is known to only one of firmware and app")
+
     if problems:
         print("Protocol drift between firmware, app and stand-in:", file=sys.stderr)
         for line in problems:
             print(f"  - {line}", file=sys.stderr)
         return 1
-    print(f"protocol: {len(SHARED)} shared names and {len(STAND_IN_NAMES)} stand-in limits agree")
+    print(
+        f"protocol: {len(SHARED)} shared names, {len(STAND_IN_NAMES)} stand-in limits "
+        f"and {len(read)} stats fields agree"
+    )
     return 0
 
 

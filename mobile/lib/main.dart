@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'boat_data_page.dart';
 import 'boat_wifi.dart';
 import 'boatlink.dart';
 import 'home_flow.dart';
@@ -17,6 +18,7 @@ import 'nmea_console.dart';
 import 'pairing_link.dart';
 import 'protocol.dart';
 import 'qr_scan_page.dart';
+import 'terminal_stats.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -157,6 +159,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   static final Guid kLmycSessionChr = Guid(kLmycSessionUuid);
   static final Guid kLmycStatusChr = Guid(kLmycStatusUuid);
   static final Guid kLmycWifiChr = Guid(kLmycWifiUuid);
+  static final Guid kLmycStatsChr = Guid(kLmycStatsUuid);
+
+  /// Read every two seconds while paired: data source, bus, delivery.
+  BluetoothCharacteristic? _statsChr;
+  TerminalStats? _stats;
+  DateTime? _statsAt;
+  Timer? _statsTimer;
+  bool _statsReading = false;
 
   bool _wifiBusy = false;
   bool _wifiJoined = false;
@@ -631,6 +641,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             (_blePhase == BlePhase.paired ||
                 _blePhase == BlePhase.confirming)) {
           setState(() {
+            _stopStats();
             _blePhase = BlePhase.failed;
             _bleDetail = 'Disconnected from terminal';
             _sessionReply = null;
@@ -659,6 +670,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
       BluetoothCharacteristic? sessionChr;
       BluetoothCharacteristic? statusChr;
+      BluetoothCharacteristic? statsChr;
       BluetoothCharacteristic? payloadChr;
 
       for (final s in services) {
@@ -668,6 +680,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             debugPrint('  char: ${c.uuid}');
             if (c.uuid == kLmycSessionChr) sessionChr = c;
             if (c.uuid == kLmycStatusChr) statusChr = c;
+            if (c.uuid == kLmycStatsChr) statsChr = c;
             if (c.uuid == kLmycPayloadChr) payloadChr = c;
           }
         }
@@ -788,6 +801,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
 
       if (reply == 'OK') {
+        _startStats(statsChr);
         final name = _bleName;
         if (name != null) {
           _lastBoat = name;
@@ -820,6 +834,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _disconnect({bool resetPhase = true}) async {
+    _stopStats();
     await FlutterBluePlus.stopScan();
     await _scanSubscription?.cancel();
     _scanSubscription = null;
@@ -1009,8 +1024,66 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  void _startStats(BluetoothCharacteristic? chr) {
+    _stopStats();
+    _statsChr = chr;
+    if (chr == null) return;
+    unawaited(_readStats());
+    _statsTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => unawaited(_readStats()),
+    );
+  }
+
+  void _stopStats() {
+    _statsTimer?.cancel();
+    _statsTimer = null;
+    _statsChr = null;
+    _stats = null;
+    _statsAt = null;
+  }
+
+  Future<void> _readStats() async {
+    final chr = _statsChr;
+    if (chr == null || _statsReading || _blePhase != BlePhase.paired) return;
+    _statsReading = true;
+    try {
+      final next = TerminalStats.parse(
+        utf8.decode(await chr.read(), allowMalformed: true),
+      );
+      if (next != null && mounted && _statsChr == chr) {
+        setState(() {
+          _stats = next;
+          _statsAt = DateTime.now();
+        });
+      }
+    } catch (e) {
+      debugPrint('stats read: $e');
+    } finally {
+      _statsReading = false;
+    }
+  }
+
+  void _openBoatData() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (routeContext) {
+          return ListenableBuilder(
+            listenable: _ui,
+            builder: (_, _) => BoatDataPage(
+              stats: _stats,
+              updatedAt: _statsAt,
+              supported: _statsChr != null,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   @override
   void dispose() {
+    _statsTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _countdownTimer?.cancel();
     unawaited(_linkSubscription?.cancel());
@@ -1122,6 +1195,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ssid: BoatSession.ssid,
               ip: BoatSession.ip,
               onBoat: _wifiJoined,
+              simulated: _stats?.simulated ?? false,
             ),
           );
         },
@@ -1477,20 +1551,32 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final boat = (_boatId == null || _boatId!.isEmpty) ? 'the boat' : _boatId!;
     final wifiAction = _wifiAction();
     return Scaffold(
-      appBar: AppBar(title: Text(boat)),
+      appBar: AppBar(
+        title: Text(boat),
+        actions: [
+          IconButton(
+            tooltip: 'Diagnostics',
+            onPressed: _openStatus,
+            icon: const Icon(Icons.tune),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
           children: [
-            Text(
-              'Connected',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: const Color(0xFF001F3F),
+            if (_statsChr != null)
+              DataStatusCard(stats: _stats, onTap: _openBoatData)
+            else
+              Text(
+                'Connected',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF001F3F),
+                ),
               ),
-            ),
             if (wifiAction != null) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: 16),
               Text(
                 _wifiDetail.isEmpty
                     ? 'The phone is not on the boat Wi-Fi yet.'
@@ -1500,18 +1586,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               const SizedBox(height: 12),
               wifiAction,
             ],
-            const SizedBox(height: 28),
+            const SizedBox(height: 24),
             HomeChoice(
-              icon: Icons.settings_ethernet,
-              title: 'NMEA connection',
-              subtitle: 'Wi-Fi, address, and ports',
+              icon: Icons.map_outlined,
+              title: 'Chart apps',
+              subtitle: 'Navionics and i-Boating: address and ports',
               onTap: _openNmea,
-            ),
-            HomeChoice(
-              icon: Icons.monitor_heart_outlined,
-              title: 'Boat status',
-              subtitle: 'Link and diagnostics',
-              onTap: _openStatus,
             ),
             HomeChoice(
               icon: Icons.handyman_outlined,
@@ -1530,7 +1610,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ..sort((a, b) => b.rssi.compareTo(a.rssi));
     final paired = _blePhase == BlePhase.paired;
     return Scaffold(
-      appBar: AppBar(title: const Text('Boat status')),
+      appBar: AppBar(title: const Text('Diagnostics')),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
@@ -1566,6 +1646,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ],
           const SizedBox(height: 16),
           _statusRow('Terminal', _terminalId),
+          if (_stats != null) _statusRow('Data', _stats!.pill),
           _statusRow('Bluetooth', _bleName),
           if (_rssi != null) _statusRow('Signal', '$_rssi dBm'),
           if (_sessionReply != null) _statusRow('Session', _sessionReply),

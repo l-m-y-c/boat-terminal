@@ -37,5 +37,8 @@ void pairing_restart_advertising(void);
 /* SoftAP name, passphrase, and address. Served on …000040 only after OOB OK. */
 void pairing_set_wifi_bootstrap(const char *ssid, const char *psk, const char *ip);
 
+/* Statistics JSON for …000050. Call from loop(). */
+void pairing_set_stats(const char *json);
+
 /* BLE NMEA tap (…000030). Drops oversize sentences when ATT payload < len. */
 void pairing_nmea_notify(const char *sentence);

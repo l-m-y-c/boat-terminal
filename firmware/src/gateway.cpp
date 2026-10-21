@@ -6,6 +6,8 @@
 #include <cstring>
 #include <fcntl.h>
 
+#include <esp_heap_caps.h>
+
 #include "lwip/ip4_addr.h"
 #include "lwip/sockets.h"
 
@@ -14,10 +16,29 @@
 static constexpr const char *kHotspotIp = "192.168.4.1";
 static constexpr const char *kHotspotBroadcast = "192.168.4.255";
 
+/* A non-blocking send() can take part of a line. Without a buffer the rest
+ * is lost and the next sentence lands in the middle of it, so each chart
+ * app gets its own queue and only whole lines go in. 8 KB is several
+ * seconds of output, enough for a phone that pauses its Wi-Fi briefly. */
+static constexpr size_t kClientBuffer = 8192;
+/* A client whose queue stays full this long has stopped reading. */
+static constexpr uint32_t kStalledMs = 30000;
+
+struct ChartApp {
+    int fd;
+    uint8_t *buf;
+    size_t len;
+    uint32_t progress_ms;
+};
+
 static int g_listen_fd = -1;
 static int g_udp_fd = -1;
-static int g_clients[kGatewayMaxClients];
+static ChartApp g_clients[kGatewayMaxClients];
 static bool g_started = false;
+static uint32_t g_sentences = 0;
+static uint32_t g_lost_tcp = 0;
+static uint32_t g_lost_udp = 0;
+static uint32_t g_queued_peak = 0;
 
 void gateway_init(void)
 {
@@ -25,7 +46,17 @@ void gateway_init(void)
     g_udp_fd = -1;
     g_started = false;
     for (size_t i = 0; i < kGatewayMaxClients; ++i) {
-        g_clients[i] = -1;
+        ChartApp &c = g_clients[i];
+        c.fd = -1;
+        c.len = 0;
+        c.progress_ms = 0;
+        if (c.buf == nullptr) {
+            c.buf = static_cast<uint8_t *>(
+                heap_caps_malloc(kClientBuffer, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        }
+        if (c.buf == nullptr) {
+            c.buf = static_cast<uint8_t *>(heap_caps_malloc(kClientBuffer, MALLOC_CAP_8BIT));
+        }
     }
 }
 
@@ -88,11 +119,36 @@ void gateway_begin(void)
 
 static void drop_client(size_t i)
 {
-    if (g_clients[i] >= 0) {
-        close(g_clients[i]);
-        g_clients[i] = -1;
+    ChartApp &c = g_clients[i];
+    if (c.fd >= 0) {
+        close(c.fd);
+        c.fd = -1;
+        c.len = 0;
         Serial.println("NMEA gateway: client disconnected");
     }
+}
+
+/* Sends what the socket will take. Returns false if the client went away. */
+static bool flush_client(size_t i)
+{
+    ChartApp &c = g_clients[i];
+    while (c.len > 0) {
+        const int n = send(c.fd, c.buf, c.len, 0);
+        if (n > 0) {
+            const size_t sent = static_cast<size_t>(n);
+            memmove(c.buf, c.buf + sent, c.len - sent);
+            c.len -= sent;
+            c.progress_ms = millis();
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return true;
+        }
+        drop_client(i);
+        return false;
+    }
+    c.progress_ms = millis();
+    return true;
 }
 
 void gateway_poll(void)
@@ -107,7 +163,7 @@ void gateway_poll(void)
     if (fd >= 0) {
         int slot = -1;
         for (size_t i = 0; i < kGatewayMaxClients; ++i) {
-            if (g_clients[i] < 0) {
+            if (g_clients[i].fd < 0 && g_clients[i].buf != nullptr) {
                 slot = static_cast<int>(i);
                 break;
             }
@@ -118,20 +174,25 @@ void gateway_poll(void)
             fcntl(fd, F_SETFL, O_NONBLOCK);
             int one = 1;
             setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-            g_clients[slot] = fd;
+            ChartApp &c = g_clients[slot];
+            c.fd = fd;
+            c.len = 0;
+            c.progress_ms = millis();
             Serial.printf("NMEA gateway: TCP client #%d\n", slot);
         }
     }
 
     char sink[64];
     for (size_t i = 0; i < kGatewayMaxClients; ++i) {
-        if (g_clients[i] < 0) {
+        if (g_clients[i].fd < 0) {
             continue;
         }
-        const int n = recv(g_clients[i], sink, sizeof(sink), 0);
+        const int n = recv(g_clients[i].fd, sink, sizeof(sink), 0);
         if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
             drop_client(i);
+            continue;
         }
+        flush_client(i);
     }
 }
 
@@ -143,10 +204,15 @@ static void udp_send(const char *line, size_t len)
     sockaddr_in dest = {};
     dest.sin_family = AF_INET;
     dest.sin_addr.s_addr = ipaddr_addr(kHotspotBroadcast);
+    /* UDP has no retry. A failed send here is lwIP out of buffers. */
     dest.sin_port = htons(kGatewayUdpPort);
-    sendto(g_udp_fd, line, len, 0, reinterpret_cast<sockaddr *>(&dest), sizeof(dest));
+    if (sendto(g_udp_fd, line, len, 0, reinterpret_cast<sockaddr *>(&dest), sizeof(dest)) < 0) {
+        ++g_lost_udp;
+    }
     dest.sin_port = htons(kGatewayUdpAltPort);
-    sendto(g_udp_fd, line, len, 0, reinterpret_cast<sockaddr *>(&dest), sizeof(dest));
+    if (sendto(g_udp_fd, line, len, 0, reinterpret_cast<sockaddr *>(&dest), sizeof(dest)) < 0) {
+        ++g_lost_udp;
+    }
 }
 
 void gateway_send_sentence(const char *sentence)
@@ -160,24 +226,50 @@ void gateway_send_sentence(const char *sentence)
         return;
     }
     const size_t len = static_cast<size_t>(n);
+    ++g_sentences;
 
+    const uint32_t now = millis();
     for (size_t i = 0; i < kGatewayMaxClients; ++i) {
-        if (g_clients[i] < 0) {
+        ChartApp &c = g_clients[i];
+        if (c.fd < 0 || !flush_client(i)) {
             continue;
         }
-        if (send(g_clients[i], line, len, 0) < 0 &&
-            errno != EAGAIN && errno != EWOULDBLOCK) {
-            drop_client(i);
+        if (c.len + len > kClientBuffer) {
+            ++g_lost_tcp;
+            if (now - c.progress_ms > kStalledMs) {
+                Serial.println("NMEA gateway: client stopped reading");
+                drop_client(i);
+            }
+            continue;
         }
+        memcpy(c.buf + c.len, line, len);
+        c.len += len;
+        if (c.len > g_queued_peak) {
+            g_queued_peak = static_cast<uint32_t>(c.len);
+        }
+        flush_client(i);
     }
     udp_send(line, len);
+}
+
+void gateway_stats(GatewayStats *out)
+{
+    if (out == nullptr) {
+        return;
+    }
+    out->clients = gateway_client_count();
+    out->sentences = g_sentences;
+    out->lost_tcp = g_lost_tcp;
+    out->lost_udp = g_lost_udp;
+    out->queued_peak = g_queued_peak;
+    out->queue_capacity = static_cast<uint32_t>(kClientBuffer);
 }
 
 uint32_t gateway_client_count(void)
 {
     uint32_t n = 0;
     for (size_t i = 0; i < kGatewayMaxClients; ++i) {
-        if (g_clients[i] >= 0) {
+        if (g_clients[i].fd >= 0) {
             ++n;
         }
     }

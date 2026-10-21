@@ -339,7 +339,8 @@ void main() {
     expect(find.text('Maintenance book'), findsNothing);
     await tester.tap(find.text('Diagnostics'));
     await tester.pumpAndSettle();
-    expect(find.text('Boat status'), findsOneWidget);
+    expect(find.text('Diagnostics'), findsWidgets);
+    expect(find.text('Find a terminal'), findsOneWidget);
     await tester.tap(find.text('Maintenance book'));
     await tester.pumpAndSettle();
     expect(find.text('Boat maintenance book'), findsOneWidget);

@@ -33,4 +33,5 @@
 #define AP_PASSWORD "lmycboat"
 #endif
 
-/* NMEA_SOURCE defaults to the simulator. See n2k.h for the values. */
+/* NMEA_SOURCE is the first-boot data source; the saved choice wins after
+ * that. See n2k.h for the values. */

@@ -58,6 +58,7 @@ static uint8_t g_event_count = 0;
 
 static NimBLEServer *g_server = nullptr;
 static NimBLECharacteristic *g_payload_chr = nullptr;
+static NimBLECharacteristic *g_stats_chr = nullptr;
 static NimBLECharacteristic *g_session_chr = nullptr;
 static NimBLECharacteristic *g_status_chr = nullptr;
 static NimBLECharacteristic *g_nmea_chr = nullptr;
@@ -624,6 +625,10 @@ static bool start_ble_peripheral(void)
     g_wifi_chr->setCallbacks(&g_wifi_cb);
     publish_wifi_chr();
 
+    /* No secret in here, so it is readable before pairing too. */
+    g_stats_chr = svc->createCharacteristic(kLmycStatsUuid, NIMBLE_PROPERTY::READ);
+    pairing_set_stats("{}");
+
     svc->start();
     return start_advertising();
 }
@@ -697,6 +702,23 @@ const char *pairing_event_log(void)
     return g_event_log[0] != '\0' ? g_event_log : "t+0s boot";
 }
 uint16_t pairing_mtu(void) { return g_mtu; }
+
+/* Always the full 512 bytes, NUL-padded. A value that never changes size is
+ * never reallocated while the host task copies it. A long read that spans
+ * an update can still mix two seconds' values; the phone drops anything
+ * that does not parse and reads again. */
+static constexpr size_t kStatsValueBytes = 512;
+
+void pairing_set_stats(const char *json)
+{
+    if (g_stats_chr == nullptr || json == nullptr) {
+        return;
+    }
+    uint8_t value[kStatsValueBytes] = {};
+    const size_t len = strnlen(json, kStatsValueBytes - 1);
+    memcpy(value, json, len);
+    g_stats_chr->setValue(value, kStatsValueBytes);
+}
 
 void pairing_nmea_notify(const char *sentence)
 {

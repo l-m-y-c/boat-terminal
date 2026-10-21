@@ -141,7 +141,7 @@ Use a bench supply with a current limit, and a scope. Do this before the board g
 
 1. **No-load:** at 9, 12 and 16 V, VOUT should be 4.9–5.1 V. Input current should be well under 1 mA (the APM81815 draws about 0.06 mA).
 2. **Load steps:** use an electronic load on the pigtail. At each of 9 / 12 / 16 V, step 0 → 0.5 → 1.0 A and back. Check VOUT stays within 4.75–5.25 V and record input current. At 9 V and 0.7 A, input should be about 0.42 A (0.44 A with D2). Fail above 0.48 A.
-3. **Real load:** with the Waveshare at full backlight and Wi-Fi transmitting (`NMEA_SOURCE` set), measure input current at 9 V and 12 V. Update the LEN figure in [19](19-n2k-backbone-install.md#3-len--power-budget) from this.
+3. **Real load:** with the Waveshare at full backlight and Wi-Fi transmitting (data source on NMEA 2000), measure input current at 9 V and 12 V. Update the LEN figure in [19](19-n2k-backbone-install.md#3-len--power-budget) from this.
 4. **Hot-plug:** feed the PSU through about 6 m of drop cable (or the real Micro-C drop through a tee) at 16 V. Scope VIN at the Pololu pins (10× probe, short ground spring) and input current (current probe or a 0.1 Ω shunt). Plug in 10 times.
    - Pass: VIN peak under 40 V, with no Pololu reset loop. (The APM81815 runs to 72 V, so this keeps a wide margin and stays under C1's 50 V rating.)
    - If it exceeds 40 V: fit C1 (and D1 if not already fitted) and repeat.
