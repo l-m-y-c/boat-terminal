@@ -90,13 +90,55 @@ bool isSessionStatus(String text) =>
     text == 'WAIT' ||
     text == 'PONG';
 
-/// Pull `oob=` from the terminal payload characteristic (lmyc:// URI bytes).
-String? oobFromPayloadBytes(List<int> bytes) {
+/// The live `lmyc://` link on the terminal payload characteristic.
+PairingLink? linkFromPayloadBytes(List<int> bytes) {
   final uri = Uri.tryParse(sessionReplyFromBytes(bytes));
   if (uri == null) return null;
-  return PairingLink.parse(uri)?.oob;
+  return PairingLink.parse(uri);
 }
+
+/// Pull `oob=` from the terminal payload characteristic (lmyc:// URI bytes).
+String? oobFromPayloadBytes(List<int> bytes) =>
+    linkFromPayloadBytes(bytes)?.oob;
 
 /// True for an advertised name the terminal uses.
 bool isLmycBleName(String name) =>
     name.toUpperCase().startsWith(kLmycBlePrefix);
+
+/// What a Discover row shows for one advertised name.
+class TerminalName {
+  const TerminalName({required this.boat, required this.tag});
+
+  /// The boat ID, or null for firmware that advertises only `LMYC-XXXX`.
+  final String? boat;
+
+  /// Last two Bluetooth MAC bytes, as on the terminal's BLE name row.
+  final String tag;
+
+  static final _withBoat = RegExp(r'^(.+)-([0-9A-F]{4})$');
+  static final _tagOnly = RegExp(r'^[0-9A-F]{4}$');
+
+  /// Splits `LMYC-<boat>-<XXXX>` (or the older `LMYC-<XXXX>`).
+  static TerminalName parse(String bleName) {
+    final rest = bleName.toUpperCase().startsWith(kLmycBlePrefix)
+        ? bleName.substring(kLmycBlePrefix.length)
+        : bleName;
+    final full = _withBoat.firstMatch(rest);
+    if (full != null) {
+      return TerminalName(boat: full.group(1), tag: full.group(2)!);
+    }
+    if (_tagOnly.hasMatch(rest)) {
+      return TerminalName(boat: null, tag: rest);
+    }
+    return TerminalName(boat: rest.isEmpty ? null : rest, tag: '');
+  }
+
+  String get title => boat ?? 'Terminal $tag';
+}
+
+/// Plain words for a Discover row. RSSI is in dBm.
+String signalWord(int rssi) {
+  if (rssi >= -65) return 'Strong signal';
+  if (rssi >= -80) return 'Good signal';
+  return 'Weak signal';
+}

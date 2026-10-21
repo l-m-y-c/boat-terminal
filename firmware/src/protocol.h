@@ -17,8 +17,10 @@ static constexpr const char *kLmycStatusUuid = "6c6d7963-0001-4000-8000-00000000
 static constexpr const char *kLmycNmeaUuid = "6c6d7963-0001-4000-8000-000000000030";
 /* SoftAP bootstrap. Readable only after OOB confirmation. */
 static constexpr const char *kLmycWifiUuid = "6c6d7963-0001-4000-8000-000000000040";
+/* Data source and bus statistics, JSON, refreshed once a second. Read only. */
+static constexpr const char *kLmycStatsUuid = "6c6d7963-0001-4000-8000-000000000050";
 
-/* Advertised name is this prefix plus the last two MAC bytes in hex. */
+/* Advertised name is this prefix, the boat ID, and the last two MAC bytes in hex. */
 static constexpr const char *kLmycBlePrefix = "LMYC-";
 
 /* Wi-Fi. */

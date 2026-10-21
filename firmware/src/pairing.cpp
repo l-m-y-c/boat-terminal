@@ -29,7 +29,8 @@ static constexpr size_t kRxAccMax = 80;
 static char g_oob_hex[(kPairingOobBytes * 2) + 1];
 static uint8_t g_oob_raw[kPairingOobBytes];
 static char g_payload[kPairingPayloadMax];
-static char g_ble_name[24];
+/* LMYC-<boat, up to 16>-<4 hex>: 26 characters fills the name in a 31-byte ADV. */
+static char g_ble_name[27];
 static char g_mac_str[18] = "--:--:--:--:--:--";
 static char g_status_buf[48] = "Idle";
 static char g_last_event[48] = "boot";
@@ -46,6 +47,10 @@ static const char *g_status = g_status_buf;
 static bool g_ble_ok = false;
 static bool g_confirmed = false;
 static bool g_connected = false;
+/* A paired phone took the hotspot details this boot. Bluetooth may drop
+ * afterwards while the phone carries on over Wi-Fi, so this is not cleared
+ * on disconnect. */
+static bool g_wifi_shared = false;
 static bool g_got_payload_read = false;
 static bool g_got_session_write = false;
 static uint32_t g_connect_count = 0;
@@ -57,6 +62,7 @@ static uint8_t g_event_count = 0;
 
 static NimBLEServer *g_server = nullptr;
 static NimBLECharacteristic *g_payload_chr = nullptr;
+static NimBLECharacteristic *g_stats_chr = nullptr;
 static NimBLECharacteristic *g_session_chr = nullptr;
 static NimBLECharacteristic *g_status_chr = nullptr;
 static NimBLECharacteristic *g_nmea_chr = nullptr;
@@ -194,7 +200,10 @@ static void build_ble_identity(void)
 {
     uint8_t mac[6] = {};
     esp_read_mac(mac, ESP_MAC_BT);
-    snprintf(g_ble_name, sizeof(g_ble_name), "%s%02X%02X", kLmycBlePrefix, mac[4], mac[5]);
+    /* The boat name lets a phone tell neighbours apart. The MAC tail keeps two
+     * bench boards with the same boat ID distinct. */
+    snprintf(g_ble_name, sizeof(g_ble_name), "%s%.16s-%02X%02X", kLmycBlePrefix,
+             LMYC_BOAT_ID, mac[4], mac[5]);
     snprintf(g_mac_str, sizeof(g_mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
@@ -522,6 +531,9 @@ class WifiCallbacks : public NimBLECharacteristicCallbacks {
     {
         g_read_count++;
         publish_wifi_chr();
+        if (g_confirmed) {
+            g_wifi_shared = true;
+        }
         set_event(g_confirmed ? "wifi info read" : "wifi info withheld");
         Serial.println(g_confirmed ? "BLE: wifi bootstrap read" : "BLE: wifi bootstrap withheld");
     }
@@ -620,6 +632,10 @@ static bool start_ble_peripheral(void)
     g_wifi_chr->setCallbacks(&g_wifi_cb);
     publish_wifi_chr();
 
+    /* No secret in here, so it is readable before pairing too. */
+    g_stats_chr = svc->createCharacteristic(kLmycStatsUuid, NIMBLE_PROPERTY::READ);
+    pairing_set_stats("{}");
+
     svc->start();
     return start_advertising();
 }
@@ -694,6 +710,23 @@ const char *pairing_event_log(void)
 }
 uint16_t pairing_mtu(void) { return g_mtu; }
 
+/* Always the full 512 bytes, NUL-padded. A value that never changes size is
+ * never reallocated while the host task copies it. A long read that spans
+ * an update can still mix two seconds' values; the phone drops anything
+ * that does not parse and reads again. */
+static constexpr size_t kStatsValueBytes = 512;
+
+void pairing_set_stats(const char *json)
+{
+    if (g_stats_chr == nullptr || json == nullptr) {
+        return;
+    }
+    uint8_t value[kStatsValueBytes] = {};
+    const size_t len = strnlen(json, kStatsValueBytes - 1);
+    memcpy(value, json, len);
+    g_stats_chr->setValue(value, kStatsValueBytes);
+}
+
 void pairing_nmea_notify(const char *sentence)
 {
     if (g_nmea_chr == nullptr || sentence == nullptr || sentence[0] == '\0') {
@@ -728,6 +761,8 @@ uint32_t pairing_connect_count(void) { return g_connect_count; }
 uint32_t pairing_write_count(void) { return g_write_count; }
 uint32_t pairing_read_count(void) { return g_read_count; }
 bool pairing_ble_ok(void) { return g_ble_ok; }
+bool pairing_is_connected(void) { return g_connected; }
+bool pairing_wifi_shared(void) { return g_wifi_shared; }
 bool pairing_is_confirmed(void) { return g_confirmed; }
 
 void pairing_set_status(const char *status)

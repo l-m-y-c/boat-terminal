@@ -1,3 +1,6 @@
+#include "boat_config.h"
+#if LMYC_WITH_REPORTS_CHARTS
+
 #include "sd_card.h"
 
 #include "maint_store.h"
@@ -64,3 +67,5 @@ bool sd_card_init(esp_expander::Base *expander)
     maint_store_begin();
     return true;
 }
+
+#endif /* LMYC_WITH_REPORTS_CHARTS */

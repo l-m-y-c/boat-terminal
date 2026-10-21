@@ -111,11 +111,15 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
           'Joining ${info.ssid}. Tap Connect. The network has no internet; Read Book uses ${info.ip}.';
     });
     try {
-      await BoatWifi.join(ssid: info.ssid, psk: info.psk);
+      final saved = await BoatWifi.join(ssid: info.ssid, psk: info.psk);
+      if (!mounted) return;
+      if (!saved) {
+        setState(() => _status = '${info.ssid} was not saved.');
+        return;
+      }
       BoatSession.markJoined();
       _ipController.text = BoatSession.ip;
-      if (!mounted) return;
-      setState(() => _status = 'On boat Wi-Fi ${info.ssid}.');
+      setState(() => _status = 'Saved ${info.ssid} for this phone.');
     } on PlatformException catch (e) {
       if (!mounted) return;
       _report(e.message ?? 'Could not join the boat Wi-Fi.');

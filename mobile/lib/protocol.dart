@@ -11,7 +11,10 @@ const kLmycStatusUuid = '6c6d7963-0001-4000-8000-000000000021';
 const kLmycNmeaUuid = '6c6d7963-0001-4000-8000-000000000030';
 const kLmycWifiUuid = '6c6d7963-0001-4000-8000-000000000040';
 
-/// Advertised name is this prefix plus the last two MAC bytes in hex.
+/// Data source and bus statistics, JSON, refreshed once a second.
+const kLmycStatsUuid = '6c6d7963-0001-4000-8000-000000000050';
+
+/// Advertised name is this prefix, the boat ID, and the last two MAC bytes in hex.
 const kLmycBlePrefix = 'LMYC-';
 
 // Wi-Fi.

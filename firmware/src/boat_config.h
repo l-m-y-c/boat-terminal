@@ -23,6 +23,13 @@
 #define LMYC_TERMINAL_ID "WS7-001"
 #endif
 
+/* 1 builds the maintenance book (Reports), the chart picture (Charts), the
+ * SD card store and their HTTP routes. 0 is the instruments-and-gateway
+ * build: less to go wrong, and more internal RAM for BLE and Wi-Fi. */
+#ifndef LMYC_WITH_REPORTS_CHARTS
+#define LMYC_WITH_REPORTS_CHARTS 0
+#endif
+
 /* WordPress sailboat post id for this boat's maintenance book. 0 = unassigned. */
 #ifndef LMYC_SAILBOAT_ID
 #define LMYC_SAILBOAT_ID 0
@@ -33,4 +40,5 @@
 #define AP_PASSWORD "lmycboat"
 #endif
 
-/* NMEA_SOURCE defaults to the simulator. See n2k.h for the values. */
+/* NMEA_SOURCE is the first-boot data source; the saved choice wins after
+ * that. See n2k.h for the values. */

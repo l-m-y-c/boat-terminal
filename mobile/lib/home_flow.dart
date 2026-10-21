@@ -4,74 +4,6 @@ import 'package:flutter/services.dart';
 import 'boat_wifi.dart';
 import 'maintenance_book.dart';
 
-/// One large choice on the connected home screen.
-class HomeChoice extends StatelessWidget {
-  const HomeChoice({
-    super.key,
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Material(
-        color: Colors.white,
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: Color(0xFFE2E8F0)),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-            child: Row(
-              children: [
-                Icon(icon, color: const Color(0xFF001F3F), size: 28),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF001F3F),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: const TextStyle(
-                          color: Colors.black54,
-                          height: 1.3,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Icon(Icons.chevron_right, color: Colors.black38),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// Wi-Fi name, address, and the ports chart apps use.
 class NmeaInfoPage extends StatelessWidget {
   const NmeaInfoPage({
@@ -79,37 +11,71 @@ class NmeaInfoPage extends StatelessWidget {
     required this.ssid,
     required this.ip,
     required this.onBoat,
+    this.simulated = false,
   });
 
   final String ssid;
   final String ip;
   final bool onBoat;
 
+  /// The terminal is on its simulator, so chart apps get made-up data.
+  final bool simulated;
+
   @override
   Widget build(BuildContext context) {
     final network = ssid.isEmpty ? 'Not received yet' : ssid;
     return Scaffold(
-      appBar: AppBar(title: const Text('NMEA connection')),
+      appBar: AppBar(title: const Text('Chart apps')),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
+          if (simulated) ...[
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFB7791F).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: const Color(0xFFB7791F).withValues(alpha: 0.4),
+                ),
+              ),
+              child: const Text(
+                'The terminal is simulating a boat. Chart apps will show '
+                'simulated position, depth and wind, not the boat\'s.',
+                style: TextStyle(height: 1.4, color: Color(0xFF7A4F0E)),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
           Text(
             onBoat
-                ? 'This phone is on the boat Wi-Fi.'
-                : 'Join the boat Wi-Fi before a chart app can see the stream.',
+                ? 'This phone is getting the boat data. Point the chart app at '
+                      'this phone itself, so mobile data can stay on.'
+                : 'Join the boat Wi-Fi before a chart app can see the data.',
             style: const TextStyle(height: 1.4, fontSize: 16),
           ),
           const SizedBox(height: 20),
-          _fact(context, 'Wi-Fi', network, network),
-          _fact(context, 'Address', ip, ip),
-          _fact(context, 'TCP', '$ip port 10110', '$ip:10110'),
-          _fact(context, 'UDP', 'ports 10110 and 2000', '10110'),
+          _fact(context, 'Type', 'UDP', 'UDP'),
+          _fact(context, 'Address', kRelayHost, kRelayHost),
+          _fact(context, 'Port', '10110', '10110'),
           const SizedBox(height: 8),
           const Text(
-            'In Navionics or i-Boating, add a TCP device at this address and port. '
-            'UDP 2000 is the same stream.',
+            'In Navionics or i-Boating, add a UDP device on port 10110. '
+            'If the app asks for an address, use $kRelayHost. '
+            'TCP to $kRelayHost port 10110 works too, while this app is running.',
             style: TextStyle(color: Colors.black54, height: 1.4),
           ),
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 12),
+          Text(
+            'Other devices on the boat Wi-Fi',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 12),
+          _fact(context, 'Wi-Fi', network, network),
+          _fact(context, 'TCP', '$ip port 10110', '$ip:10110'),
+          _fact(context, 'UDP', 'ports 10110 and 2000', '10110'),
         ],
       ),
     );

@@ -1,3 +1,6 @@
+#include "boat_config.h"
+#if LMYC_WITH_REPORTS_CHARTS
+
 #include "maint_ui.h"
 
 #include "maint_store.h"
@@ -1100,3 +1103,5 @@ void maint_ui_build(lv_obj_t *parent, lv_coord_t width, lv_coord_t height,
     g_reader_title = wrap_label(g_reader_scroll, &lv_font_montserrat_20, 0xFFFFFF, text_w);
     g_reader_body = wrap_label(g_reader_scroll, &lv_font_montserrat_16, 0xE8F0F7, text_w);
 }
+
+#endif /* LMYC_WITH_REPORTS_CHARTS */

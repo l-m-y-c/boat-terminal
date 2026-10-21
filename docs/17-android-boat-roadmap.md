@@ -162,7 +162,7 @@ Firmware:
 
 - New files (suggested):
   - `firmware/src/nmea.h` / `nmea.cpp` — line assembler, checksum, talker/formatter split, counters.
-  - `firmware/src/nmea_sim.h` / `nmea_sim.cpp` — 1 Hz canned Vancouver-ish position + depth + wind.
+  - `firmware/src/n2k_sim.h` / `n2k_sim.cpp` — a boat sailing English Bay on a virtual NMEA 2000 bus (replaced the 1 Hz 0183 talker).
   - `firmware/src/nmea_io.h` / `nmea_io.cpp` — UART/RS485 reader. If RS485 pins are still being confirmed, compile-time fallback to USB-CDC RX or an unused UART so the sim path is not blocked.
   - `firmware/src/gateway.h` / `gateway.cpp` — TCP server on port **10110**, one client is enough for A. Echo every good line + sim line with CRLF.
 - Extend `pairing.cpp` with char `…000030` notify (rate-limit to ~10 Hz on BLE).
@@ -243,7 +243,7 @@ Acceptance: kitchen-table demo. Walk around the block. 7″ SOG/COG tracks the p
 
 Out of band with Board / insurance. Separate hardware note. Use `NMEA2000` library family. Convert a useful PGN set to 0183 so Slices A–E stay unchanged. No TX.
 
-Listen-only code is in `firmware/src/n2k.cpp`, `n2k_to_0183.cpp`, and `ais0183.cpp`. `NMEA_SOURCE` in `secrets.h` selects the simulator (`0`, default), NMEA 2000 (`1`), or simulator-until-frames (`2`). The phone path is still the 0183 sink (TCP 10110 and BLE notify). The onboard TJA1051 is not isolated. The primary connection is bus-powered with a single ground: NET-S / NET-C through a fuse and DC/DC, and no other wired link. See [05 – NMEA](05-nmea-connectivity.md) and [19 – Backbone install](19-n2k-backbone-install.md) before any backbone connection.
+Listen-only code is in `firmware/src/n2k.cpp`, `n2k_to_0183.cpp`, and `ais0183.cpp`. The data source is chosen on the glass and saved (simulator or NMEA 2000); `NMEA_SOURCE` in `secrets.h` is only the first-boot default. The phone path is still the 0183 sink (TCP 10110 and BLE notify). The onboard TJA1051 is not isolated. The primary connection is bus-powered with a single ground: NET-S / NET-C through a fuse and DC/DC, and no other wired link. See [05 – NMEA](05-nmea-connectivity.md) and [19 – Backbone install](19-n2k-backbone-install.md) before any backbone connection.
 
 ---
 
@@ -255,7 +255,7 @@ Listen-only code is in `firmware/src/n2k.cpp`, `n2k_to_0183.cpp`, and `ais0183.c
 | `firmware/src/pairing.*` | BLE identity, OOB, GATT registry. New chars live here *or* a new `boatlink.cpp` that pairing starts. |
 | `firmware/src/nmea.*` | Parse / checksum / state. |
 | `firmware/src/nmea_io.*` | Bytes in/out of UART/RS485. |
-| `firmware/src/nmea_sim.*` | Fake talker. |
+| `firmware/src/n2k_sim.*` | Simulator on a virtual NMEA 2000 bus. |
 | `firmware/src/n2k.*` | Listen-only TWAI port and the sim / N2K switch. No transmit. |
 | `firmware/src/n2k_to_0183.*` | PGN decode → NMEA 0183 sentences into the existing sink. |
 | `firmware/src/ais0183.*` | ITU-R M.1371 bit packer for `!AIVDM` / `!AIVDO`. |

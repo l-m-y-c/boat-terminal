@@ -1,5 +1,6 @@
 #!/bin/sh
-# Host tests for the NMEA 2000 -> 0183 converter, AIS packer, and the
+# Host tests for the NMEA 2000 -> 0183 converter, AIS packer, the bench
+# simulator through the library's fast-packet reassembly, and the
 # maintenance book's JSON reader/writer. No board needed.
 # Uses the NMEA2000 library PlatformIO already fetched (run `make firmware` once).
 set -e
@@ -23,3 +24,11 @@ $cxx -std=gnu++17 -O1 -Wall -Wno-unused-parameter -w \
     -o "$out/test_n2k_0183"
 "$out/test_n2k_0183" "$out/sentences.txt"
 python3 "$here/ais_check.py" check "$out/sentences.txt"
+# Simulator frames through the library's real fast-packet reassembly.
+$cxx -std=gnu++17 -O1 -Wall -Wno-unused-parameter -w \
+    -include cstdlib -include cstring -I "$here/stub" -I "$fw/src" -I "$lib" \
+    "$here/test_n2k_sim.cpp" "$fw/src/n2k_sim.cpp" "$fw/src/n2k_to_0183.cpp" "$fw/src/ais0183.cpp" \
+    "$fw/src/nmea.cpp" "$lib/NMEA2000.cpp" "$lib/N2kMsg.cpp" "$lib/N2kMessages.cpp" "$lib/N2kTimer.cpp" \
+    "$lib/N2kStream.cpp" "$lib/N2kGroupFunction.cpp" "$lib/N2kGroupFunctionDefaultHandlers.cpp" \
+    -o "$out/test_n2k_sim"
+"$out/test_n2k_sim"

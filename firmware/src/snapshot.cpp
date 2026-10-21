@@ -1,3 +1,6 @@
+#include "boat_config.h"
+#if LMYC_WITH_REPORTS_CHARTS
+
 #include "snapshot.h"
 
 #include <Arduino.h>
@@ -305,3 +308,5 @@ uint32_t snapshot_age_ms(void)
 {
     return g_have ? (millis() - g_loaded_ms) : 0;
 }
+
+#endif /* LMYC_WITH_REPORTS_CHARTS */
