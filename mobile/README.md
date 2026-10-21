@@ -12,17 +12,16 @@ See `../docs/06-phone-app-and-pairing.md` and `../docs/08-user-flows.md`.
 
 ## Current status (v0.3)
 
-- Android `lmyc://` deep-link handler **and** a paste-URI field (camera apps often don't open custom schemes)
-- **Find terminals** — in-app BLE scan that does **not** require a QR first
-- Matches `LMYC-*` advertised name (name is in the primary ADV packet) plus the LMYC service UUID if present
-- Shows heard-device count vs LMYC hits (diagnostics)
-- GATT connect + raw 16-byte OOB write (from QR hex) once a QR / URI is applied
-  — fits default ATT MTU 23; the old `PAIR <hex>` text write was 37B and died on Android
-- After pair: **Sentences** console (BLE `…000030` notify + optional TCP `:10110`)
-- **Maintenance book** reads and files items, including up to five JPEGs, on the terminal TF card. Club API stays blank until lmyc.ca has the JSON route; a blank field leaves every item `pending`.
-- Clear status UI (permissions → scanning → connecting → paired)
+- **One guided journey** on one screen: **Find → Connect → Wi-Fi → Chart data**, the same four stops the terminal shows. One title, one sentence, and at most one main button per stop; it moves on by itself. See [doc 06](../docs/06-phone-app-and-pairing.md#the-journey).
+- **Find**: **Scan QR code** first, **Find nearby boats** second. A boat joined before is found and joined after a five-second countdown.
+- **Wi-Fi**: saved with Android's Save network prompt (not a suggestion), then the app watches the phone's networks every two seconds and when it returns from Wi-Fi settings.
+- **Chart data**: a foreground service, **Connected to the boat**, holds the boat Wi-Fi and repeats the terminal's stream on `127.0.0.1:10110` (`android/app/src/main/kotlin/ca/lmyc/lmyc_app/BoatRelayService.kt`). Navionics and i-Boating use **UDP port 10110**, address `127.0.0.1` where asked, so mobile data stays on.
+- **On board**: the data-source pill, **Connect a chart app**, **Boat data** (BLE `…000050` counters), and **Leave the boat**.
+- **Diagnostics** behind the settings icon: link rows, Bluetooth detail, the **Sentences** console, Find a terminal.
+- The maintenance book and chart snapshot pages are still in the code but not reachable, matching the terminal's default build.
+- Android `lmyc://` deep links and a paste-URI field; GATT connect and the raw 16-byte OOB write.
 
-**Do not use Android Settings → Bluetooth.** System Settings hide most LE-only peripherals. Use **Find terminals**.
+**Do not use Android Settings → Bluetooth.** System Settings hide most LE-only peripherals. Use the app.
 
 ## Development
 

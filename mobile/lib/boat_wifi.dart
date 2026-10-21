@@ -13,6 +13,79 @@ class BoatWifiInfo {
   final String ip;
 }
 
+/// Loopback address chart apps use. The relay in this app serves it.
+const kRelayHost = '127.0.0.1';
+
+/// Data older than this means the terminal stopped sending.
+const kRelayStaleMs = 5000;
+
+/// What the phone's networks and the chart-app relay say right now.
+class BoatWifiStatus {
+  const BoatWifiStatus({
+    required this.onBoat,
+    this.isDefault = false,
+    this.relayRunning = false,
+    this.relayListening = false,
+    this.relayUpstream = false,
+    this.relayDataAgeMs = -1,
+    this.relayClients = 0,
+  });
+
+  /// The phone has a Wi-Fi address on the boat hotspot.
+  final bool onBoat;
+
+  /// Android sends ordinary apps over the boat hotspot. Not needed: chart
+  /// apps use the relay on 127.0.0.1 whatever the default network is.
+  final bool isDefault;
+
+  final bool relayRunning;
+
+  /// Chart apps can connect to 127.0.0.1:10110.
+  final bool relayListening;
+
+  /// The relay has its connection to the terminal.
+  final bool relayUpstream;
+
+  /// Milliseconds since the terminal last sent data, -1 if it never has.
+  final int relayDataAgeMs;
+
+  /// Chart apps connected to the relay now.
+  final int relayClients;
+
+  /// The terminal's data is reaching the relay.
+  bool get receiving =>
+      relayUpstream && relayDataAgeMs >= 0 && relayDataAgeMs < kRelayStaleMs;
+
+  /// Chart apps on this phone get the boat's data from 127.0.0.1.
+  bool get ready => onBoat && relayListening && receiving;
+
+  @override
+  String toString() =>
+      'BoatWifiStatus(onBoat: $onBoat, default: $isDefault, '
+      'relay: ${relayListening ? 'listening' : 'off'}, '
+      'upstream: $relayUpstream, receiving: $receiving, clients: $relayClients)';
+
+  @override
+  bool operator ==(Object other) =>
+      other is BoatWifiStatus &&
+      other.onBoat == onBoat &&
+      other.isDefault == isDefault &&
+      other.relayListening == relayListening &&
+      other.relayUpstream == relayUpstream &&
+      other.receiving == receiving &&
+      other.relayClients == relayClients;
+
+  @override
+  int get hashCode => Object.hash(
+    onBoat,
+    isDefault,
+    relayListening,
+    relayUpstream,
+    receiving,
+    relayClients,
+  );
+}
+
 /// Last bootstrap from this app session. The passphrase stays in memory.
 class BoatSession {
   static BoatWifiInfo? info;
@@ -83,11 +156,45 @@ class LinkRow {
 List<LinkRow> linkRows({
   required bool blePaired,
   BoatWifiInfo? info,
-  required bool joining,
-  required bool joined,
-  bool? reached,
+  BoatWifiStatus? status,
 }) {
-  final rows = <LinkRow>[
+  final ssid = info?.ssid ?? 'the boat Wi-Fi';
+  final ip = info?.ip ?? '192.168.4.1';
+  final LinkRow phone;
+  final LinkRow charts;
+  if (status == null) {
+    phone = const LinkRow('Phone Wi-Fi', 'Not checked yet', LinkMark.idle);
+    charts = const LinkRow('Chart apps', 'Not checked yet', LinkMark.idle);
+  } else if (!status.onBoat) {
+    phone = LinkRow('Phone Wi-Fi', 'Not on $ssid', LinkMark.fail);
+    charts = const LinkRow(
+      'Chart apps',
+      'Waiting for the boat Wi-Fi',
+      LinkMark.idle,
+    );
+  } else {
+    phone = LinkRow('Phone Wi-Fi', 'On $ssid', LinkMark.done);
+    if (!status.receiving) {
+      charts = LinkRow(
+        'Chart apps',
+        'No data from the terminal at $ip yet',
+        LinkMark.fail,
+      );
+    } else if (!status.relayListening) {
+      charts = const LinkRow(
+        'Chart apps',
+        'Another app holds 127.0.0.1 port 10110',
+        LinkMark.fail,
+      );
+    } else {
+      charts = LinkRow(
+        'Chart apps',
+        '$kRelayHost port 10110, ${status.relayClients} connected',
+        LinkMark.done,
+      );
+    }
+  }
+  return [
     LinkRow(
       'Bluetooth',
       blePaired ? 'Paired' : 'Not paired',
@@ -98,43 +205,52 @@ List<LinkRow> linkRows({
       info == null ? 'Name not received' : info.ssid,
       info == null ? LinkMark.wait : LinkMark.done,
     ),
+    phone,
+    charts,
   ];
-  if (joined) {
-    rows.add(
-      LinkRow(
-        'Phone Wi-Fi',
-        'On ${info?.ssid ?? 'the boat hotspot'}',
-        LinkMark.done,
-      ),
-    );
-  } else if (joining) {
-    rows.add(
-      const LinkRow('Phone Wi-Fi', 'Approve the Android prompt', LinkMark.wait),
-    );
-  } else if (info != null) {
-    rows.add(
-      const LinkRow('Phone Wi-Fi', 'Not on the boat hotspot', LinkMark.fail),
-    );
-  } else {
-    rows.add(
-      const LinkRow('Phone Wi-Fi', 'Waiting for the boat name', LinkMark.idle),
-    );
+}
+
+/// Where the phone is in getting chart apps onto the boat Wi-Fi.
+enum WifiSetup {
+  /// Reading the hotspot name and passphrase over Bluetooth.
+  reading,
+
+  /// Android's Save network prompt is up.
+  saving,
+
+  /// The prompt was closed without saving.
+  notSaved,
+
+  /// Saved, but the phone is on another network or none.
+  joining,
+
+  /// On the boat Wi-Fi, but no data is reaching the relay yet.
+  noAnswer,
+
+  /// Chart apps can reach the terminal.
+  ready,
+
+  /// Something failed that the user cannot fix with a Wi-Fi setting.
+  problem,
+}
+
+/// Picks the one step to show. A live [status] wins over what the app
+/// remembers, so a phone that already set up this boat goes straight on.
+WifiSetup wifiSetupFor({
+  required bool reading,
+  required bool saving,
+  required bool saved,
+  BoatWifiInfo? info,
+  BoatWifiStatus? status,
+  String? problem,
+}) {
+  if (reading) return WifiSetup.reading;
+  if (problem != null || info == null) return WifiSetup.problem;
+  if (status != null && status.onBoat) {
+    return status.ready ? WifiSetup.ready : WifiSetup.noAnswer;
   }
-  final ip = info?.ip ?? '192.168.4.1';
-  if (reached == true) {
-    rows.add(LinkRow('Reach boat', '$ip port 10110 is open', LinkMark.done));
-  } else if (reached == false) {
-    rows.add(
-      LinkRow(
-        'Reach boat',
-        'No route to $ip. The phone is still on another Wi-Fi network.',
-        LinkMark.fail,
-      ),
-    );
-  } else {
-    rows.add(const LinkRow('Reach boat', 'Not checked yet', LinkMark.idle));
-  }
-  return rows;
+  if (saving) return WifiSetup.saving;
+  return saved ? WifiSetup.joining : WifiSetup.notSaved;
 }
 
 class BoatWifi {
@@ -148,7 +264,39 @@ class BoatWifi {
       'ssid': ssid,
       'psk': psk,
     });
+    if (answer == 'failed') {
+      throw PlatformException(
+        code: 'wifi',
+        message: 'Android could not save $ssid.',
+      );
+    }
     return answer != 'declined';
+  }
+
+  /// Where the phone stands with the boat hotspot at [ip], and the relay.
+  static Future<BoatWifiStatus> status({required String ip}) async {
+    final map = await _channel.invokeMapMethod<String, Object?>('status', {
+      'ip': ip,
+    });
+    return BoatWifiStatus(
+      onBoat: map?['onBoat'] == true,
+      isDefault: map?['isDefault'] == true,
+      relayRunning: map?['relayRunning'] == true,
+      relayListening: map?['relayListening'] == true,
+      relayUpstream: map?['relayUpstream'] == true,
+      relayDataAgeMs: (map?['relayDataAgeMs'] as num?)?.toInt() ?? -1,
+      relayClients: (map?['relayClients'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  /// Starts the foreground service that serves the terminal's data on
+  /// 127.0.0.1:10110. Safe to call again: it keeps one connection.
+  static Future<void> startRelay({required String ip}) async {
+    await _channel.invokeMethod<void>('startRelay', {'ip': ip});
+  }
+
+  static Future<void> stopRelay() async {
+    await _channel.invokeMethod<void>('stopRelay');
   }
 
   /// Opens the Wi-Fi list so the user can move the phone onto the boat.

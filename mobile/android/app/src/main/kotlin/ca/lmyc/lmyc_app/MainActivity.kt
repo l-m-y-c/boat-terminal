@@ -15,7 +15,7 @@ class MainActivity : FlutterActivity() {
 
     @Deprecated("FlutterActivity still routes plugin results through this.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (BoatWifi.onActivityResult(requestCode, resultCode)) return
+        if (BoatWifi.onActivityResult(requestCode, resultCode, data)) return
         super.onActivityResult(requestCode, resultCode, data)
     }
 

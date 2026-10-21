@@ -50,72 +50,6 @@ class DataStatusPill extends StatelessWidget {
   }
 }
 
-/// The headline on the connected home screen. Opens [BoatDataPage].
-class DataStatusCard extends StatelessWidget {
-  const DataStatusCard({super.key, required this.stats, required this.onTap});
-
-  /// Null while the first reading is on its way.
-  final TerminalStats? stats;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = stats;
-    final color = s == null ? toneColor(Tone.neutral) : toneColor(s.tone);
-    return Material(
-      color: color.withValues(alpha: 0.06),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: color.withValues(alpha: 0.35)),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  if (s != null)
-                    DataStatusPill(stats: s)
-                  else
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  const Spacer(),
-                  const Icon(Icons.chevron_right, color: Colors.black38),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Text(
-                s == null ? 'Checking the data source…' : _headline(s),
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: _navy,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                s == null ? 'Boat data' : s.summary,
-                style: const TextStyle(color: Colors.black54, height: 1.35),
-              ),
-              if (s != null && !s.simulated) ...[
-                const SizedBox(height: 10),
-                _IntegrityLine(stats: s, compact: true),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 String _headline(TerminalStats s) => switch (s.tone) {
   Tone.good => 'Live boat data',
   Tone.caution => 'Simulated data',
@@ -124,19 +58,16 @@ String _headline(TerminalStats s) => switch (s.tone) {
 };
 
 class _IntegrityLine extends StatelessWidget {
-  const _IntegrityLine({required this.stats, this.compact = false});
+  const _IntegrityLine({required this.stats});
 
   final TerminalStats stats;
-  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final clean = stats.lost == 0;
     final color = toneColor(clean ? Tone.good : Tone.bad);
     final text = clean
-        ? (compact
-              ? 'No frames lost'
-              : 'No frames lost since the terminal started')
+        ? 'No frames lost since the terminal started'
         : '${formatCount(stats.lost)} ${stats.lost == 1 ? 'frame' : 'frames'} lost '
               'since the terminal started';
     return Row(

@@ -133,21 +133,20 @@ void main() {
       );
     });
 
-    testWidgets('the home card opens with a tap', (tester) async {
-      var taps = 0;
+    testWidgets('the status pill names a quiet bus', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: DataStatusCard(
+            body: DataStatusPill(
               stats: TerminalStats.parse(firmwareJson(state: 'quiet'))!,
-              onTap: () => taps++,
             ),
           ),
         ),
       );
-      expect(find.text('No data from the bus'), findsOneWidget);
-      await tester.tap(find.byType(DataStatusCard));
-      expect(taps, 1);
+      expect(
+        find.text(TerminalStats.parse(firmwareJson(state: 'quiet'))!.pill),
+        findsOneWidget,
+      );
     });
   });
 }

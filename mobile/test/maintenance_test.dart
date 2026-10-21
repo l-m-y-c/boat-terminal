@@ -325,26 +325,27 @@ void main() {
     expect(result.message, ClubMaintenanceClient.unreachableMessage);
   });
 
-  testWidgets('the home screen offers Discover and the QR, nothing else', (
-    tester,
-  ) async {
+  testWidgets('the journey starts at Find with the QR first', (tester) async {
     await tester.binding.setSurfaceSize(const Size(400, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const LmycApp());
     await tester.pump();
+    for (final stop in ['Find', 'Connect', 'Wi-Fi', 'Chart data']) {
+      expect(find.text(stop), findsOneWidget);
+    }
     expect(find.text('Find your boat'), findsOneWidget);
-    expect(find.text('Discover'), findsOneWidget);
-    expect(find.text('Scan QR code'), findsOneWidget);
-    expect(find.text('Find terminals'), findsNothing);
-    expect(find.text('Maintenance book'), findsNothing);
-    await tester.tap(find.text('Diagnostics'));
+    expect(find.widgetWithText(FilledButton, 'Scan QR code'), findsOneWidget);
+    expect(
+      find.widgetWithText(OutlinedButton, 'Find nearby boats'),
+      findsOneWidget,
+    );
+    expect(find.text('Maintenance'), findsNothing);
+    await tester.tap(find.byTooltip('Diagnostics'));
     await tester.pumpAndSettle();
     expect(find.text('Diagnostics'), findsWidgets);
     expect(find.text('Find a terminal'), findsOneWidget);
-    await tester.tap(find.text('Maintenance book'));
-    await tester.pumpAndSettle();
-    expect(find.text('Boat maintenance book'), findsOneWidget);
-    expect(find.text('Sync with club'), findsOneWidget);
+    expect(find.text('Maintenance book'), findsNothing);
+    expect(find.text('Chart snapshot'), findsNothing);
   });
 
   testWidgets('the book page reads, files, and keeps the club off', (

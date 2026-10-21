@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
@@ -9,11 +8,11 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'boat_data_page.dart';
+import 'boat_setup.dart';
 import 'boat_wifi.dart';
-import 'boatlink.dart';
 import 'home_flow.dart';
+import 'journey.dart';
 import 'last_boat.dart';
-import 'maintenance_book.dart';
 import 'nmea_console.dart';
 import 'pairing_link.dart';
 import 'protocol.dart';
@@ -168,14 +167,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _statsTimer;
   bool _statsReading = false;
 
-  bool _wifiBusy = false;
-  bool _wifiJoined = false;
+  bool _wifiReading = false;
+  bool _wifiSaving = false;
 
-  /// The user saved the boat network on the Android prompt.
+  /// The user tapped Save on the Android prompt this session.
   bool _wifiSaved = false;
-  bool _probing = false;
-  String _wifiDetail = '';
-  bool? _boatReachable;
+  bool _wifiChecking = false;
+  String? _wifiProblem;
+  BoatWifiStatus? _wifiStatus;
+  Timer? _wifiTimer;
 
   _Landing _landing = _Landing.start;
   String? _lastBoat;
@@ -201,15 +201,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (_oob == null && _blePhase == BlePhase.idle) unawaited(_discover());
   }
 
-  /// Back from Wi-Fi settings: check whether the phone moved to the boat.
+  /// Back from Wi-Fi settings, look at once. In the background, stop looking.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final info = BoatSession.info;
-    if (state != AppLifecycleState.resumed || info == null) return;
-    if (_blePhase != BlePhase.paired || _wifiBusy || _boatReachable == true) {
-      return;
+    if (state == AppLifecycleState.resumed) {
+      _startWifiWatch();
+      unawaited(_checkWifi());
+    } else if (state == AppLifecycleState.paused) {
+      _stopWifiWatch();
     }
-    unawaited(_waitForBoat(info.ip, const Duration(seconds: 8)));
   }
 
   Future<void> _scanQr() async {
@@ -850,26 +850,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _sessionReply = null;
         _oob = null;
         _landing = _Landing.start;
-        if (!_wifiJoined) {
-          _wifiDetail = '';
-          _boatReachable = null;
-        }
+        _wifiProblem = null;
       });
     }
   }
 
-  /// After OOB OK, read the SoftAP details and ask Android to join that network.
+  /// After OOB OK: read the hotspot details, save them unless the phone
+  /// already uses the boat Wi-Fi, then keep watching until chart apps can
+  /// reach the terminal.
   Future<void> _bringUpBoatWifi(BluetoothDevice device) async {
-    if (_wifiBusy) {
-      return;
-    }
+    if (_wifiReading || _wifiSaving) return;
     setState(() {
-      _wifiBusy = true;
-      _wifiJoined = false;
-      _wifiSaved = false;
-      _boatReachable = null;
-      _wifiDetail = 'Reading the boat Wi-Fi name over Bluetooth…';
+      _wifiReading = true;
+      _wifiProblem = null;
     });
+    BoatWifiInfo? info;
     try {
       final status = await Permission.nearbyWifiDevices.request();
       if (!status.isGranted && !status.isLimited) {
@@ -889,137 +884,125 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
       }
       if (wifiChr == null) {
-        if (!mounted) return;
-        setState(() {
-          _wifiDetail = 'This terminal has no Wi-Fi bootstrap yet. Flash the new firmware and pair again.';
-        });
-        return;
-      }
-      final raw = utf8.decode(await wifiChr.read(), allowMalformed: true);
-      final info = parseWifiBootstrap(raw);
-      if (info == null) {
-        if (!mounted) return;
-        setState(() {
-          _wifiDetail = 'The terminal did not share Wi-Fi yet. Tap Join boat Wi-Fi to ask again.';
-        });
-        return;
-      }
-      BoatSession.offer(info);
-      if (!mounted) return;
-      setState(() {
-        _wifiDetail =
-            'Android is asking to join ${info.ssid}. Tap Connect. '
-            'The network has no internet; Read Book still uses ${info.ip}.';
-      });
-      final saved = await BoatWifi.join(ssid: info.ssid, psk: info.psk);
-      if (!mounted) return;
-      if (!saved) {
-        setState(() {
-          _wifiDetail =
-              'The Android prompt was closed without saving ${info.ssid}. '
-              'Tap Join boat Wi-Fi to see it again.';
-        });
-        return;
-      }
-      BoatSession.markJoined();
-      setState(() {
-        _wifiSaved = true;
-        _wifiDetail = 'Waiting for the phone to move to ${info.ssid}…';
-      });
-      await _waitForBoat(info.ip, const Duration(seconds: 12));
-    } on PlatformException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _wifiJoined = false;
-        _wifiDetail = e.message ?? 'Could not join the boat Wi-Fi.';
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _wifiJoined = false;
-        _wifiDetail = 'Could not join the boat Wi-Fi ($e).';
-      });
-    } finally {
-      if (mounted) {
-        setState(() => _wifiBusy = false);
+        _wifiProblem = 'This terminal does not share its Wi-Fi. Its software needs an update.';
       } else {
-        _wifiBusy = false;
-      }
-    }
-  }
-
-  /// Tries port 10110 until it opens or [patience] runs out. Android takes a
-  /// few seconds to move Wi-Fi after a save, so one quick try is not enough.
-  Future<void> _waitForBoat(String ip, Duration patience) async {
-    if (_probing) return;
-    setState(() => _probing = true);
-    final deadline = DateTime.now().add(patience);
-    var open = false;
-    try {
-      while (mounted) {
-        try {
-          final socket = await Socket.connect(
-            ip,
-            kGatewayTcpPort,
-            timeout: const Duration(seconds: 2),
-          );
-          socket.destroy();
-          open = true;
-          break;
-        } catch (_) {
-          if (DateTime.now().isAfter(deadline)) break;
-          await Future<void>.delayed(const Duration(seconds: 1));
+        final raw = utf8.decode(await wifiChr.read(), allowMalformed: true);
+        info = parseWifiBootstrap(raw);
+        if (info == null) {
+          _wifiProblem = 'The terminal did not send its Wi-Fi details.';
         }
       }
-    } finally {
-      _probing = false;
+    } catch (e) {
+      debugPrint('wifi bootstrap: $e');
+      _wifiProblem = 'Lost the Bluetooth link while reading the Wi-Fi details.';
     }
     if (!mounted) return;
-    final ssid = BoatSession.ssid;
-    setState(() {
-      _boatReachable = open;
-      _wifiJoined = open;
-      _wifiDetail = open
-          ? 'The phone is on the boat hotspot. Navionics and i-Boating can use $ip port $kGatewayTcpPort, and UDP $kGatewayUdpPort and $kGatewayUdpAltPort.'
-          : 'Android saved $ssid but stays on a Wi-Fi network that has internet. '
-                'Tap Open Wi-Fi settings and choose $ssid. '
-                'Away from other Wi-Fi, on the boat, the phone joins it by itself.';
-    });
+    setState(() => _wifiReading = false);
+    if (info == null) return;
+
+    BoatSession.offer(info);
+    await _startRelay(info.ip);
+    _startWifiWatch();
+    await _checkWifi();
+    if (!mounted || _wifiStatus?.onBoat == true) return;
+    await _saveWifi();
   }
 
-  /// The one Wi-Fi step left, or null when the phone already reaches the boat.
-  Widget? _wifiAction() {
-    if (_blePhase != BlePhase.paired || _boatReachable == true) return null;
-    final style = FilledButton.styleFrom(
-      backgroundColor: const Color(0xFF001F3F),
-      padding: const EdgeInsets.symmetric(vertical: 14),
-    );
-    if (_wifiSaved) {
-      return FilledButton.icon(
-        onPressed: _probing ? null : () => unawaited(_openWifiSettings()),
-        icon: const Icon(Icons.wifi),
-        label: Text(_probing ? 'Checking…' : 'Open Wi-Fi settings'),
-        style: style,
-      );
-    }
-    final device = _device;
-    return FilledButton.icon(
-      onPressed: _wifiBusy || device == null
-          ? null
-          : () => unawaited(_bringUpBoatWifi(device)),
-      icon: const Icon(Icons.wifi),
-      label: Text(_wifiBusy ? 'Joining…' : 'Join boat Wi-Fi'),
-      style: style,
-    );
-  }
-
-  Future<void> _openWifiSettings() async {
+  /// Chart apps read 127.0.0.1:10110. The notification is the only sign the
+  /// relay is running, so ask for it first; the relay works without it.
+  Future<void> _startRelay(String ip) async {
     try {
-      await BoatWifi.openSettings();
+      await Permission.notification.request();
+      await BoatWifi.startRelay(ip: ip);
+    } on PlatformException catch (e) {
+      debugPrint('relay: ${e.message}');
+    }
+  }
+
+  /// Android's Save network prompt for the boat hotspot.
+  Future<void> _saveWifi() async {
+    final info = BoatSession.info;
+    if (info == null || _wifiSaving) return;
+    setState(() => _wifiSaving = true);
+    try {
+      final saved = await BoatWifi.join(ssid: info.ssid, psk: info.psk);
+      if (!mounted) return;
+      setState(() => _wifiSaved = saved);
     } on PlatformException catch (e) {
       if (!mounted) return;
       setState(
-        () => _wifiDetail = e.message ?? 'Could not open Wi-Fi settings.',
+        () =>
+            _wifiProblem = e.message ?? 'Android did not save the boat Wi-Fi.',
+      );
+    } finally {
+      if (mounted) setState(() => _wifiSaving = false);
+    }
+    await _checkWifi();
+  }
+
+  /// One look at the phone's networks. Cheap: it only opens a socket when
+  /// the phone has an address on the boat hotspot.
+  Future<void> _checkWifi() async {
+    final info = BoatSession.info;
+    if (info == null || _wifiChecking) return;
+    _wifiChecking = true;
+    try {
+      final status = await BoatWifi.status(ip: info.ip);
+      if (!mounted) return;
+      if (status.ready) BoatSession.markJoined();
+      if (status != _wifiStatus) {
+        debugPrint('boat wifi: $status');
+        setState(() => _wifiStatus = status);
+      }
+    } on PlatformException catch (e) {
+      debugPrint('boat wifi status: ${e.message}');
+    } finally {
+      _wifiChecking = false;
+    }
+  }
+
+  /// Android can move the phone between networks at any time, so the check
+  /// runs for as long as the app is on screen, not only during setup.
+  void _startWifiWatch() {
+    if (_wifiTimer != null || BoatSession.info == null) return;
+    _wifiTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => unawaited(_checkWifi()),
+    );
+  }
+
+  void _stopWifiWatch() {
+    _wifiTimer?.cancel();
+    _wifiTimer = null;
+  }
+
+  WifiSetup get _wifiSetup => wifiSetupFor(
+    reading: _wifiReading,
+    saving: _wifiSaving,
+    saved: _wifiSaved,
+    info: BoatSession.info,
+    status: _wifiStatus,
+    problem: _wifiProblem,
+  );
+
+  bool get _wifiReady => _wifiStatus?.ready == true;
+
+  Future<void> _onSetupAction(SetupAction action) async {
+    try {
+      switch (action) {
+        case SetupAction.save:
+          await _saveWifi();
+        case SetupAction.wifiList:
+          await BoatWifi.openSettings();
+        case SetupAction.retry:
+          final device = _device;
+          if (device != null) await _bringUpBoatWifi(device);
+      }
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      setState(
+        () =>
+            _wifiProblem = e.message ?? 'Android did not open Wi-Fi settings.',
       );
     }
   }
@@ -1084,6 +1067,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     _statsTimer?.cancel();
+    _stopWifiWatch();
     WidgetsBinding.instance.removeObserver(this);
     _countdownTimer?.cancel();
     unawaited(_linkSubscription?.cancel());
@@ -1131,7 +1115,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   double get _progress {
-    if (_wifiBusy) return 0.9;
     switch (_blePhase) {
       case BlePhase.checkingPermissions:
         return 0.15;
@@ -1150,7 +1133,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   String get _stepTitle {
-    if (_wifiBusy) return 'Joining the boat Wi-Fi';
     switch (_blePhase) {
       case BlePhase.checkingPermissions:
         return 'Asking for Bluetooth';
@@ -1194,7 +1176,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             builder: (_, _) => NmeaInfoPage(
               ssid: BoatSession.ssid,
               ip: BoatSession.ip,
-              onBoat: _wifiJoined,
+              onBoat: _wifiReady,
               simulated: _stats?.simulated ?? false,
             ),
           );
@@ -1203,83 +1185,78 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  void _openMaintenance() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const MaintenanceMenuPage()),
-    );
+  /// Where the member is. Arrival is about chart data, so a Bluetooth drop
+  /// after that does not send them back to the start.
+  JourneyStop get _stop {
+    if (BoatSession.info != null && _wifiReady) return JourneyStop.arrived;
+    if (_blePhase == BlePhase.paired) {
+      return _wifiSetup == WifiSetup.noAnswer
+          ? JourneyStop.charts
+          : JourneyStop.wifi;
+    }
+    if (_landing != _Landing.start ||
+        (_blePhase == BlePhase.idle && _oob == null)) {
+      return JourneyStop.find;
+    }
+    return JourneyStop.connect;
+  }
+
+  bool get _stopProblem => switch (_stop) {
+    JourneyStop.connect => _blePhase == BlePhase.failed,
+    JourneyStop.wifi => _wifiSetup == WifiSetup.problem,
+    _ => false,
+  };
+
+  String get _boatTitle {
+    final id = _boatId;
+    if (id != null && id.isNotEmpty) return id;
+    final name = _bleName;
+    if (name != null) {
+      final boat = TerminalName.parse(name).boat;
+      if (boat != null) return boat;
+    }
+    return 'LMYC';
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_blePhase == BlePhase.paired && !_wifiBusy) {
-      return _buildMenu(context);
-    }
-    if (_landing != _Landing.start ||
-        (_blePhase == BlePhase.idle && _oob == null)) {
-      return _buildWelcome(context);
-    }
-    return _buildConnect(context);
-  }
-
-  PreferredSizeWidget _bar(String title) {
-    return AppBar(
-      title: Text(title),
-      actions: [
-        TextButton(
-          onPressed: _openStatus,
-          child: const Text(
-            'Diagnostics',
-            style: TextStyle(color: Colors.white),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildWelcome(BuildContext context) {
-    final Widget body = switch (_landing) {
-      _Landing.start => _landingStart(context),
-      _Landing.searching => _landingSearching(context),
-      _Landing.countdown => _landingCountdown(context),
-      _Landing.choose => _landingChoose(context),
-      _Landing.none => _landingNone(context),
-    };
+    final stop = _stop;
     return Scaffold(
-      appBar: _bar('LMYC'),
-      body: SafeArea(child: body),
-    );
-  }
-
-  Widget _heading(BuildContext context, String text) {
-    return Text(
-      text,
-      textAlign: TextAlign.center,
-      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-        fontWeight: FontWeight.w700,
-        color: const Color(0xFF001F3F),
+      backgroundColor: const Color(0xFFF7F9FB),
+      appBar: AppBar(
+        title: Text(_boatTitle),
+        actions: [
+          IconButton(
+            tooltip: 'Diagnostics',
+            onPressed: _openStatus,
+            icon: const Icon(Icons.settings_outlined),
+          ),
+        ],
       ),
-    );
-  }
-
-  Widget _lead(BuildContext context, String text) {
-    return Text(
-      text,
-      textAlign: TextAlign.center,
-      style: Theme.of(context).textTheme.bodyLarge
-          ?.copyWith(color: Colors.black54, height: 1.4),
-    );
-  }
-
-  ButtonStyle get _primary => FilledButton.styleFrom(
-    backgroundColor: const Color(0xFF001F3F),
-    padding: const EdgeInsets.symmetric(vertical: 14),
-  );
-
-  Widget _scanQrButton() {
-    return OutlinedButton.icon(
-      onPressed: () => unawaited(_scanQr()),
-      icon: const Icon(Icons.qr_code_scanner),
-      label: const Text('Scan QR code'),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
+              child: JourneyBar(current: stop, problem: _stopProblem),
+            ),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                child: KeyedSubtree(
+                  key: ValueKey('$stop/${_landing.name}/${_wifiSetup.name}'),
+                  child: switch (stop) {
+                    JourneyStop.find => _findPanel(context),
+                    JourneyStop.connect => _connectPanel(),
+                    JourneyStop.wifi || JourneyStop.charts => _wifiPanel(),
+                    JourneyStop.arrived => _arrivedPanel(context),
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1291,318 +1268,271 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return parts.join(' · ');
   }
 
-  Widget _landingStart(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Spacer(),
-          const Icon(Icons.sailing, size: 64, color: Color(0xFF001F3F)),
-          const SizedBox(height: 20),
-          _heading(context, 'Find your boat'),
-          const SizedBox(height: 8),
-          _lead(
-            context,
-            'Aboard, near the terminal, tap Discover. The app pairs over '
-            'Bluetooth and sets up the boat Wi-Fi on its own.',
-          ),
-          const SizedBox(height: 28),
-          FilledButton.icon(
-            onPressed: () => unawaited(_discover()),
-            icon: const Icon(Icons.radar),
-            label: const Text('Discover'),
-            style: _primary,
-          ),
-          const SizedBox(height: 8),
-          _scanQrButton(),
-          const Spacer(),
-        ],
-      ),
-    );
-  }
+  Widget _scanButton({bool primary = false}) => primary
+      ? PrimaryButton(
+          label: 'Scan QR code',
+          icon: Icons.qr_code_scanner,
+          onPressed: () => unawaited(_scanQr()),
+        )
+      : SecondaryButton(
+          label: 'Scan QR code',
+          icon: Icons.qr_code_scanner,
+          onPressed: () => unawaited(_scanQr()),
+        );
 
-  Widget _landingSearching(BuildContext context) {
-    final count = _nearby.length;
-    return Padding(
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Spacer(),
-          const Center(child: CircularProgressIndicator()),
-          const SizedBox(height: 24),
-          _heading(context, 'Looking for boat terminals'),
-          const SizedBox(height: 8),
-          _lead(
-            context,
-            count == 0 ? 'Listening over Bluetooth…' : 'Found $count so far…',
-          ),
-          const Spacer(),
-        ],
-      ),
-    );
-  }
-
-  Widget _landingCountdown(BuildContext context) {
-    final hit = _autoTarget!;
-    final hits = _sortedHits();
-    final seconds = (_countdownLeft * _countdown.inSeconds).ceil();
-    return Padding(
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Spacer(),
-          const Icon(Icons.sailing, size: 64, color: Color(0xFF001F3F)),
-          const SizedBox(height: 20),
-          _heading(context, TerminalName.parse(hit.name).title),
-          const SizedBox(height: 8),
-          _lead(
-            context,
-            _hitDetail(
-              hit,
-              closest: hits.length > 1 && hits.first.id == hit.id,
+  Widget _findPanel(BuildContext context) {
+    switch (_landing) {
+      case _Landing.start:
+        return JourneyPanel(
+          icon: Icons.sailing,
+          title: 'Find your boat',
+          body:
+              'Scan the QR code on the boat\'s screen. '
+              'Been aboard before? The app finds the boat by itself.',
+          primary: _scanButton(primary: true),
+          secondary: [
+            SecondaryButton(
+              label: 'Find nearby boats',
+              icon: Icons.radar,
+              onPressed: () => unawaited(_discover()),
             ),
-          ),
-          const SizedBox(height: 28),
-          Text(
-            'Joining in $seconds s',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 16),
-          ),
-          const SizedBox(height: 10),
-          InkWell(
-            onTap: _cancelCountdown,
-            borderRadius: BorderRadius.circular(8),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: LinearProgressIndicator(
-                  value: _countdownLeft,
-                  minHeight: 10,
-                  backgroundColor: const Color(0xFFE2E8F0),
-                  color: const Color(0xFF001F3F),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
-          FilledButton(
+          ],
+        );
+      case _Landing.searching:
+        final count = _nearby.length;
+        return JourneyPanel(
+          icon: Icons.radar,
+          title: 'Looking for boats',
+          body: count == 0
+              ? 'Listening for boat terminals nearby.'
+              : 'Found $count so far.',
+          working: true,
+        );
+      case _Landing.countdown:
+        final hit = _autoTarget!;
+        final hits = _sortedHits();
+        final seconds = (_countdownLeft * _countdown.inSeconds).ceil();
+        return JourneyPanel(
+          icon: Icons.sailing,
+          title: TerminalName.parse(hit.name).title,
+          body:
+              '${_hitDetail(hit, closest: hits.length > 1 && hits.first.id == hit.id)}'
+              '\nJoining in $seconds s',
+          progress: 1 - _countdownLeft,
+          primary: PrimaryButton(
+            label: 'Join now',
             onPressed: () => unawaited(_join(hit)),
-            style: _primary,
-            child: const Text('Join now'),
           ),
-          const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: _cancelCountdown,
-            child: const Text('Cancel'),
+          secondary: [
+            SecondaryButton(
+              label: 'Not this boat',
+              onPressed: _cancelCountdown,
+            ),
+          ],
+        );
+      case _Landing.choose:
+        final hits = _sortedHits();
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          children: [
+            Text(
+              hits.length == 1
+                  ? 'One boat nearby'
+                  : '${hits.length} boats nearby',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w700, color: kNavy),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'The closest is usually the boat you are on.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.black54, height: 1.4),
+            ),
+            const SizedBox(height: 20),
+            for (final (i, hit) in hits.indexed)
+              OptionTile(
+                icon: Icons.sailing,
+                title: TerminalName.parse(hit.name).title,
+                subtitle: _hitDetail(hit, closest: i == 0 && hits.length > 1),
+                onTap: () => unawaited(_join(hit)),
+              ),
+            const SizedBox(height: 8),
+            _scanButton(),
+            TextButton(
+              onPressed: () => unawaited(_discover()),
+              child: const Text('Search again'),
+            ),
+          ],
+        );
+      case _Landing.none:
+        return JourneyPanel(
+          icon: Icons.bluetooth_searching,
+          title: 'No boat found nearby',
+          body:
+              'Make sure Bluetooth is on and you are aboard, '
+              'or scan the QR code on the boat\'s screen.',
+          primary: _scanButton(primary: true),
+          secondary: [
+            SecondaryButton(
+              label: 'Search again',
+              icon: Icons.radar,
+              onPressed: () => unawaited(_discover()),
+            ),
+          ],
+        );
+    }
+  }
+
+  Widget _connectPanel() {
+    if (_blePhase == BlePhase.failed) {
+      final line = _bleDetail.split('\n').first.trim();
+      return JourneyPanel(
+        icon: Icons.link_off,
+        tone: kRed,
+        title: 'Could not connect',
+        body: line.isEmpty
+            ? 'Stay close to the terminal and try again.'
+            : '$line. Stay close to the terminal and try again.',
+        primary: PrimaryButton(
+          label: 'Try again',
+          onPressed: _busy ? null : _retry,
+        ),
+        secondary: [
+          _scanButton(),
+          TextButton(
+            onPressed: _busy ? null : () => unawaited(_discover()),
+            child: const Text('Choose another boat'),
           ),
-          const Spacer(),
         ],
-      ),
+      );
+    }
+    return JourneyPanel(
+      icon: Icons.bluetooth_connected,
+      title: 'Connecting to $_boatTitle',
+      body: _stepTitle,
+      progress: _progress,
     );
   }
 
-  Widget _landingChoose(BuildContext context) {
-    final hits = _sortedHits();
+  Widget _wifiPanel() {
+    final ssid = BoatSession.ssid.isEmpty ? 'the boat Wi-Fi' : BoatSession.ssid;
+    final setup = _wifiSetup;
+    final copy = setupCopy(setup, ssid, problem: _wifiProblem);
+    final action = copy.action;
+    return JourneyPanel(
+      icon: setup == WifiSetup.noAnswer ? Icons.sensors : Icons.wifi,
+      tone: setup == WifiSetup.problem ? kRed : kNavy,
+      title: copy.title,
+      body: copy.body,
+      working: copy.working,
+      primary: action == null
+          ? null
+          : PrimaryButton(
+              label: copy.actionLabel!,
+              onPressed: () => unawaited(_onSetupAction(action)),
+            ),
+    );
+  }
+
+  Widget _arrivedPanel(BuildContext context) {
+    final stats = _stats;
+    final linked = _blePhase == BlePhase.paired;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
       children: [
-        _heading(
-          context,
-          hits.length == 1
-              ? 'One boat terminal nearby'
-              : '${hits.length} boat terminals nearby',
-        ),
-        const SizedBox(height: 8),
-        _lead(
-          context,
-          'The closest is usually the boat you are on. The name under each '
-          'one matches BLE name on the terminal Diagnostics screen.',
-        ),
-        const SizedBox(height: 24),
-        for (final (i, hit) in hits.indexed)
-          HomeChoice(
-            icon: Icons.sailing,
-            title: TerminalName.parse(hit.name).title,
-            subtitle: _hitDetail(hit, closest: i == 0 && hits.length > 1),
-            onTap: () => unawaited(_join(hit)),
+        Center(
+          child: Container(
+            width: 88,
+            height: 88,
+            decoration: BoxDecoration(
+              color: kGreen.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.check_rounded, size: 52, color: kGreen),
           ),
+        ),
+        const SizedBox(height: 18),
+        Text(
+          'On board $_boatTitle',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.headlineSmall
+              ?.copyWith(fontWeight: FontWeight.w700, color: kNavy),
+        ),
         const SizedBox(height: 8),
-        _lead(context, 'Not in the list? Scan the QR code on the terminal.'),
-        const SizedBox(height: 12),
-        _scanQrButton(),
-        TextButton(
-          onPressed: () => unawaited(_discover()),
-          child: const Text('Search again'),
+        const Text(
+          'Chart apps on this phone can get the boat\'s data.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.black54, fontSize: 16, height: 1.4),
+        ),
+        if (stats != null) ...[
+          const SizedBox(height: 14),
+          Center(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(20),
+              onTap: _openBoatData,
+              child: DataStatusPill(stats: stats),
+            ),
+          ),
+        ],
+        if (stats != null && stats.simulated) ...[
+          const SizedBox(height: 14),
+          const _Notice(
+            color: kAmber,
+            text:
+                'The terminal is simulating a boat. Position, depth and wind '
+                'are not real.',
+          ),
+        ],
+        if (!linked) ...[
+          const SizedBox(height: 14),
+          _Notice(
+            color: Colors.black54,
+            text: 'Bluetooth to the terminal dropped. Chart apps keep working.',
+            action: TextButton(
+              onPressed: _busy ? null : _retry,
+              child: const Text('Reconnect'),
+            ),
+          ),
+        ],
+        const SizedBox(height: 26),
+        OptionTile(
+          icon: Icons.map_outlined,
+          title: 'Connect a chart app',
+          subtitle: 'Navionics or i-Boating: UDP, port 10110',
+          onTap: _openNmea,
+        ),
+        OptionTile(
+          icon: Icons.speed,
+          title: 'Boat data',
+          subtitle: stats == null ? 'Data source and traffic' : stats.summary,
+          onTap: _openBoatData,
+        ),
+        OptionTile(
+          icon: Icons.logout,
+          title: 'Leave the boat',
+          subtitle: 'Stop sharing the boat data on this phone',
+          onTap: () => unawaited(_leaveBoat()),
         ),
       ],
     );
   }
 
-  Widget _landingNone(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Spacer(),
-          const Icon(
-            Icons.bluetooth_searching,
-            size: 64,
-            color: Color(0xFF001F3F),
-          ),
-          const SizedBox(height: 20),
-          _heading(context, 'No boat terminal found'),
-          const SizedBox(height: 8),
-          _lead(
-            context,
-            'Check that Bluetooth is on and you are near the terminal, '
-            'then search again. Or scan the QR code on its screen.',
-          ),
-          const SizedBox(height: 28),
-          FilledButton.icon(
-            onPressed: () => unawaited(_discover()),
-            icon: const Icon(Icons.radar),
-            label: const Text('Search again'),
-            style: _primary,
-          ),
-          const SizedBox(height: 8),
-          _scanQrButton(),
-          const Spacer(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildConnect(BuildContext context) {
-    final failed = _blePhase == BlePhase.failed;
-    return Scaffold(
-      appBar: _bar('LMYC'),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Spacer(),
-              Icon(
-                failed ? Icons.link_off : Icons.sailing,
-                size: 64,
-                color: failed ? Colors.red.shade700 : const Color(0xFF001F3F),
-              ),
-              const SizedBox(height: 20),
-              Text(
-                failed ? 'Could not connect' : 'Connecting',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF001F3F),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                _stepTitle,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 16, height: 1.4),
-              ),
-              const SizedBox(height: 28),
-              if (!failed)
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: LinearProgressIndicator(
-                    value: _progress,
-                    minHeight: 8,
-                    backgroundColor: const Color(0xFFE2E8F0),
-                    color: const Color(0xFF001F3F),
-                  ),
-                ),
-              if (failed) ...[
-                FilledButton(
-                  onPressed: _busy ? null : _retry,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF001F3F),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                  child: const Text('Try again'),
-                ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : () => unawaited(_scanQr()),
-                  icon: const Icon(Icons.qr_code_scanner),
-                  label: const Text('Scan the QR code'),
-                ),
-                TextButton(
-                  onPressed: _busy ? null : () => unawaited(_discover()),
-                  child: const Text('Choose another terminal'),
-                ),
-              ],
-              const Spacer(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMenu(BuildContext context) {
-    final boat = (_boatId == null || _boatId!.isEmpty) ? 'the boat' : _boatId!;
-    final wifiAction = _wifiAction();
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(boat),
-        actions: [
-          IconButton(
-            tooltip: 'Diagnostics',
-            onPressed: _openStatus,
-            icon: const Icon(Icons.tune),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
-          children: [
-            if (_statsChr != null)
-              DataStatusCard(stats: _stats, onTap: _openBoatData)
-            else
-              Text(
-                'Connected',
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF001F3F),
-                ),
-              ),
-            if (wifiAction != null) ...[
-              const SizedBox(height: 16),
-              Text(
-                _wifiDetail.isEmpty
-                    ? 'The phone is not on the boat Wi-Fi yet.'
-                    : _wifiDetail,
-                style: const TextStyle(color: Colors.black54, height: 1.4),
-              ),
-              const SizedBox(height: 12),
-              wifiAction,
-            ],
-            const SizedBox(height: 24),
-            HomeChoice(
-              icon: Icons.map_outlined,
-              title: 'Chart apps',
-              subtitle: 'Navionics and i-Boating: address and ports',
-              onTap: _openNmea,
-            ),
-            HomeChoice(
-              icon: Icons.handyman_outlined,
-              title: 'Maintenance',
-              subtitle: 'Defects and the log',
-              onTap: _openMaintenance,
-            ),
-          ],
-        ),
-      ),
-    );
+  /// Back to the start: no relay, no watch, no Bluetooth.
+  Future<void> _leaveBoat() async {
+    _stopWifiWatch();
+    try {
+      await BoatWifi.stopRelay();
+    } on PlatformException catch (e) {
+      debugPrint('stop relay: ${e.message}');
+    }
+    BoatSession.clear();
+    if (!mounted) return;
+    setState(() {
+      _wifiStatus = null;
+      _wifiSaved = false;
+    });
+    await _disconnect();
   }
 
   Widget _statusPage(BuildContext routeContext) {
@@ -1636,14 +1566,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           for (final row in linkRows(
             blePaired: paired,
             info: BoatSession.info,
-            joining: _wifiBusy && !_wifiJoined,
-            joined: _wifiJoined,
-            reached: _boatReachable,
+            status: _wifiStatus,
           )) ...[_LinkStatusRow(row: row), const SizedBox(height: 8)],
-          if (_wifiDetail.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(_wifiDetail, style: const TextStyle(height: 1.4)),
-          ],
           const SizedBox(height: 16),
           _statusRow('Terminal', _terminalId),
           if (_stats != null) _statusRow('Data', _stats!.pill),
@@ -1658,7 +1582,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ),
           ],
           const SizedBox(height: 16),
-          ?_wifiAction(),
           if (_device != null) ...[
             const SizedBox(height: 8),
             OutlinedButton.icon(
@@ -1674,33 +1597,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               },
               icon: const Icon(Icons.ssid_chart),
               label: const Text('Sentences'),
-            ),
-          ],
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: () {
-              Navigator.of(routeContext).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => BoatLinkPage(suggestedIp: BoatSession.ip),
-                ),
-              );
-            },
-            icon: const Icon(Icons.photo_outlined),
-            label: const Text('Chart snapshot'),
-          ),
-          if (!paired) ...[
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: () {
-                Navigator.of(routeContext).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) =>
-                        MaintenanceBookPage(suggestedIp: BoatSession.ip),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.build_outlined),
-              label: const Text('Maintenance book'),
             ),
           ],
           if (paired) ...[
@@ -1812,6 +1708,35 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               style: const TextStyle(fontFamily: 'monospace'),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A short line under the arrived header, tinted by what it is about.
+class _Notice extends StatelessWidget {
+  const _Notice({required this.color, required this.text, this.action});
+
+  final Color color;
+  final String text;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(text, style: TextStyle(color: color, height: 1.35)),
+          ),
+          ?action,
         ],
       ),
     );
