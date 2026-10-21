@@ -85,10 +85,9 @@ static constexpr lv_coord_t kContentH = 480 - kTopH;
 /* Snapshot is 800×480. Fit its height into the content page. */
 static constexpr uint16_t kSnapFitZoom =
     static_cast<uint16_t>((static_cast<int>(kContentH) * 256) / 480);
-/* 200×213 logo. 352 draws about 275×293 from the widget's top-left. */
-static constexpr uint16_t kLogoZoom = 352;
-static constexpr lv_coord_t kQrPlate = 348;
-static constexpr lv_coord_t kQrSize = 316;
+/* The journey bar takes the top of the home page; the code fits below it. */
+static constexpr lv_coord_t kQrPlate = 300;
+static constexpr lv_coord_t kQrSize = 276;
 static constexpr lv_coord_t kStatusChip = 40;
 
 static Screen g_screen = Screen::Home;
@@ -129,9 +128,15 @@ static constexpr lv_coord_t kCrumbDetailsX = 622;
 static constexpr lv_coord_t kCrumbDetailsW = 82;
 static constexpr lv_coord_t kCrumbPhotoX = 724;
 static constexpr lv_coord_t kCrumbPhotoW = 68;
-static lv_obj_t *g_home_status = nullptr;
 static lv_obj_t *g_qr_plate = nullptr;
-static lv_obj_t *g_qr_hint = nullptr;
+static lv_obj_t *g_home_logo = nullptr;
+static lv_obj_t *g_home_title = nullptr;
+static lv_obj_t *g_home_body = nullptr;
+static constexpr int kStops = 4;
+static lv_obj_t *g_stop_dot[kStops] = {};
+static lv_obj_t *g_stop_mark[kStops] = {};
+static lv_obj_t *g_stop_label[kStops] = {};
+static lv_obj_t *g_stop_line[kStops - 1] = {};
 static lv_obj_t *g_chart_empty = nullptr;
 static lv_obj_t *g_chip_fix = nullptr;
 static lv_obj_t *g_chip_link = nullptr;
@@ -142,7 +147,6 @@ static char g_fix_msg[512] = "FIX: SIM";
 static char g_link_msg[160] = "Advertising";
 static int g_status_open = 0;
 static bool g_qr_hold = false;
-static bool g_pair_seen = false;
 static lv_obj_t *g_tile_depth = nullptr;
 static lv_obj_t *g_tile_sog = nullptr;
 static lv_obj_t *g_tile_cog = nullptr;
@@ -264,6 +268,7 @@ static void apply_pages(void)
         break;
     case Screen::Charts:
         show_page(g_page_chart);
+#if LMYC_WITH_REPORTS_CHARTS
         if (g_chart_empty != nullptr) {
             if (snapshot_has_image()) {
                 lv_obj_add_flag(g_chart_empty, LV_OBJ_FLAG_HIDDEN);
@@ -271,6 +276,7 @@ static void apply_pages(void)
                 lv_obj_clear_flag(g_chart_empty, LV_OBJ_FLAG_HIDDEN);
             }
         }
+#endif
         break;
     case Screen::Diagnostics:
         show_page(g_page_diag);
@@ -307,9 +313,11 @@ static void go(Screen screen)
     hide_helm_subs();
     set_rail_open(false);
     set_photo_full(false);
+#if LMYC_WITH_REPORTS_CHARTS
     if (screen == Screen::Reports) {
         maint_ui_reload();
     }
+#endif
     apply_pages();
 }
 
@@ -320,12 +328,15 @@ static void on_reset_ble(lv_event_t * /*e*/)
 
 static void on_show_home(lv_event_t * /*e*/) { go(Screen::Home); }
 static void on_show_helm(lv_event_t * /*e*/) { go(Screen::Instruments); }
+#if LMYC_WITH_REPORTS_CHARTS
 static void on_show_book(lv_event_t * /*e*/) { go(Screen::Reports); }
+#endif
 static void on_show_diag(lv_event_t * /*e*/) { go(Screen::Diagnostics); }
 static void on_show_data(lv_event_t * /*e*/) { go(Screen::Data); }
 
 static void present_snapshot_image(void)
 {
+#if LMYC_WITH_REPORTS_CHARTS
     if (g_chart_img == nullptr || !snapshot_has_image()) {
         return;
     }
@@ -340,8 +351,10 @@ static void present_snapshot_image(void)
     lv_img_cache_invalidate_src(dsc);
     apply_chart_zoom();
     lv_img_set_src(g_chart_img, dsc);
+#endif
 }
 
+#if LMYC_WITH_REPORTS_CHARTS
 static void on_book_photo(void)
 {
     g_chart_from_book = true;
@@ -362,6 +375,7 @@ static void on_next_book_photo(lv_event_t * /*e*/)
 {
     maint_ui_next_photo();
 }
+#endif
 
 static void on_toggle_gnss(lv_event_t * /*e*/)
 {
@@ -370,6 +384,7 @@ static void on_toggle_gnss(lv_event_t * /*e*/)
     n2k_set_sim_gnss(!next);
 }
 
+#if LMYC_WITH_REPORTS_CHARTS
 static void on_show_chart(lv_event_t * /*e*/)
 {
     g_chart_from_book = false;
@@ -402,6 +417,7 @@ static void on_photo_crumb(lv_event_t * /*e*/) {}
 
 static void on_book_debug(lv_event_t * /*e*/) { maint_ui_toggle_debug(); }
 static void on_book_items(lv_event_t * /*e*/) { maint_ui_show_list(); }
+#endif
 
 static void show_obj(lv_obj_t *obj, bool on)
 {
@@ -432,7 +448,11 @@ static char g_leaf[32] = "";
 
 static void refresh_chrome(void)
 {
+#if LMYC_WITH_REPORTS_CHARTS
     const bool on_detail = g_screen == Screen::Reports && maint_ui_showing_detail();
+#else
+    const bool on_detail = false;
+#endif
     const bool on_photo = g_screen == Screen::Charts && g_chart_from_book;
     const bool in_reports = g_screen == Screen::Reports || on_photo;
     const char *leaf = "";
@@ -486,10 +506,12 @@ static void refresh_chrome(void)
     show_obj(g_rail_charts, g_screen == Screen::Charts);
     show_obj(g_rail_diag, g_screen == Screen::Diagnostics);
     show_obj(g_rail_data, g_screen == Screen::Data);
+#if LMYC_WITH_REPORTS_CHARTS
     if (g_screen == Screen::Reports) {
         show_obj(g_rail_items, maint_ui_showing_detail());
         show_obj(g_rail_debug, !maint_ui_showing_detail());
     }
+#endif
     show_obj(g_chart_next, g_screen == Screen::Charts && g_chart_from_book);
 }
 
@@ -614,30 +636,122 @@ static void update_helm_labels(void)
     present_snapshot_image();
 }
 
-static void update_home_status(void)
+/* The same four stops as the phone app, worked out from what the terminal
+ * sees: Bluetooth, the hotspot details handed over, phones on the hotspot,
+ * and the app's relay on the gateway. Arrival does not need Bluetooth. */
+enum class Stop : uint8_t { Find, Connect, WiFi, Charts, Arrived };
+
+static Stop journey_stop(bool *problem)
 {
-    char line[64];
-    if (pairing_is_confirmed()) {
-        snprintf(line, sizeof(line), "Paired\n%s", LMYC_BOAT_ID);
-    } else {
-        snprintf(line, sizeof(line), "%s", LMYC_BOAT_ID);
+    *problem = false;
+    const bool on_hotspot = net_wifi_ap_stations() > 0;
+    if (on_hotspot && gateway_client_count() > 0) {
+        return Stop::Arrived;
     }
-    set_label(g_home_status, line);
+    const bool shared = pairing_wifi_shared();
+    if (shared && on_hotspot) {
+        return Stop::Charts;
+    }
+    if (pairing_is_confirmed() || (shared && pairing_is_connected())) {
+        return Stop::WiFi;
+    }
+    if (pairing_is_connected()) {
+        return Stop::Connect;
+    }
+    if (strcmp(pairing_status(), "OOB mismatch") == 0) {
+        *problem = true;
+        return Stop::Connect;
+    }
+    return Stop::Find;
 }
 
-/* The large code is the boot secret. It stays up while advertising, parks
- * once the phone is paired, and comes back only while g_qr_hold is set. */
+static constexpr uint32_t kStopDone = 0x3DDC97;
+static constexpr uint32_t kStopNow = 0xFFFFFF;
+static constexpr uint32_t kStopLater = 0x3A4E66;
+static constexpr uint32_t kStopProblem = 0xFF8A80;
+
+static void paint_stops(Stop stop, bool problem)
+{
+    const int now = static_cast<int>(stop);
+    for (int i = 0; i < kStops; ++i) {
+        lv_obj_t *dot = g_stop_dot[i];
+        if (dot == nullptr) {
+            return;
+        }
+        const bool done = i < now;
+        const bool here = i == now;
+        const bool bad = here && problem;
+        const uint32_t color = bad ? kStopProblem : done ? kStopDone : here ? kStopNow : kStopLater;
+        lv_obj_set_style_border_color(dot, lv_color_hex(color), 0);
+        lv_obj_set_style_border_width(dot, here ? 4 : 2, 0);
+        lv_obj_set_style_bg_color(dot, lv_color_hex(done || bad ? color : 0x071422), 0);
+        lv_label_set_text(g_stop_mark[i], bad ? "!" : done ? LV_SYMBOL_OK : "");
+        lv_obj_set_style_text_color(g_stop_mark[i], lv_color_hex(0x071422), 0);
+        lv_obj_set_style_text_color(g_stop_label[i],
+                                    lv_color_hex(here || done ? 0xFFFFFF : 0x6E8299), 0);
+        if (i > 0) {
+            lv_obj_set_style_bg_color(g_stop_line[i - 1],
+                                      lv_color_hex(i <= now ? kStopDone : kStopLater), 0);
+        }
+    }
+}
+
+static void update_home_status(void)
+{
+    bool problem = false;
+    const Stop stop = journey_stop(&problem);
+    paint_stops(stop, problem);
+    char body[160];
+    const char *title = "";
+    switch (stop) {
+    case Stop::Find:
+        title = "Find your boat";
+        snprintf(body, sizeof(body), "Scan this code in the LMYC app.");
+        break;
+    case Stop::Connect:
+        if (problem) {
+            title = "Could not connect";
+            snprintf(body, sizeof(body), "The code did not match. Scan this code again.");
+        } else {
+            title = "Connecting";
+            snprintf(body, sizeof(body), "A phone is connecting over Bluetooth.");
+        }
+        break;
+    case Stop::WiFi:
+        title = "Boat Wi-Fi";
+        snprintf(body, sizeof(body), "The phone is joining %s.", net_wifi_ap_ssid());
+        break;
+    case Stop::Charts:
+        title = "Chart data";
+        snprintf(body, sizeof(body),
+                 "The phone is on the boat Wi-Fi. Waiting for the LMYC app.");
+        break;
+    case Stop::Arrived: {
+        title = "On board " LMYC_BOAT_ID;
+        const int phones = net_wifi_ap_stations();
+        snprintf(body, sizeof(body),
+                 "Chart apps are getting the boat's data. %d phone%s on the boat Wi-Fi.\n\n"
+                 "Another phone? Tap QR.",
+                 phones, phones == 1 ? "" : "s");
+        break;
+    }
+    }
+    set_label(g_home_title, title);
+    set_label(g_home_body, body);
+}
+
+/* The code is the boot secret. It shows while a phone has to scan it, and
+ * otherwise only while the QR chip holds it up for another phone. */
 static void apply_home_qr(void)
 {
-    const bool paired = pairing_is_confirmed();
-    if (!paired || !g_pair_seen) {
+    bool problem = false;
+    const Stop stop = journey_stop(&problem);
+    if (stop == Stop::Find) {
         g_qr_hold = false;
     }
-    g_pair_seen = paired;
-    const bool show = !paired || g_qr_hold;
+    const bool show = stop == Stop::Find || problem || g_qr_hold;
     show_obj(g_qr_plate, show);
-    show_obj(g_qr_hint, show);
-    show_obj(g_home_status, paired && !show);
+    show_obj(g_home_logo, !show);
     paint_chip(g_chip_qr, show ? 0x0E5C55 : 0x1E3A5F);
 }
 
@@ -684,6 +798,7 @@ static void update_status_labels(void)
         set_label(g_status_pop_lbl, g_link_msg);
     }
 
+#if LMYC_WITH_REPORTS_CHARTS
     char http_last[80];
     char http_log[6 * 72];
     hub_http_copy_last(http_last, sizeof(http_last));
@@ -709,6 +824,7 @@ static void update_status_labels(void)
     }
     maint_ui_set_http(http_last, http_log);
     present_snapshot_image();
+#endif
 
     if (g_showing_helm) {
         update_helm_labels();
@@ -751,7 +867,9 @@ static void update_status_labels(void)
     set_label(g_rx_value, pairing_last_rx());
     set_label(g_adv_value, pairing_adv_layout());
     set_label(g_heap_value, heap);
+#if LMYC_WITH_REPORTS_CHARTS
     set_label(g_sd_value, sd_card_summary());
+#endif
     set_label(g_nmea_value, nmea);
     set_label(g_pgn_value, pgns);
     set_label(g_hint_value, pairing_hint());
@@ -938,23 +1056,83 @@ static lv_obj_t *make_crumb_btn(lv_obj_t *parent, const char *text, lv_event_cb_
     return btn;
 }
 
+static void build_journey_bar(lv_obj_t *parent)
+{
+    static const char *const kNames[kStops] = {"Find", "Connect", "Wi-Fi", "Chart data"};
+    constexpr lv_coord_t kLeft = 70;
+    constexpr lv_coord_t kRight = kContentW - 70;
+    constexpr lv_coord_t kDot = 34;
+    constexpr lv_coord_t kY = 18;
+    constexpr lv_coord_t kGap = (kRight - kLeft) / (kStops - 1);
+    for (int i = 0; i < kStops; ++i) {
+        const lv_coord_t cx = kLeft + i * kGap;
+        if (i > 0) {
+            lv_obj_t *line = lv_obj_create(parent);
+            lv_obj_set_size(line, kGap - kDot - 12, 4);
+            lv_obj_set_pos(line, cx - kGap + kDot / 2 + 6, kY + kDot / 2 - 2);
+            lv_obj_set_style_radius(line, 2, 0);
+            lv_obj_set_style_border_width(line, 0, 0);
+            lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+            g_stop_line[i - 1] = line;
+        }
+        lv_obj_t *dot = lv_obj_create(parent);
+        lv_obj_set_size(dot, kDot, kDot);
+        lv_obj_set_pos(dot, cx - kDot / 2, kY);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+        lv_obj_set_style_pad_all(dot, 0, 0);
+        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        g_stop_dot[i] = dot;
+        lv_obj_t *mark = lv_label_create(dot);
+        lv_label_set_text(mark, "");
+        lv_obj_set_style_text_font(mark, &lv_font_montserrat_18, 0);
+        lv_obj_center(mark);
+        g_stop_mark[i] = mark;
+        lv_obj_t *label = lv_label_create(parent);
+        lv_label_set_text(label, kNames[i]);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+        lv_obj_set_width(label, 140);
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_pos(label, cx - 70, kY + kDot + 8);
+        g_stop_label[i] = label;
+    }
+}
+
 static void build_home(lv_obj_t *parent)
 {
-    /* VIRTUAL anchors the zoom at this corner. REAL mode shifts a zoomed
-     * image toward the bottom-right of its box, which put the badge under
-     * the QR. */
-    lv_obj_t *logo = lv_img_create(parent);
-    lv_img_set_src(logo, &lmyc_logo);
-    lv_img_set_size_mode(logo, LV_IMG_SIZE_MODE_VIRTUAL);
-    lv_img_set_pivot(logo, 0, 0);
-    lv_img_set_zoom(logo, kLogoZoom);
-    lv_obj_set_pos(logo, 12, 8);
-    lv_obj_clear_flag(logo, LV_OBJ_FLAG_CLICKABLE);
+    build_journey_bar(parent);
 
-    const lv_coord_t qr_x = kContentW - 16 - kQrPlate;
+    constexpr lv_coord_t kTop = 104;
+    const lv_coord_t right_x = kContentW - 24 - kQrPlate;
+
+    g_home_title = lv_label_create(parent);
+    lv_label_set_text(g_home_title, "");
+    lv_label_set_long_mode(g_home_title, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_home_title, right_x - 56);
+    lv_obj_set_style_text_color(g_home_title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(g_home_title, &lv_font_montserrat_32, 0);
+    lv_obj_set_pos(g_home_title, 32, kTop + 20);
+    lv_obj_clear_flag(g_home_title, LV_OBJ_FLAG_CLICKABLE);
+
+    g_home_body = lv_label_create(parent);
+    lv_label_set_text(g_home_body, "");
+    lv_label_set_long_mode(g_home_body, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_home_body, right_x - 56);
+    lv_obj_set_style_text_color(g_home_body, lv_color_hex(0xB8C7D6), 0);
+    lv_obj_set_style_text_font(g_home_body, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_line_space(g_home_body, 6, 0);
+    lv_obj_set_pos(g_home_body, 32, kTop + 80);
+    lv_obj_clear_flag(g_home_body, LV_OBJ_FLAG_CLICKABLE);
+
+    g_home_logo = lv_img_create(parent);
+    lv_img_set_src(g_home_logo, &lmyc_logo);
+    lv_obj_set_pos(g_home_logo, right_x + (kQrPlate - 200) / 2, kTop + (kQrPlate - 213) / 2);
+    lv_obj_clear_flag(g_home_logo, LV_OBJ_FLAG_CLICKABLE);
+
     g_qr_plate = lv_obj_create(parent);
     lv_obj_set_size(g_qr_plate, kQrPlate, kQrPlate);
-    lv_obj_set_pos(g_qr_plate, qr_x, 23);
+    lv_obj_set_pos(g_qr_plate, right_x, kTop);
     lv_obj_set_style_bg_color(g_qr_plate, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_bg_opa(g_qr_plate, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(g_qr_plate, 18, 0);
@@ -970,25 +1148,8 @@ static void build_home(lv_obj_t *parent)
     lv_obj_center(qr);
     lv_obj_clear_flag(qr, LV_OBJ_FLAG_CLICKABLE);
 
-    g_qr_hint = lv_label_create(parent);
-    lv_label_set_text(g_qr_hint, "Scan in the LMYC app");
-    lv_obj_set_width(g_qr_hint, kQrPlate);
-    lv_obj_set_style_text_align(g_qr_hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(g_qr_hint, lv_color_hex(0x8FA3B8), 0);
-    lv_obj_set_style_text_font(g_qr_hint, &lv_font_montserrat_16, 0);
-    lv_obj_set_pos(g_qr_hint, qr_x, 23 + kQrPlate + 8);
-    lv_obj_clear_flag(g_qr_hint, LV_OBJ_FLAG_CLICKABLE);
-
-    g_home_status = lv_label_create(parent);
-    lv_label_set_text(g_home_status, LMYC_BOAT_ID);
-    lv_obj_set_width(g_home_status, kQrPlate);
-    lv_label_set_long_mode(g_home_status, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(g_home_status, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(g_home_status, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(g_home_status, &lv_font_montserrat_22, 0);
-    lv_obj_set_pos(g_home_status, qr_x, 168);
-    lv_obj_add_flag(g_home_status, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(g_home_status, LV_OBJ_FLAG_CLICKABLE);
+    update_home_status();
+    apply_home_qr();
 }
 
 static void build_diag_page(lv_obj_t *parent)
@@ -1027,7 +1188,9 @@ static void build_diag_page(lv_obj_t *parent)
     add_kv_row(boat, "Hotspot", 116, &g_wifi_value);
     add_kv_row(boat, "Uplink", 144, &g_ip_value);
     add_kv_row(boat, "Heap", 172, &g_heap_value);
+#if LMYC_WITH_REPORTS_CHARTS
     add_kv_row(boat, "SD", 200, &g_sd_value);
+#endif
     add_kv_row(boat, "NMEA", 228, &g_nmea_value, 230);
     add_kv_row(boat, "PGN", 256, &g_pgn_value, 230);
 
@@ -1799,6 +1962,7 @@ static void set_photo_full(bool full)
 
 static void fill_note_pane(void)
 {
+#if LMYC_WITH_REPORTS_CHARTS
     const char *title = maint_ui_item_title();
     const char *caption = maint_ui_caption();
     const char *note = maint_ui_photo_note();
@@ -1819,6 +1983,7 @@ static void fill_note_pane(void)
         lv_obj_set_style_text_color(g_note_body,
                                     lv_color_hex(has_note ? 0xFFFFFF : 0x8FA3B8), 0);
     }
+#endif
 }
 
 static void pane_anim_ready(lv_anim_t * /*a*/)
@@ -1885,6 +2050,7 @@ static void reset_to_photo_pane(void)
     }
 }
 
+#if LMYC_WITH_REPORTS_CHARTS
 static void slide_panes(lv_dir_t dir)
 {
     if (g_pane_busy || g_photo_pane == nullptr || g_note_pane == nullptr) {
@@ -1910,6 +2076,7 @@ static void slide_panes(lv_dir_t dir)
     start_anim(incoming, from, 0, 220, anim_pane_x, pane_anim_ready);
     start_anim(outgoing, 0, out_to, 220, anim_pane_x, pane_anim_ready);
 }
+#endif
 
 static void on_screen_gesture(lv_event_t * /*e*/)
 {
@@ -1923,13 +2090,17 @@ static void on_screen_gesture(lv_event_t * /*e*/)
     } else if (dir == LV_DIR_RIGHT) {
         if (g_rail_open) {
             set_rail_open(false);
-        } else if (g_screen == Screen::Reports) {
+        }
+#if LMYC_WITH_REPORTS_CHARTS
+        else if (g_screen == Screen::Reports) {
             maint_ui_next_report();
         }
+#endif
     }
     lv_indev_wait_release(indev);
 }
 
+#if LMYC_WITH_REPORTS_CHARTS
 static void on_chart_gesture(lv_event_t *e)
 {
     lv_indev_t *indev = lv_indev_get_act();
@@ -1949,6 +2120,7 @@ static void on_chart_gesture(lv_event_t *e)
     lv_indev_wait_release(indev);
     (void)e;
 }
+#endif
 
 static void on_dismiss_rail(lv_event_t * /*e*/)
 {
@@ -1995,7 +2167,8 @@ static void on_link_chip(lv_event_t * /*e*/)
 
 static void on_qr_chip(lv_event_t * /*e*/)
 {
-    if (!pairing_is_confirmed()) {
+    bool problem = false;
+    if (journey_stop(&problem) == Stop::Find) {
         if (g_screen != Screen::Home) {
             go(Screen::Home);
         }
@@ -2045,6 +2218,7 @@ static void create_ui(void)
     build_helm_page(g_page_helm);
     lv_obj_add_flag(g_page_helm, LV_OBJ_FLAG_HIDDEN);
 
+#if LMYC_WITH_REPORTS_CHARTS
     g_page_chart = lv_obj_create(scr);
     place_content(g_page_chart);
     lv_obj_set_style_bg_color(g_page_chart, lv_color_hex(0x000000), 0);
@@ -2116,6 +2290,7 @@ static void create_ui(void)
                    dismiss_rail);
     lv_obj_add_event_cb(g_page_book, on_dismiss_rail, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_flag(g_page_book, LV_OBJ_FLAG_HIDDEN);
+#endif
 
     g_page_diag = lv_obj_create(scr);
     place_content(g_page_diag);
@@ -2170,6 +2345,7 @@ static void create_ui(void)
     g_crumb_home = make_crumb_btn(g_topbar, "Home", on_show_home, kCrumbHomeX, kCrumbHomeW,
                                   &lv_font_montserrat_16);
     g_crumb_sep1 = crumb_sep(g_topbar, 500);
+#if LMYC_WITH_REPORTS_CHARTS
     g_crumb_reports = make_crumb_btn(g_topbar, "Reports", on_show_book, kCrumbReportsX,
                                      kCrumbReportsW, &lv_font_montserrat_14);
     lv_obj_add_flag(g_crumb_reports, LV_OBJ_FLAG_HIDDEN);
@@ -2181,6 +2357,7 @@ static void create_ui(void)
     g_crumb_photo = make_crumb_btn(g_topbar, "Photo", on_photo_crumb, kCrumbPhotoX,
                                    kCrumbPhotoW, &lv_font_montserrat_14);
     lv_obj_add_flag(g_crumb_photo, LV_OBJ_FLAG_HIDDEN);
+#endif
     g_crumb_leaf = lv_label_create(g_topbar);
     lv_label_set_text(g_crumb_leaf, "");
     lv_obj_set_pos(g_crumb_leaf, kCrumbReportsX, 18);
@@ -2202,16 +2379,22 @@ static void create_ui(void)
     lv_obj_clear_flag(g_rail, LV_OBJ_FLAG_SCROLLABLE);
 
     g_rail_home = rail_group(g_rail);
+#if LMYC_WITH_REPORTS_CHARTS
     make_rail_nav(g_rail_home, "Charts", "Last picture", 0x00B4A6, on_show_chart, 8);
     make_rail_nav(g_rail_home, "Reports", "Open items", 0x00B4A6, on_show_book, 112);
     make_rail_nav(g_rail_home, "Instruments", "Depth and wind", 0x00B4A6, on_show_helm, 216);
     make_rail_nav(g_rail_home, "Diagnostics", "Radio and card", 0x5C7080, on_show_diag, 320);
+#else
+    make_rail_nav(g_rail_home, "Instruments", "Depth and wind", 0x00B4A6, on_show_helm, 8);
+    make_rail_nav(g_rail_home, "Diagnostics", "Radio and Wi-Fi", 0x5C7080, on_show_diag, 112);
+#endif
 
     g_rail_instr = rail_group(g_rail);
     lv_obj_t *gnss_btn = rail_action(g_rail_instr, "GNSS off", on_toggle_gnss, 8);
     g_gnss_btn_lbl = lv_obj_get_child(gnss_btn, 0);
     lv_obj_add_flag(g_rail_instr, LV_OBJ_FLAG_HIDDEN);
 
+#if LMYC_WITH_REPORTS_CHARTS
     g_rail_reports = rail_group(g_rail);
     g_rail_debug = rail_action(g_rail_reports, "Debug", on_book_debug, 8);
     g_rail_items = rail_action(g_rail_reports, "Items", on_book_items, 8);
@@ -2223,6 +2406,7 @@ static void create_ui(void)
     g_chart_next = rail_action(g_rail_charts, "Next photo", on_next_book_photo, 60);
     lv_obj_add_flag(g_chart_next, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(g_rail_charts, LV_OBJ_FLAG_HIDDEN);
+#endif
 
     g_rail_diag = rail_group(g_rail);
     rail_action(g_rail_diag, "Reset BLE", on_reset_ble, 8);
@@ -2328,15 +2512,19 @@ void setup()
     create_ui();
     lvgl_port_unlock();
 
+#if LMYC_WITH_REPORTS_CHARTS
     {
         auto *expander_dev = g_board->getIO_Expander();
         sd_card_init(expander_dev != nullptr ? expander_dev->getBase() : nullptr);
     }
+#endif
     nmea_init();
     nmea_state_init();
     nmea_io_init();
     inject_init();
+#if LMYC_WITH_REPORTS_CHARTS
     snapshot_init();
+#endif
     gateway_init();
     hub_http_init();
     nmea_set_sink(on_nmea_sentence, nullptr);
@@ -2366,6 +2554,7 @@ void setup()
 void loop()
 {
     lvgl_port_handle();
+#if LMYC_WITH_REPORTS_CHARTS
     if (maint_ui_photo_pending()) {
         maint_ui_decode_queued_photo();
         if (lvgl_port_lock(-1)) {
@@ -2379,6 +2568,7 @@ void loop()
             lvgl_port_unlock();
         }
     }
+#endif
 
     net_wifi_poll();
 

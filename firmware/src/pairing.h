@@ -31,6 +31,10 @@ uint32_t pairing_write_count(void);
 uint32_t pairing_read_count(void);
 bool pairing_ble_ok(void);
 bool pairing_is_confirmed(void);
+/* A phone holds the Bluetooth link, paired or not. */
+bool pairing_is_connected(void);
+/* A paired phone read the hotspot details since boot. */
+bool pairing_wifi_shared(void);
 void pairing_set_status(const char *status);
 void pairing_restart_advertising(void);
 

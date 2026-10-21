@@ -1,15 +1,18 @@
 #include "hub_http.h"
 
+#include "boat_config.h"
 #include "inject.h"
 #include "json_lite.h"
-#include "maint_store.h"
 #include "nmea.h"
 #include "pairing.h"
-#include "snapshot.h"
 #include "terminal_stats.h"
 #include "gateway.h"
 
+#if LMYC_WITH_REPORTS_CHARTS
 #include <SD.h>
+#include "maint_store.h"
+#include "snapshot.h"
+#endif
 
 #include <Arduino.h>
 #include <esp_http_server.h>
@@ -19,7 +22,9 @@
 
 static httpd_handle_t g_httpd = nullptr;
 static char g_last_err[48] = "";
+#if LMYC_WITH_REPORTS_CHARTS
 static uint32_t g_last_snap_ms = 0;
+#endif
 
 const char *hub_http_last_error(void) { return g_last_err; }
 
@@ -160,10 +165,14 @@ static const char kIndexHtml[] =
     "<ol><li>Join Wi-Fi <code>LMYC-" LMYC_BOAT_ID "</code></li>"
     "<li>Navionics → Menu → Connected Devices → Add device</li>"
     "<li>TCP <code>192.168.4.1:10110</code> (or UDP 10110 / 2000)</li></ol>"
+#if LMYC_WITH_REPORTS_CHARTS
     "<p>POST JPEG to <code>/snapshot</code> (800×480, ≤220 KB). "
     "POST NMEA to <code>/inject</code> only when the 7″ shows GNSS LOCAL.</p>"
     "<p>This boat's maintenance book is <code>GET /maintenance</code>. "
     "It is on the card and does not need cell service.</p>"
+#else
+    "<p>POST NMEA to <code>/inject</code> only when the 7″ shows GNSS LOCAL.</p>"
+#endif
     "</body></html>";
 
 static esp_err_t get_root(httpd_req_t *req)
@@ -188,11 +197,17 @@ static esp_err_t get_status(httpd_req_t *req)
              static_cast<unsigned long>(nmea_good_count()),
              static_cast<unsigned long>(nmea_bad_count()),
              inject_local_armed() ? "true" : "false",
-             snapshot_has_image() ? "true" : "false", data);
+#if LMYC_WITH_REPORTS_CHARTS
+             snapshot_has_image() ? "true" : "false",
+#else
+             "false",
+#endif
+             data);
     httpd_resp_set_type(req, "application/json");
     return trace.ok(httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN));
 }
 
+#if LMYC_WITH_REPORTS_CHARTS
 static esp_err_t post_snapshot(httpd_req_t *req)
 {
     HttpTrace trace(req);
@@ -237,6 +252,8 @@ static esp_err_t post_snapshot(httpd_req_t *req)
     return trace.ok(httpd_resp_sendstr(req, "OK\n"));
 }
 
+#endif /* LMYC_WITH_REPORTS_CHARTS */
+
 static esp_err_t post_inject(httpd_req_t *req)
 {
     HttpTrace trace(req);
@@ -273,6 +290,7 @@ static esp_err_t post_inject(httpd_req_t *req)
     return trace.ok(httpd_resp_sendstr(req, resp));
 }
 
+#if LMYC_WITH_REPORTS_CHARTS
 static bool query_id(httpd_req_t *req, char *id, size_t cap)
 {
     char query[80];
@@ -634,6 +652,8 @@ static esp_err_t post_maintenance_reconcile(httpd_req_t *req)
     return trace.ok(httpd_resp_sendstr(req, resp));
 }
 
+#endif /* LMYC_WITH_REPORTS_CHARTS */
+
 static esp_err_t on_not_found(httpd_req_t *req, httpd_err_code_t err)
 {
     HttpTrace trace(req);
@@ -668,11 +688,15 @@ void hub_http_start(void)
     static httpd_uri_t status = {
         .uri = "/status.json", .method = HTTP_GET, .handler = get_status,
         .user_ctx = nullptr};
-    static httpd_uri_t snap = {
-        .uri = "/snapshot", .method = HTTP_POST, .handler = post_snapshot,
-        .user_ctx = nullptr};
     static httpd_uri_t inj = {
         .uri = "/inject", .method = HTTP_POST, .handler = post_inject,
+        .user_ctx = nullptr};
+    httpd_register_uri_handler(g_httpd, &root);
+    httpd_register_uri_handler(g_httpd, &status);
+    httpd_register_uri_handler(g_httpd, &inj);
+#if LMYC_WITH_REPORTS_CHARTS
+    static httpd_uri_t snap = {
+        .uri = "/snapshot", .method = HTTP_POST, .handler = post_snapshot,
         .user_ctx = nullptr};
     static httpd_uri_t maint = {
         .uri = "/maintenance", .method = HTTP_GET, .handler = get_maintenance,
@@ -695,10 +719,7 @@ void hub_http_start(void)
     static httpd_uri_t maint_reconcile = {
         .uri = "/maintenance/reconcile", .method = HTTP_POST,
         .handler = post_maintenance_reconcile, .user_ctx = nullptr};
-    httpd_register_uri_handler(g_httpd, &root);
-    httpd_register_uri_handler(g_httpd, &status);
     httpd_register_uri_handler(g_httpd, &snap);
-    httpd_register_uri_handler(g_httpd, &inj);
     httpd_register_uri_handler(g_httpd, &maint);
     httpd_register_uri_handler(g_httpd, &maint_post);
     httpd_register_uri_handler(g_httpd, &maint_item);
@@ -706,7 +727,10 @@ void hub_http_start(void)
     httpd_register_uri_handler(g_httpd, &maint_photo_post);
     httpd_register_uri_handler(g_httpd, &maint_ack);
     httpd_register_uri_handler(g_httpd, &maint_reconcile);
+    Serial.println("hub_http: :80  GET /  GET /maintenance  POST /snapshot  POST /inject");
+#else
+    Serial.println("hub_http: :80  GET /  GET /status.json  POST /inject");
+#endif
     httpd_register_err_handler(g_httpd, HTTPD_404_NOT_FOUND, on_not_found);
     httpd_register_err_handler(g_httpd, HTTPD_405_METHOD_NOT_ALLOWED, on_not_found);
-    Serial.println("hub_http: :80  GET /  GET /maintenance  POST /snapshot  POST /inject");
 }

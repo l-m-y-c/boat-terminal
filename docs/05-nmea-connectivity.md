@@ -148,6 +148,12 @@ Chart apps each get an 8 KB output queue on the terminal. A non-blocking TCP sen
 
 The node does not transmit. The TWAI controller is installed in listen-only mode, and the library mode is `N2km_ListenOnly`. Preferred source address 22 is stored for the library and is **not** sent as an ISO Address Claim. `CANSendFrame` does not call `twai_transmit`. On bus-off the driver is uninstalled, GPIO20 is an input with pull-up (TJA1051 TXD high is recessive), and a later retry is still listen-only. Power loss leaves TXD high-Z; the transceiver's own TXD pull-up holds the bus recessive. On a bus-powered board a blown fuse or dead DC/DC also unpowers the TJA1051, and an unpowered TJA1051 disengages from the bus with zero load (NXP datasheet). Its TXD dominant time-out also releases the bus if TXD is ever stuck low.
 
+### Chart apps on a phone
+
+The terminal sends every sentence to TCP `192.168.4.1:10110` and as UDP broadcasts to `192.168.4.255` on ports 10110 and 2000. A laptop or tablet on the hotspot can use either directly. An Android phone with mobile data on cannot open TCP to `192.168.4.1`, because Android routes ordinary apps over mobile data while the hotspot has no internet. On a phone, chart apps are set to **UDP port 10110**, address `127.0.0.1` where the app asks for one. The LMYC app's relay holds the hotspot up and also serves TCP on `127.0.0.1:10110`. Why, and what was measured, is in [doc 06](06-phone-app-and-pairing.md#why-chart-apps-use-the-phone-itself).
+
+The terminal's own upstream Wi-Fi (`WIFI_SSID`) is optional. Every connect attempt scans all channels and takes the radio off the hotspot channel, which stalls chart apps and BLE, so an upstream network that is not there is tried three times and then left alone until the next restart. An empty `WIFI_SSID` runs the hotspot only.
+
 ### PGN to NMEA 0183
 
 Decoded in `firmware/src/n2k_to_0183.cpp` and pushed through the existing sentence sink, so TCP 10110 and BLE notify are unchanged. Instrument sentences are limited to about 1 Hz. AIS is forwarded as it arrives. Cached GNSS older than 3 s is dropped, not repeated, so a GPS that goes quiet stops sending a fix instead of freezing on its last one. Fields N2K reports as not available are left empty.

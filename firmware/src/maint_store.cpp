@@ -1,3 +1,6 @@
+#include "boat_config.h"
+#if LMYC_WITH_REPORTS_CHARTS
+
 #include "maint_store.h"
 
 #include "json_lite.h"
@@ -542,3 +545,5 @@ void maint_store_photo_abort(void)
     g_photo_n = 0;
     g_photo_tmp[0] = '\0';
 }
+
+#endif /* LMYC_WITH_REPORTS_CHARTS */

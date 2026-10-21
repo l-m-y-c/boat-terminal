@@ -8,12 +8,14 @@ PlatformIO project for the **interactive cabin terminal**:
 
 - Brings up the RGB panel, backlight (CH422G), and GT911 touch via **ESP32_Display_Panel**
 - Runs **LVGL v8** with the official port (`lvgl_v8_port`)
-- The top bar stays on every screen, including a maintenance photo. Left side: a position icon, a link icon, and a **QR** button, each 40 px. Tap one and the full line opens under the bar. Tap it again, tap the page, or change screen, and the line closes. The landing screen fills the page: the club logo on the left half, the pairing QR on the right. After the phone pairs, the QR parks and the QR button brings that same code back. Right side: **Home**, always in the same place, then the breadcrumb. **Home** always returns to the landing screen. In the book the path is **Reports**, then **Details**, then **Photo**. The step you are on is highlighted. **Reports** returns to the list. **Details** returns to that report. Screen buttons live on a rail at the right edge. Closed, a 44 px tab stays on the glass, marked `<`. Tap that tab, or swipe left on the page, and the rail slides out over the page. Swipe right closes it. With the rail shut, swipe right on a report moves to the next open report and wraps back to the first, and swipe right on a maintenance photo flips between the picture and its note. A vertical drag still scrolls the report. The full-text reader stays on that report. On the landing screen the rail is **Charts**, **Reports**, **Instruments**, and **Diagnostics**. Pairing stays on the landing screen. Instruments open from that rail, with or without a phone.
-- **Wi-Fi APSTA** — SoftAP `LMYC-<boat>` for the phone and Navionics, and STA to a configured LAN
+- **One build switch.** `LMYC_WITH_REPORTS_CHARTS` in `src/boat_config.h` is `0` by default: instruments, the data source, and the NMEA repeater to chart apps. `1` adds the maintenance book (**Reports**), the chart picture (**Charts**), the TF card store, and their HTTP routes. Pass `-DLMYC_WITH_REPORTS_CHARTS=1` (for example `PLATFORMIO_BUILD_FLAGS="-DLMYC_WITH_REPORTS_CHARTS=1" pio run`) to build them.
+- **Landing screen = the journey.** The same four stops as the phone app across the top: **Find**, **Connect**, **Wi-Fi**, **Chart data**. Done stops are ticked green, the current one is ringed, a problem is red. Under it, one title and one sentence on the left, and the pairing QR on the right while a phone has to scan it (the club logo otherwise). Arrival reads **On board <boat>** once a phone is on the hotspot and the LMYC app's relay is connected to TCP 10110; it does not need Bluetooth. The **QR** chip on the top bar brings the code back for another phone. See [doc 06](../docs/06-phone-app-and-pairing.md#the-journey).
+- The top bar stays on every screen. Left: a position icon, a link icon, and the **QR** chip, each 40 px; tap one and the full line opens under the bar. Right: **Home**, then the page name. Screen buttons live on a rail at the right edge behind a 44 px `<` tab; tap it or swipe left. On the landing screen the rail is **Instruments** and **Diagnostics** (plus **Charts** and **Reports** in the full build).
+- **Wi-Fi** — SoftAP `LMYC-<boat>` for phones and chart apps, and optionally STA to a configured LAN
 - **BLE GATT peripheral** + on-screen QR (`lmyc://pair?...`) for the pairing bootstrap
 - Advertises as `LMYC-xxxx`. The **complete local name is in the primary advertising packet** (the 128-bit LMYC UUID is only in the scan response). Android Settings often still hide LE-only devices — use the LMYC app **Find terminals**.
 - **Diagnostics** is its own page (radio, card, Wi-Fi, heap, NMEA). **Reset BLE** is the top button on that screen's rail
-- **MicroSD (TF slot)** — mount FAT32 card (exFAT will not work)
+- **MicroSD (TF slot)**, full build only — mount FAT32 card (exFAT will not work)
 - Credentials live in `src/secrets.h` (gitignored). Copy `src/secrets.h.example`.
 
 Bench pairing is Discover or QR + BLE OOB via the Flutter app in `../mobile`. Instrument data comes from one of two sources, chosen on the glass and saved: a **simulator** (a virtual NMEA 2000 bus) or the boat's **NMEA 2000** backbone, listen-only. The top bar says which on every screen. Data goes out on TCP **10110**, UDP 10110/2000, and BLE notify `…000030`. Real RS485 listen is TODO(slice-d).
@@ -55,6 +57,7 @@ Leave the cable in the UART socket once the program is running. Opening the USB-
 
 The panel stays up when LVGL is fed the way the first firmware did (`964d690`), confirmed on the bench on 2026-10-01:
 
+- LVGL's own heap is PSRAM too (`src/lv_mem_psram.h`). Widgets are small allocations, which the IDF keeps in internal RAM, and every page is built at boot; in internal RAM they took about 96 KB that BLE and Wi-Fi need. With Bluetooth up, about 180 KB of internal RAM is left before Wi-Fi starts.
 - Two draw buffers in PSRAM, 40 rows tall (`LVGL_PORT_BUFFER_MALLOC_CAPS` / `LVGL_PORT_BUFFER_SIZE_HEIGHT` in `src/lvgl_v8_port.h`).
 - `lvgl_port_handle()` from `loop()` on the same core that called `Board::begin()`. No LVGL task.
 - `create_ui()` runs before the TF card, BLE, and Wi-Fi.
@@ -112,6 +115,7 @@ firmware/
 │   ├── maint_ui.*          # Open-item picker, item detail, photo thumbnails
 │   ├── lmyc_logo.c / .h    # Logo as LVGL RGB565+A image
 │   ├── lvgl_v8_port.*      # Official LVGL port
+│   ├── lv_mem_psram.h      # LVGL heap in PSRAM, internal RAM only as a fallback
 │   ├── lv_conf.h
 │   ├── esp_panel_*_conf.h  # Board = Waveshare ESP32-S3-Touch-LCD-7
 │   └── esp_utils_conf.h
@@ -143,16 +147,17 @@ The terminal runs **APSTA**: SoftAP `LMYC-<boat>` (password `AP_PASSWORD` in `se
 | TCP **192.168.4.1:10110** | Navionics / OpenCPN / `nc` |
 | UDP 10110 and 2000 | Broadcast of the same sentences |
 | `http://192.168.4.1/` | How-to page |
-| `POST /snapshot` | 800×480 JPEG, ≤220 KB, 1 fps. Show with **Charts** on the right-hand rail |
+| `GET /status.json` | Boat id, delivery counters, and the data-source statistics |
+| `POST /snapshot` | Full build. 800×480 JPEG, ≤220 KB, 1 fps. Show with **Charts** on the right-hand rail |
 | `POST /inject` | Phone GNSS RMC/GGA — only if the 7″ **GNSS LOCAL** button is armed |
-| `GET /maintenance` | This boat's maintenance book on the TF card (no cell required) |
+| `GET /maintenance` | Full build. This boat's maintenance book on the TF card (no cell required) |
 | `POST /maintenance` | File a pending item (`title`, `category`, `priority`, `description`) |
 | `GET /maintenance/item?id=` | One `item.json` |
 | `GET` or `POST /maintenance/photo?id=&n=` | JPEG `n` (1–5), up to 500 KB. Optional `note` (120 characters) is stored as `noteN` on the item. The phone keeps the long edge near 2000 px |
 | `POST /maintenance/ack?id=` | JSON `{"wp_id":N}` after the club accepts the item. Sets `sync` to `synced` |
 | `POST /maintenance/reconcile` | Apply one club edit. The website `modified` time wins. A pending boat note is left unchanged |
 
-**Reports** on the rail lists open items (completed and future-wishlist are skipped). The list is one screen: a header names Title, Category, and Priority, and each row is one line in those columns. A camera mark in its own column means that report has photos. Opening Reports reads the open items from the card once and keeps that copy in RAM until the phone writes the book. The photos themselves are decoded from the card when a report is opened. A long title or category ends in an ellipsis. Priority is a chip with the word on it: Critical and High are amber, Medium is teal, Low is gray. A mounted card with nothing open says **No open reports**. An empty slot says **No card in the slot**. Tap a row for that item. The item is wells: the field name is small and gray, the value is white. Category, priority, status, and reporter sit in a two-by-two band, and priority uses the same chip. The description well shows about four lines. The page scrolls, and that is the only scrollbar. When the title or the description is longer than its well, tap it. A reader covers the page with the full text and its own scroll. **Close** returns to the same report. Swipe right on that page for the next open report, wrapping after the last. One report stays put, and the reader stays on its report. Photos stack under that. Each picture takes half the width and keeps its shape. The note fills a well of the same height beside it, clipped when it is long. Tap the picture to open that JPEG on the whole glass, on the picture. Tap the note to open it already on the note. Swipe right to move between the photo and the note; the two keep rotating. Swipe left opens the rail. The note screen says **No note for this photo** when none was stored. **Back** on the chart rail returns to the item and does not reload the list. **Next photo** steps through that item and lands back on the picture. **Items** on the reports rail returns to the list. The breadcrumb reads **Reports** on the list, **Reports > Details** on a report, and **Reports > Details > Photo** on a picture. **Reports** reloads the list. **Details** returns to the open report. **Home** in the top bar always returns to the landing screen. **Debug** on the reports rail lists the last HTTP requests. The chart snapshot and the book share one canvas: opening a maintenance photo replaces the chart image until the next snapshot arrives. **Charts** from home shows that snapshot fitted to the page, as one picture, and **Back** returns home.
+The `/maintenance` routes and **Reports** are in the full build only. **Reports** on the rail lists open items (completed and future-wishlist are skipped). The list is one screen: a header names Title, Category, and Priority, and each row is one line in those columns. A camera mark in its own column means that report has photos. Opening Reports reads the open items from the card once and keeps that copy in RAM until the phone writes the book. The photos themselves are decoded from the card when a report is opened. A long title or category ends in an ellipsis. Priority is a chip with the word on it: Critical and High are amber, Medium is teal, Low is gray. A mounted card with nothing open says **No open reports**. An empty slot says **No card in the slot**. Tap a row for that item. The item is wells: the field name is small and gray, the value is white. Category, priority, status, and reporter sit in a two-by-two band, and priority uses the same chip. The description well shows about four lines. The page scrolls, and that is the only scrollbar. When the title or the description is longer than its well, tap it. A reader covers the page with the full text and its own scroll. **Close** returns to the same report. Swipe right on that page for the next open report, wrapping after the last. One report stays put, and the reader stays on its report. Photos stack under that. Each picture takes half the width and keeps its shape. The note fills a well of the same height beside it, clipped when it is long. Tap the picture to open that JPEG on the whole glass, on the picture. Tap the note to open it already on the note. Swipe right to move between the photo and the note; the two keep rotating. Swipe left opens the rail. The note screen says **No note for this photo** when none was stored. **Back** on the chart rail returns to the item and does not reload the list. **Next photo** steps through that item and lands back on the picture. **Items** on the reports rail returns to the list. The breadcrumb reads **Reports** on the list, **Reports > Details** on a report, and **Reports > Details > Photo** on a picture. **Reports** reloads the list. **Details** returns to the open report. **Home** in the top bar always returns to the landing screen. **Debug** on the reports rail lists the last HTTP requests. The chart snapshot and the book share one canvas: opening a maintenance photo replaces the chart image until the next snapshot arrives. **Charts** from home shows that snapshot fitted to the page, as one picture, and **Back** returns home.
 
 No RS485 TX. The simulator still provides depth and wind when GNSS is LOCAL.
 
@@ -187,10 +192,8 @@ Pairing GATT is `…000020` / `…000021`. After OOB OK, `…000040` serves the 
 
 ## Wi-Fi
 
-The firmware runs **APSTA**.
-
-- **SoftAP** `LMYC-<boat id>` lets a phone or chart app join when there is no marina network. The password is `AP_PASSWORD` in `secrets.h`. The LMYC app receives it over BLE `…000040` after pairing and asks Android to connect. Navionics joins the same SSID from Wi-Fi settings.
-- **STA** joins the bench or marina LAN from `WIFI_SSID` and `WIFI_PASSWORD`.
+- **SoftAP** `LMYC-<boat id>` is the boat Wi-Fi. The password is `AP_PASSWORD` in `secrets.h`. The LMYC app receives it over BLE `…000040` after pairing and saves it with Android's prompt. Chart apps on a phone use UDP 10110 (address `127.0.0.1` where asked) through the app; see [doc 06](../docs/06-phone-app-and-pairing.md#why-chart-apps-use-the-phone-itself).
+- **STA** (optional) joins a bench or marina LAN from `WIFI_SSID` and `WIFI_PASSWORD`. An empty `WIFI_SSID` runs the hotspot alone. Each connect attempt scans every channel and takes the radio off the hotspot channel, which stalls chart apps and BLE, so a network that is not there is tried three times and then left until the next restart (`Wi-Fi: uplink '<ssid>' not found, hotspot only until restart`).
 
 ```bash
 cp src/secrets.h.example src/secrets.h

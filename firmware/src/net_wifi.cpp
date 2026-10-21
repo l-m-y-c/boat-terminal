@@ -38,6 +38,11 @@ static volatile bool g_services_wanted = false;
 static char g_sta_ip[16] = "-";
 static char g_line[48] = "Starting...";
 static uint32_t g_backoff_ms = 1000;
+/* Every connect attempt scans all channels, and the scan takes the radio off
+ * the hotspot channel. Chart apps stall and BLE misses replies while it runs,
+ * so an uplink that is not there is tried a few times and then left alone. */
+static constexpr uint8_t kUplinkTries = 3;
+static volatile uint8_t g_uplink_fails = 0;
 static volatile uint32_t g_next_try_ms = 0;
 static bool g_services_started = false;
 
@@ -48,9 +53,15 @@ static void wifi_event_handler(void * /*arg*/, esp_event_base_t event_base,
         snprintf(g_line, sizeof(g_line), "Connecting...");
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        /* Do not hammer esp_wifi_connect() — that starves BLE advertising. */
         g_got_ip = false;
         strncpy(g_sta_ip, "-", sizeof(g_sta_ip));
+        if (++g_uplink_fails >= kUplinkTries) {
+            g_want_reconnect = false;
+            snprintf(g_line, sizeof(g_line), "AP only");
+            Serial.printf("Wi-Fi: uplink '%s' not found, hotspot only until restart\n",
+                          WIFI_SSID);
+            return;
+        }
         g_next_try_ms = millis() + g_backoff_ms;
         g_want_reconnect = true;
         snprintf(g_line, sizeof(g_line), "Retry %lus",
@@ -68,6 +79,7 @@ static void wifi_event_handler(void * /*arg*/, esp_event_base_t event_base,
         snprintf(g_sta_ip, sizeof(g_sta_ip), IPSTR, IP2STR(&event->ip_info.ip));
         g_got_ip = true;
         g_want_reconnect = false;
+        g_uplink_fails = 0;
         g_backoff_ms = 1000;
         snprintf(g_line, sizeof(g_line), "STA+AP");
         Serial.printf("Wi-Fi STA IP %s  AP %s\n", g_sta_ip, kSoftApIp);
@@ -78,7 +90,12 @@ static void wifi_event_handler(void * /*arg*/, esp_event_base_t event_base,
 void net_wifi_start(void)
 {
     snprintf(g_ap_ssid, sizeof(g_ap_ssid), "LMYC-%s", LMYC_BOAT_ID);
-    Serial.printf("Wi-Fi: AP '%s' + STA '%s'\n", g_ap_ssid, WIFI_SSID);
+    const bool uplink = WIFI_SSID[0] != '\0';
+    if (uplink) {
+        Serial.printf("Wi-Fi: AP '%s' + STA '%s'\n", g_ap_ssid, WIFI_SSID);
+    } else {
+        Serial.printf("Wi-Fi: AP '%s', no uplink\n", g_ap_ssid);
+    }
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -109,9 +126,11 @@ void net_wifi_start(void)
             sizeof(sta.sta.password));
     sta.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(uplink ? WIFI_MODE_APSTA : WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
+    if (uplink) {
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
+    }
     pairing_set_wifi_bootstrap(g_ap_ssid, AP_PASSWORD, kSoftApIp);
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
 #ifdef LMYC_HAS_COEX

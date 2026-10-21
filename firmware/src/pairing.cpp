@@ -47,6 +47,10 @@ static const char *g_status = g_status_buf;
 static bool g_ble_ok = false;
 static bool g_confirmed = false;
 static bool g_connected = false;
+/* A paired phone took the hotspot details this boot. Bluetooth may drop
+ * afterwards while the phone carries on over Wi-Fi, so this is not cleared
+ * on disconnect. */
+static bool g_wifi_shared = false;
 static bool g_got_payload_read = false;
 static bool g_got_session_write = false;
 static uint32_t g_connect_count = 0;
@@ -527,6 +531,9 @@ class WifiCallbacks : public NimBLECharacteristicCallbacks {
     {
         g_read_count++;
         publish_wifi_chr();
+        if (g_confirmed) {
+            g_wifi_shared = true;
+        }
         set_event(g_confirmed ? "wifi info read" : "wifi info withheld");
         Serial.println(g_confirmed ? "BLE: wifi bootstrap read" : "BLE: wifi bootstrap withheld");
     }
@@ -754,6 +761,8 @@ uint32_t pairing_connect_count(void) { return g_connect_count; }
 uint32_t pairing_write_count(void) { return g_write_count; }
 uint32_t pairing_read_count(void) { return g_read_count; }
 bool pairing_ble_ok(void) { return g_ble_ok; }
+bool pairing_is_connected(void) { return g_connected; }
+bool pairing_wifi_shared(void) { return g_wifi_shared; }
 bool pairing_is_confirmed(void) { return g_confirmed; }
 
 void pairing_set_status(const char *status)
