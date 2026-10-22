@@ -67,7 +67,7 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
   void initState() {
     super.initState();
     _ipController.text = BoatSession.joined
-        ? BoatSession.ip
+        ? kTerminalHttpHost
         : (widget.suggestedIp?.isNotEmpty == true
               ? widget.suggestedIp!
               : '192.168.4.1');
@@ -339,9 +339,10 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
         children: [
           Text(
             BoatSession.joined
-                ? 'This phone is on ${BoatSession.ssid}. Read Book uses ${BoatSession.ip}. '
+                ? 'Connected to ${BoatSession.ssid}. Read Book goes through this app '
+                      'at $kTerminalHttpHost, so club sync keeps the phone\'s internet. '
                       'Photos are saved on the boat. Leave Club API blank and the note stays pending.'
-                : 'Pair first. The app then joins the boat Wi-Fi, and Read Book uses that link. '
+                : 'Pair first. The app then joins the boat Wi-Fi, and Read Book goes through it. '
                       'Or type a stand-in address (host and port, no http://). '
                       'Leave Club API blank and the note stays pending.',
             style: const TextStyle(height: 1.4),

@@ -110,6 +110,8 @@ Saving the network for the whole phone was tried first and dropped for those rea
 
 The terminal's own UDP broadcasts arrive on a network that belongs to the LMYC app, so other apps never see them; the loopback datagrams are what chart apps receive. Two chart apps cannot listen on the same UDP port, so the relay also sends to port 2000 for a second one, though Android pauses the app that is not on screen anyway. Everything depends on the relay running: Leave the boat, or stopping it from its notification, ends the feed.
 
+The app's own HTTP to the terminal (`/status.json`, and the maintenance book in the full build) would also go out over mobile data, so the relay forwards `127.0.0.1:10180` to the terminal's port 80 over the boat link. The book uses that address; club sync to lmyc.ca keeps the phone's internet. The Sentences console reads TCP through `127.0.0.1:10110` the same way.
+
 ## Suggested Feature Set (v1)
 
 **Core**

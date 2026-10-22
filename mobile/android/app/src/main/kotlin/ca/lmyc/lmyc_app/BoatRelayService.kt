@@ -40,6 +40,10 @@ import java.util.concurrent.TimeUnit
 class BoatRelayService : Service() {
     companion object {
         const val PORT = 10110
+
+        /** Loopback port forwarded to the terminal's web server, port 80. */
+        const val HTTP_PORT = 10180
+        private const val TERMINAL_HTTP_PORT = 80
         private const val CHANNEL = "boat_relay"
         private const val NOTIFICATION_ID = 4411
         private const val ACTION_STOP = "ca.lmyc.lmyc_app.STOP_RELAY"
@@ -102,6 +106,8 @@ class BoatRelayService : Service() {
     private var upstreamThread: Thread? = null
     private var serverThread: Thread? = null
     private var server: ServerSocket? = null
+    private var httpServer: ServerSocket? = null
+    private var httpThread: Thread? = null
     @Volatile private var upstreamSocket: Socket? = null
     private var shownState = ""
 
@@ -160,6 +166,7 @@ class BoatRelayService : Service() {
             }
             cm.requestNetwork(builder.build(), wifiCallback)
             serverThread = Thread(::serve, "relay-server").also { it.start() }
+            httpThread = Thread(::forwardHttp, "relay-http").also { it.start() }
             upstreamThread = Thread(::readTerminal, "relay-upstream").also { it.start() }
         }
         refresh()
@@ -175,11 +182,13 @@ class BoatRelayService : Service() {
         } catch (_: IllegalArgumentException) {
         }
         closeQuietly(server)
+        closeQuietly(httpServer)
         closeQuietly(upstreamSocket)
         for (c in clients) c.close()
         clients.clear()
         upstreamThread?.interrupt()
         serverThread?.interrupt()
+        httpThread?.interrupt()
         onBoat = false
         upstream = false
         listening = false
@@ -217,6 +226,68 @@ class BoatRelayService : Service() {
                 sleepQuietly(RETRY_MS)
             }
         }
+    }
+
+    /**
+     * The app's own HTTP to the terminal (the maintenance book, status.json)
+     * cannot go out over mobile data, so it comes in on 127.0.0.1:10180 and
+     * each connection is carried to port 80 over the boat network.
+     */
+    private fun forwardHttp() {
+        while (!stopping) {
+            try {
+                ServerSocket().use { s ->
+                    s.reuseAddress = true
+                    s.bind(InetSocketAddress(InetAddress.getLoopbackAddress(), HTTP_PORT))
+                    httpServer = s
+                    while (!stopping) {
+                        val local = s.accept()
+                        Thread({ carry(local) }, "relay-http-conn").start()
+                    }
+                }
+            } catch (_: IOException) {
+                sleepQuietly(RETRY_MS)
+            }
+        }
+    }
+
+    private fun carry(local: Socket) {
+        val network = boatNetwork
+        val ip = target
+        if (network == null || ip == null) {
+            closeQuietly(local)
+            return
+        }
+        val remote = try {
+            network.socketFactory.createSocket().also {
+                it.connect(InetSocketAddress(ip, TERMINAL_HTTP_PORT), CONNECT_TIMEOUT_MS)
+            }
+        } catch (_: IOException) {
+            closeQuietly(local)
+            return
+        }
+        val back = Thread({ pump(remote, local) }, "relay-http-back")
+        back.start()
+        pump(local, remote)
+        back.join()
+    }
+
+    /** Copies until either side closes, then closes both. */
+    private fun pump(from: Socket, to: Socket) {
+        val buf = ByteArray(8192)
+        try {
+            val input = from.getInputStream()
+            val output = to.getOutputStream()
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                output.write(buf, 0, n)
+                output.flush()
+            }
+        } catch (_: IOException) {
+        }
+        closeQuietly(from)
+        closeQuietly(to)
     }
 
     /** One connection to the terminal over the boat network, kept open. */

@@ -18,7 +18,7 @@ See `../docs/06-phone-app-and-pairing.md` and `../docs/08-user-flows.md`.
 - **NMEA**: a foreground service, **Connected to the boat**, holds the boat Wi-Fi and repeats the terminal's stream on `127.0.0.1` (TCP 10110, and UDP datagrams to 10110 and 2000) (`android/app/src/main/kotlin/ca/lmyc/lmyc_app/BoatRelayService.kt`). Navionics and i-Boating use **UDP port 10110**, address `127.0.0.1` where asked, so mobile data stays on.
 - **On board**: the data-source pill, **Connect a chart app**, **Boat data** (BLE `…000050` counters), and **Leave the boat**.
 - **Diagnostics** behind the settings icon: link rows, Bluetooth detail, the **Sentences** console, Find a terminal.
-- The maintenance book and chart snapshot pages are still in the code but not reachable, matching the terminal's default build.
+- The maintenance book and chart snapshot pages are still in the code but not reachable, matching the terminal's default build. The book talks to the terminal through the relay's forward, `127.0.0.1:10180` to port 80, so club sync keeps the phone's internet.
 - Android `lmyc://` deep links and a paste-URI field; GATT connect and the raw 16-byte OOB write.
 
 **Do not use Android Settings → Bluetooth.** System Settings hide most LE-only peripherals. Use the app.

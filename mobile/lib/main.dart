@@ -1574,7 +1574,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   MaterialPageRoute<void>(
                     builder: (_) => NmeaConsolePage(
                       device: _device!,
-                      terminalIp: BoatSession.ip,
+                      terminalIp: kRelayHost,
                     ),
                   ),
                 );

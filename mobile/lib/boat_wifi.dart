@@ -16,6 +16,13 @@ class BoatWifiInfo {
 /// Loopback address chart apps use. The relay in this app serves it.
 const kRelayHost = '127.0.0.1';
 
+/// The relay forwards this loopback port to the terminal's web server, so
+/// the app's own HTTP to the boat does not go out over mobile data.
+const kRelayHttpPort = 10180;
+
+/// Where the app's HTTP to the terminal goes (maintenance book, status.json).
+const kTerminalHttpHost = '$kRelayHost:$kRelayHttpPort';
+
 /// Data older than this means the terminal went away. A quiet bus still
 /// sends the terminal's heartbeat every 15 s, so allow one and a margin.
 const kRelayStaleMs = 20000;

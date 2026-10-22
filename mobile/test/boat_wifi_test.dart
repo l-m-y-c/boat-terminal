@@ -155,6 +155,12 @@ void main() {
     });
   });
 
+  test('the app reaches the terminal web server through the relay', () {
+    final uri = Uri.http(kTerminalHttpHost, '/maintenance');
+    expect(uri.host, '127.0.0.1');
+    expect(uri.port, kRelayHttpPort);
+  });
+
   test('WAIT and a short passphrase are not a network', () {
     expect(parseWifiBootstrap('WAIT'), isNull);
     expect(parseWifiBootstrap('ERR'), isNull);
