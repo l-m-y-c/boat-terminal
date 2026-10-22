@@ -18,9 +18,17 @@ const _labels = {
 
 /// Four stops on a line: done ones ticked, the current one ringed.
 class JourneyBar extends StatelessWidget {
-  const JourneyBar({super.key, required this.current, this.problem = false});
+  const JourneyBar({
+    super.key,
+    required this.current,
+    this.problem = false,
+    this.compact = false,
+  });
 
   final JourneyStop current;
+
+  /// A slim strip once on board: the same stops, smaller.
+  final bool compact;
 
   /// The current stop needs the user before it can go on.
   final bool problem;
@@ -39,10 +47,10 @@ class JourneyBar extends StatelessWidget {
               if (i > 0)
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.only(bottom: 22),
+                    padding: EdgeInsets.only(bottom: compact ? 17 : 22),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 300),
-                      height: 3,
+                      height: compact ? 2 : 3,
                       color: stop.index <= current.index ? kGreen : kLine,
                     ),
                   ),
@@ -52,6 +60,7 @@ class JourneyBar extends StatelessWidget {
                 done: stop.index < current.index,
                 now: stop == current,
                 problem: problem && stop == current,
+                compact: compact,
               ),
             ],
           ],
@@ -67,12 +76,14 @@ class _Dot extends StatelessWidget {
     required this.done,
     required this.now,
     required this.problem,
+    this.compact = false,
   });
 
   final String label;
   final bool done;
   final bool now;
   final bool problem;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -89,13 +100,13 @@ class _Dot extends StatelessWidget {
         children: [
           AnimatedContainer(
             duration: const Duration(milliseconds: 300),
-            width: 30,
-            height: 30,
+            width: compact ? 20 : 30,
+            height: compact ? 20 : 30,
             decoration: BoxDecoration(
               color: done || problem ? color : Colors.white,
               shape: BoxShape.circle,
-              border: Border.all(color: color, width: now ? 3 : 2),
-              boxShadow: now && !problem
+              border: Border.all(color: color, width: now && !compact ? 3 : 2),
+              boxShadow: now && !problem && !compact
                   ? [
                       BoxShadow(
                         color: kNavy.withValues(alpha: 0.18),
@@ -111,18 +122,18 @@ class _Dot extends StatelessWidget {
                   : done
                   ? Icons.check
                   : Icons.circle,
-              size: done || problem ? 18 : 8,
+              size: done || problem ? (compact ? 13 : 18) : (compact ? 6 : 8),
               color: done || problem ? Colors.white : color,
             ),
           ),
-          const SizedBox(height: 6),
+          SizedBox(height: compact ? 3 : 6),
           Text(
             label,
             maxLines: 1,
             overflow: TextOverflow.fade,
             softWrap: false,
             style: TextStyle(
-              fontSize: 12.5,
+              fontSize: compact ? 11 : 12.5,
               fontWeight: now ? FontWeight.w700 : FontWeight.w500,
               color: now || done ? kNavy : Colors.black45,
             ),

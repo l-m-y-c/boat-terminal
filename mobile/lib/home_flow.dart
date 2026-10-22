@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'boat_wifi.dart';
 import 'maintenance_book.dart';
+import 'ui_kit.dart';
 
 /// Wi-Fi name, address, and the ports chart apps use.
 class NmeaInfoPage extends StatelessWidget {
@@ -25,28 +26,21 @@ class NmeaInfoPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final network = ssid.isEmpty ? 'Not received yet' : ssid;
     return Scaffold(
-      appBar: AppBar(title: const Text('Chart apps')),
+      appBar: AppBar(
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Chart apps'),
+            if (simulated) ...[
+              const SizedBox(width: 8),
+              const SimulationBadge(onDark: true),
+            ],
+          ],
+        ),
+      ),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          if (simulated) ...[
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFFB7791F).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: const Color(0xFFB7791F).withValues(alpha: 0.4),
-                ),
-              ),
-              child: const Text(
-                'The terminal is simulating a boat. Chart apps will show '
-                'simulated position, depth and wind, not the boat\'s.',
-                style: TextStyle(height: 1.4, color: Color(0xFF7A4F0E)),
-              ),
-            ),
-            const SizedBox(height: 20),
-          ],
           Text(
             onBoat
                 ? 'This phone is getting the boat data. Point the chart app at '
