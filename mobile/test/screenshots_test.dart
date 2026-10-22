@@ -8,14 +8,17 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmyc_app/app_settings.dart';
 import 'package:lmyc_app/boat_wifi.dart';
 import 'package:lmyc_app/counter_help.dart';
 import 'package:lmyc_app/diagnostics.dart';
 import 'package:lmyc_app/event_log.dart';
 import 'package:lmyc_app/instruments.dart';
 import 'package:lmyc_app/journey.dart';
+import 'package:lmyc_app/main.dart' show lmycTheme;
 import 'package:lmyc_app/nmea_data_page.dart';
 import 'package:lmyc_app/nmea_sentences.dart';
+import 'package:lmyc_app/settings_page.dart';
 import 'package:lmyc_app/terminal_stats.dart';
 import 'package:lmyc_app/ui_kit.dart';
 
@@ -50,19 +53,25 @@ const _json =
 
 /// The on-board shell as main.dart lays it out: title with badge, compact
 /// strip, the tab's content, and the bottom bar.
-Widget _shell(int tab, Widget body) => MaterialApp(
+ThemeData _theme(Brightness b) {
+  final t = lmycTheme(b);
+  return t.copyWith(
+    textTheme: t.textTheme.apply(fontFamily: 'Roboto'),
+    primaryTextTheme: t.primaryTextTheme.apply(fontFamily: 'Roboto'),
+  );
+}
+
+Widget _shell(
+  int tab,
+  Widget body, {
+  Brightness brightness = Brightness.light,
+}) => MaterialApp(
   debugShowCheckedModeBanner: false,
-  theme: ThemeData(
-    fontFamily: 'Roboto',
-    colorScheme: ColorScheme.fromSeed(seedColor: kNavy),
-    appBarTheme: const AppBarTheme(
-      centerTitle: true,
-      backgroundColor: kNavy,
-      foregroundColor: Colors.white,
-    ),
-  ),
+  theme: _theme(brightness),
   home: Scaffold(
-    backgroundColor: const Color(0xFFF7F9FB),
+    backgroundColor: brightness == Brightness.dark
+        ? Palette.dark.page
+        : Palette.light.page,
     appBar: AppBar(
       title: const BoatTitle(name: 'BENCH-01', simulated: true),
       actions: [
@@ -257,6 +266,76 @@ void main() {
     await expectLater(
       find.byType(MaterialApp),
       matchesGoldenFile('screenshots/diagnostics_failing.png'),
+    );
+  });
+
+  for (final dark in [false, true]) {
+    final b = dark ? Brightness.dark : Brightness.light;
+    final suffix = dark ? '_dark' : '';
+    testWidgets('settings$suffix', skip: !_enabled, (tester) async {
+      await phone(tester);
+      final settings = AppSettings()..themeMode = ThemeMode.light;
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: _theme(b),
+          home: SettingsPage(
+            settings: settings,
+            savedBoat: 'BENCH-01',
+            onForget: () async {},
+            terminalId: 'T-0001',
+            onOpenDiagnostics: () {},
+            version: '0.3.0 (3)',
+          ),
+        ),
+      );
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('screenshots/settings$suffix.png'),
+      );
+      await tester.drag(
+        find.byKey(const ValueKey('settings')),
+        const Offset(0, -1500),
+      );
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('screenshots/settings_lower$suffix.png'),
+      );
+    });
+  }
+
+  testWidgets('diagnostics dark', skip: !_enabled, (tester) async {
+    await phone(tester);
+    await tester.pumpWidget(
+      _shell(
+        3,
+        DiagnosticsView(snapshot: diag(), log: sampleLog()),
+        brightness: Brightness.dark,
+      ),
+    );
+    await expectLater(
+      find.byType(MaterialApp),
+      matchesGoldenFile('screenshots/diagnostics_dark.png'),
+    );
+  });
+
+  testWidgets('nmea data dark', skip: !_enabled, (tester) async {
+    await phone(tester);
+    await tester.pumpWidget(
+      _shell(
+        2,
+        NmeaDataView(
+          stats: TerminalStats.parse(_json),
+          updatedAt: null,
+          supported: true,
+        ),
+        brightness: Brightness.dark,
+      ),
+    );
+    await expectLater(
+      find.byType(MaterialApp),
+      matchesGoldenFile('screenshots/nmea_data_dark.png'),
     );
   });
 }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'ui_kit.dart';
+
 /// The stops between opening the app and chart apps showing the boat.
 enum JourneyStop { find, connect, wifi, charts, arrived }
 
@@ -51,7 +53,9 @@ class JourneyBar extends StatelessWidget {
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 300),
                       height: compact ? 2 : 3,
-                      color: stop.index <= current.index ? kGreen : kLine,
+                      color: stop.index <= current.index
+                          ? kGreen
+                          : Palette.of(context).line,
                     ),
                   ),
                 ),
@@ -92,8 +96,8 @@ class _Dot extends StatelessWidget {
         : done
         ? kGreen
         : now
-        ? kNavy
-        : Colors.black26;
+        ? Palette.of(context).ink
+        : Palette.of(context).faint;
     return SizedBox(
       width: 64,
       child: Column(
@@ -103,7 +107,7 @@ class _Dot extends StatelessWidget {
             width: compact ? 20 : 30,
             height: compact ? 20 : 30,
             decoration: BoxDecoration(
-              color: done || problem ? color : Colors.white,
+              color: done || problem ? color : Palette.of(context).card,
               shape: BoxShape.circle,
               border: Border.all(color: color, width: now && !compact ? 3 : 2),
               boxShadow: now && !problem && !compact
@@ -135,7 +139,9 @@ class _Dot extends StatelessWidget {
             style: TextStyle(
               fontSize: compact ? 11 : 12.5,
               fontWeight: now ? FontWeight.w700 : FontWeight.w500,
-              color: now || done ? kNavy : Colors.black45,
+              color: now || done
+                  ? Palette.of(context).ink
+                  : Palette.of(context).faint,
             ),
           ),
         ],
@@ -175,6 +181,7 @@ class JourneyPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tone = this.tone == kNavy ? Palette.of(context).ink : this.tone;
     return LayoutBuilder(
       builder: (context, box) => SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(28, 8, 28, 24),
@@ -199,15 +206,17 @@ class JourneyPanel extends StatelessWidget {
               Text(
                 title,
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.headlineSmall
-                    ?.copyWith(fontWeight: FontWeight.w700, color: kNavy),
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: Palette.of(context).ink,
+                ),
               ),
               const SizedBox(height: 10),
               Text(
                 body,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyLarge
-                    ?.copyWith(color: Colors.black54, height: 1.45),
+                    ?.copyWith(color: Palette.of(context).muted, height: 1.45),
               ),
               if (working || progress != null) ...[
                 const SizedBox(height: 26),
@@ -216,7 +225,7 @@ class JourneyPanel extends StatelessWidget {
                   child: LinearProgressIndicator(
                     value: progress,
                     minHeight: 6,
-                    backgroundColor: kLine,
+                    backgroundColor: Palette.of(context).line,
                     color: tone,
                   ),
                 ),
@@ -251,7 +260,9 @@ class PrimaryButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = FilledButton.styleFrom(
-      backgroundColor: kNavy,
+      backgroundColor: Theme.of(context).brightness == Brightness.dark
+          ? const Color(0xFF2F5D8C)
+          : kNavy,
       minimumSize: const Size.fromHeight(52),
       textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -284,9 +295,9 @@ class SecondaryButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = OutlinedButton.styleFrom(
-      foregroundColor: kNavy,
+      foregroundColor: Palette.of(context).ink,
       minimumSize: const Size.fromHeight(50),
-      side: const BorderSide(color: kLine, width: 1.5),
+      side: BorderSide(color: Palette.of(context).line, width: 1.5),
       textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     );
@@ -324,10 +335,10 @@ class OptionTile extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Material(
-        color: Colors.white,
+        color: Palette.of(context).card,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: kLine, width: 1.5),
+          side: BorderSide(color: Palette.of(context).line, width: 1.5),
         ),
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
@@ -343,7 +354,7 @@ class OptionTile extends StatelessWidget {
                     color: kNavy.withValues(alpha: 0.07),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(icon, color: kNavy),
+                  child: Icon(icon, color: Palette.of(context).ink),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -352,17 +363,17 @@ class OptionTile extends StatelessWidget {
                     children: [
                       Text(
                         title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 16.5,
                           fontWeight: FontWeight.w600,
-                          color: kNavy,
+                          color: Palette.of(context).ink,
                         ),
                       ),
                       const SizedBox(height: 2),
                       Text(
                         subtitle,
-                        style: const TextStyle(
-                          color: Colors.black54,
+                        style: TextStyle(
+                          color: Palette.of(context).muted,
                           height: 1.3,
                         ),
                       ),
@@ -370,7 +381,7 @@ class OptionTile extends StatelessWidget {
                   ),
                 ),
                 trailing ??
-                    const Icon(Icons.chevron_right, color: Colors.black38),
+                    Icon(Icons.chevron_right, color: Palette.of(context).faint),
               ],
             ),
           ),

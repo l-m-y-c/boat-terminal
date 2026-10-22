@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
+import 'app_settings.dart';
 import 'boat_setup.dart';
 import 'boat_wifi.dart';
 import 'diagnostics.dart';
@@ -21,13 +23,33 @@ import 'nmea_console.dart';
 import 'pairing_link.dart';
 import 'protocol.dart';
 import 'qr_scan_page.dart';
+import 'settings_page.dart';
 import 'terminal_stats.dart';
 import 'ui_kit.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   EventLog.captureDebugPrint();
+  await AppSettings.instance.load();
   runApp(const LmycApp());
+}
+
+ThemeData lmycTheme(Brightness brightness) {
+  final dark = brightness == Brightness.dark;
+  final pal = dark ? Palette.dark : Palette.light;
+  return ThemeData(
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFF001F3F),
+      brightness: brightness,
+    ).copyWith(surface: pal.card),
+    useMaterial3: true,
+    scaffoldBackgroundColor: pal.page,
+    appBarTheme: AppBarTheme(
+      centerTitle: true,
+      backgroundColor: dark ? const Color(0xFF07152A) : const Color(0xFF001F3F),
+      foregroundColor: Colors.white,
+    ),
+  );
 }
 
 class LmycApp extends StatelessWidget {
@@ -35,22 +57,17 @@ class LmycApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'LMYC',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF001F3F),
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
-        appBarTheme: const AppBarTheme(
-          centerTitle: true,
-          backgroundColor: Color(0xFF001F3F),
-          foregroundColor: Colors.white,
-        ),
+    final settings = AppSettings.instance;
+    return ListenableBuilder(
+      listenable: settings,
+      builder: (context, _) => MaterialApp(
+        title: 'LMYC',
+        debugShowCheckedModeBanner: false,
+        theme: lmycTheme(Brightness.light),
+        darkTheme: lmycTheme(Brightness.dark),
+        themeMode: settings.themeMode,
+        home: const HomePage(),
       ),
-      home: const HomePage(),
     );
   }
 }
@@ -168,13 +185,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   /// Share of the auto-join countdown still to run, 1 down to 0.
   double _countdownLeft = 0;
-  static const _countdown = Duration(seconds: 5);
+  Duration get _countdown => AppSettings.instance.countdown;
+
+  /// Whether the screen is being held on for Instruments.
+  bool _wakeHeld = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    AppSettings.instance.addListener(_settingsChanged);
     unawaited(_startup());
+  }
+
+  void _settingsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Holds the screen on while Instruments shows, when the member asked.
+  void _syncWakelock(bool want) {
+    if (want == _wakeHeld) return;
+    _wakeHeld = want;
+    unawaited(WakelockPlus.toggle(enable: want).catchError((_) {}));
   }
 
   /// A QR link wins. Otherwise a phone that joined before looks for that boat.
@@ -528,7 +560,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           : 'Found ${hits.length} LMYC terminal(s).';
       _landing = hits.isEmpty ? _Landing.none : _Landing.choose;
     });
-    if (target != null) _startCountdown(target);
+    if (target != null && AppSettings.instance.autoJoin) {
+      _startCountdown(target);
+    }
   }
 
   List<_NearbyHit> _sortedHits() =>
@@ -1055,9 +1089,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final boat = _boatTitle;
     if (_splashShownFor == boat) return;
     _splashShownFor = boat;
-    _splashing = true;
-    _tab = OnBoardTab.boat;
+    _tab = OnBoardTab.values.byName(AppSettings.instance.startTab.name);
     _splashTimer?.cancel();
+    if (!AppSettings.instance.arrivalSplash) return;
+    _splashing = true;
     _splashTimer = Timer(kArrivalSplash, () {
       if (mounted) setState(() => _splashing = false);
     });
@@ -1065,6 +1100,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    AppSettings.instance.removeListener(_settingsChanged);
+    _syncWakelock(false);
     _statsTimer?.cancel();
     _splashTimer?.cancel();
     _stopWifiWatch();
@@ -1136,6 +1173,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       case BlePhase.idle:
         return 'Scan the QR code on the terminal';
     }
+  }
+
+  void _openSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (routeContext) => ListenableBuilder(
+          listenable: _ui,
+          builder: (_, _) => SettingsPage(
+            settings: AppSettings.instance,
+            savedBoat: _lastBoat == null
+                ? null
+                : TerminalName.parse(_lastBoat!).title,
+            onForget: _forgetBoat,
+            terminalId: _terminalId,
+            onOpenDiagnostics: _openStatus,
+          ),
+        ),
+      ),
+    );
   }
 
   void _openStatus() {
@@ -1262,11 +1318,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final stop = _stop;
     _noteArrival(stop);
     final onBoard = stop == JourneyStop.arrived && !_splashing;
+    _syncWakelock(
+      onBoard &&
+          _tab == OnBoardTab.instruments &&
+          AppSettings.instance.keepScreenOn,
+    );
     final contentKey = stop == JourneyStop.arrived
         ? (_splashing ? 'splash' : 'tabs')
         : '$stop/${_landing.name}/${_wifiSetup.name}';
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F9FB),
+      backgroundColor: Palette.of(context).page,
       appBar: AppBar(
         title: BoatTitle(
           name: _boatTitle,
@@ -1274,8 +1335,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         ),
         actions: [
           IconButton(
-            tooltip: 'Diagnostics',
-            onPressed: _openStatus,
+            tooltip: 'Settings',
+            onPressed: _openSettings,
             icon: const Icon(Icons.settings_outlined),
           ),
         ],
@@ -1444,14 +1505,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   ? 'One boat nearby'
                   : '${hits.length} boats nearby',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.headlineSmall
-                  ?.copyWith(fontWeight: FontWeight.w700, color: kNavy),
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: Palette.of(context).ink,
+              ),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'The closest is usually the boat you are on.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.black54, height: 1.4),
+              style: TextStyle(color: Palette.of(context).muted, height: 1.4),
             ),
             const SizedBox(height: 20),
             for (final (i, hit) in hits.indexed)
@@ -1624,7 +1687,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return GestureDetector(
       key: const ValueKey('arrival-splash'),
       behavior: HitTestBehavior.opaque,
-      onTap: () => _openTab(OnBoardTab.boat),
+      onTap: () => _openTab(
+        OnBoardTab.values.byName(AppSettings.instance.startTab.name),
+      ),
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1642,14 +1707,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             Text(
               'On board $_boatTitle',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.headlineSmall
-                  ?.copyWith(fontWeight: FontWeight.w700, color: kNavy),
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: Palette.of(context).ink,
+              ),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Chart apps on this phone can get the boat\'s data.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.black54, fontSize: 16),
+              style: TextStyle(color: Palette.of(context).muted, fontSize: 16),
             ),
           ],
         ),
@@ -1746,7 +1813,7 @@ class BoatTabView extends StatelessWidget {
       children: [
         if (fault || quiet) ...[
           NoticeBox(
-            color: fault ? kRed : Colors.black54,
+            color: fault ? kRed : Palette.of(context).muted,
             text: fault
                 ? 'Connected, but the boat\'s NMEA 2000 bus has a fault.'
                 : 'Connected. Waiting for data from the boat\'s instruments.',
@@ -1755,7 +1822,7 @@ class BoatTabView extends StatelessWidget {
         ],
         if (!linked) ...[
           NoticeBox(
-            color: Colors.black54,
+            color: Palette.of(context).muted,
             text: 'Bluetooth to the terminal dropped. Chart apps keep working.',
             action: TextButton(
               onPressed: onReconnect,

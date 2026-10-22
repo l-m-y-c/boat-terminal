@@ -6,9 +6,6 @@ import 'counter_help.dart';
 import 'terminal_stats.dart';
 import 'ui_kit.dart';
 
-const _navy = Color(0xFF001F3F);
-const _border = Color(0xFFE2E8F0);
-
 Color toneColor(Tone tone) => switch (tone) {
   Tone.good => const Color(0xFF1E7F5C),
   Tone.caution => const Color(0xFFB7791F),
@@ -174,13 +171,16 @@ class NmeaDataView extends StatelessWidget {
               child: DataStatusPill(stats: s),
             ),
             const SizedBox(width: 12),
-            const Expanded(
+            Expanded(
               child: Text(
                 'Tap a panel for help',
                 textAlign: TextAlign.right,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: Colors.black45, fontSize: 12.5),
+                style: TextStyle(
+                  color: Palette.of(context).faint,
+                  fontSize: 12.5,
+                ),
               ),
             ),
           ],
@@ -252,7 +252,7 @@ class NmeaDataView extends StatelessWidget {
         Text(
           'Terminal up ${formatUptime(s.uptimeSeconds)} · '
           'last frame ${formatAge(s.lastFrameAgeMs)}$updated',
-          style: const TextStyle(color: Colors.black45, fontSize: 13),
+          style: TextStyle(color: Palette.of(context).faint, fontSize: 13),
         ),
       ],
     );
@@ -322,7 +322,7 @@ class _Metric extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = tone == null ? _navy : toneColor(tone!);
+    final color = tone == null ? Palette.of(context).ink : toneColor(tone!);
     return _Tappable(
       helpKey: helpKey,
       label: label,
@@ -337,10 +337,17 @@ class _Metric extends StatelessWidget {
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.black54, fontSize: 12.5),
+                  style: TextStyle(
+                    color: Palette.of(context).muted,
+                    fontSize: 12.5,
+                  ),
                 ),
               ),
-              const Icon(Icons.info_outline, size: 14, color: Colors.black26),
+              Icon(
+                Icons.info_outline,
+                size: 14,
+                color: Palette.of(context).faint,
+              ),
             ],
           ),
           const SizedBox(height: 4),
@@ -394,9 +401,9 @@ class _BufferBar extends StatelessWidget {
             children: [
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w600,
-                  color: _navy,
+                  color: Palette.of(context).ink,
                 ),
               ),
               const Spacer(),
@@ -415,14 +422,14 @@ class _BufferBar extends StatelessWidget {
             child: LinearProgressIndicator(
               value: share,
               minHeight: 8,
-              backgroundColor: const Color(0xFFE2E8F0),
+              backgroundColor: Palette.of(context).line,
               color: toneColor(tone),
             ),
           ),
           const SizedBox(height: 8),
           Text(
             detail,
-            style: const TextStyle(color: Colors.black54, fontSize: 13),
+            style: TextStyle(color: Palette.of(context).muted, fontSize: 13),
           ),
         ],
       ),
@@ -448,13 +455,13 @@ class _Tappable extends StatelessWidget {
   Widget build(BuildContext context) {
     final shape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(14),
-      side: const BorderSide(color: _border),
+      side: BorderSide(color: Palette.of(context).line),
     );
     return Semantics(
       button: true,
       hint: 'What is $label?',
       child: Material(
-        color: Colors.white,
+        color: Palette.of(context).card,
         shape: shape,
         child: InkWell(
           key: ValueKey('metric-$helpKey'),

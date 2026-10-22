@@ -12,11 +12,12 @@ Future<void> showInfoSheet(
   Color tone = kNavy,
   Widget? footer,
 }) {
+  if (tone == kNavy) tone = Palette.of(context).ink;
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    backgroundColor: Colors.white,
+    backgroundColor: Palette.of(context).card,
     builder: (sheetContext) => SafeArea(
       child: ConstrainedBox(
         constraints: BoxConstraints(
@@ -36,7 +37,10 @@ Future<void> showInfoSheet(
                     child: Text(
                       title,
                       style: Theme.of(sheetContext).textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700, color: kNavy),
+                          ?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: Palette.of(context).ink,
+                          ),
                     ),
                   ),
                 ],
@@ -45,10 +49,10 @@ Future<void> showInfoSheet(
                 const SizedBox(height: 12),
                 Text(
                   p,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 15,
                     height: 1.45,
-                    color: Colors.black87,
+                    color: Palette.of(context).body,
                   ),
                 ),
               ],
@@ -162,11 +166,11 @@ class SectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Text(
     text.toUpperCase(),
-    style: const TextStyle(
+    style: TextStyle(
       fontSize: 12,
       letterSpacing: 1.1,
       fontWeight: FontWeight.w700,
-      color: Colors.black45,
+      color: Palette.of(context).faint,
     ),
   );
 }

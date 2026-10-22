@@ -5,9 +5,11 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'app_settings.dart';
 import 'boat_wifi.dart';
 import 'journey.dart';
 import 'nmea_sentences.dart';
+import 'ui_kit.dart';
 
 /// A value older than this is shown as missing, never as current. The same
 /// five seconds as kNmeaInstrumentStaleMs in firmware/src/nmea_state.h.
@@ -178,7 +180,10 @@ class _RelayLines {
 /// Big, glanceable depth, speed, course and wind, mirroring the terminal's
 /// Instruments screen. A value with nothing recent reads "—".
 class InstrumentsView extends StatefulWidget {
-  const InstrumentsView({super.key, this.lines, this.clock});
+  const InstrumentsView({super.key, this.lines, this.clock, this.settings});
+
+  /// Units come from here. Defaults to [AppSettings.instance].
+  final AppSettings? settings;
 
   /// Where sentences come from. Defaults to the phone's relay.
   final Stream<String> Function()? lines;
@@ -195,9 +200,16 @@ class _InstrumentsViewState extends State<InstrumentsView> {
   StreamSubscription<String>? _sub;
   Timer? _tick;
 
+  AppSettings get _settings => widget.settings ?? AppSettings.instance;
+
+  void _changed() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
+    _settings.addListener(_changed);
     _sub = (widget.lines ?? relayLines)().listen((line) {
       if (_readings.note(line) && mounted) setState(() {});
     });
@@ -209,6 +221,7 @@ class _InstrumentsViewState extends State<InstrumentsView> {
 
   @override
   void dispose() {
+    _settings.removeListener(_changed);
     _tick?.cancel();
     unawaited(_sub?.cancel());
     super.dispose();
@@ -218,17 +231,19 @@ class _InstrumentsViewState extends State<InstrumentsView> {
   Widget build(BuildContext context) {
     final r = _readings;
     final awa = r.awaDeg;
+    final u = _settings;
+    final ms = u.speedUnit == SpeedUnit.metresPerSecond;
     final tiles = [
       _Gauge(
         caption: 'DEPTH',
-        unit: 'metres',
-        value: _fmt(r.depthM, 1),
+        unit: u.depthLabel,
+        value: _fmt(u.depth(r.depthM), 1),
         icon: Icons.waves,
       ),
       _Gauge(
         caption: 'SPEED',
-        unit: 'knots SOG',
-        value: _fmt(r.sogKn, 1),
+        unit: ms ? 'm/s SOG' : 'knots SOG',
+        value: _fmt(u.speed(r.sogKn), 1),
         icon: Icons.speed,
       ),
       _Gauge(
@@ -240,9 +255,9 @@ class _InstrumentsViewState extends State<InstrumentsView> {
       _Gauge(
         caption: 'WIND',
         unit: awa == null
-            ? 'kn AWS · apparent'
-            : 'kn AWS · ${awa >= 0 ? '+' : ''}${awa.round()}° AWA',
-        value: _fmt(r.awsKn, 0),
+            ? '${u.speedLabel} AWS · apparent'
+            : '${u.speedLabel} AWS · ${awa >= 0 ? '+' : ''}${awa.round()}° AWA',
+        value: _fmt(u.speed(r.awsKn), ms ? 1 : 0),
         icon: Icons.air,
       ),
     ];
@@ -261,14 +276,14 @@ class _InstrumentsViewState extends State<InstrumentsView> {
                 for (final t in tiles) SizedBox(width: width, child: t),
               ],
             ),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             Text(
               r.anyFresh
                   ? 'From the terminal over the boat Wi-Fi. A value with '
                         'nothing new for 5 s shows —.'
                   : 'Waiting for depth, speed, course and wind. A value '
                         'with nothing new for 5 s shows —.',
-              style: const TextStyle(color: Colors.black45, fontSize: 13),
+              style: TextStyle(color: Palette.of(context).faint, fontSize: 13),
             ),
           ],
         );
@@ -303,7 +318,7 @@ class _Gauge extends StatelessWidget {
     return Container(
       key: ValueKey('gauge-$caption'),
       height: 150,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      padding: EdgeInsets.fromLTRB(16, 14, 16, 14),
       decoration: BoxDecoration(
         color: kNavy,
         borderRadius: BorderRadius.circular(18),
