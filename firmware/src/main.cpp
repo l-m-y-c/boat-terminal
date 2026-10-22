@@ -730,11 +730,17 @@ static void update_home_status(void)
         title = "On board " LMYC_BOAT_ID;
         const int phones = net_wifi_ap_stations();
         /* N2K chosen with nothing arriving: the link works, the instruments
-         * are quiet. That is not a fault, so it is said calmly. */
-        const bool quiet = strcmp(n2k_fix_tag(), "N2K") == 0;
+         * are quiet. That is not a fault, so it is said calmly. A bus fault
+         * is said as one, the same as the phone app. */
+        N2kStats bus;
+        n2k_stats(&bus);
+        const bool quiet = bus.state == BusState::Opening || bus.state == BusState::Waiting ||
+                           bus.state == BusState::Quiet;
+        const bool fault = bus.state == BusState::BusOff || bus.state == BusState::Failed;
         snprintf(body, sizeof(body), "%s %d phone%s on the boat Wi-Fi.\n\nAnother phone? Tap QR.",
-                 quiet ? "Connected. Waiting for data from the boat's instruments."
-                       : "Chart apps are getting the boat's data.",
+                 fault   ? "Connected, but the boat's NMEA 2000 bus has a fault."
+                 : quiet ? "Connected. Waiting for data from the boat's instruments."
+                         : "Chart apps are getting the boat's data.",
                  phones, phones == 1 ? "" : "s");
         break;
     }
