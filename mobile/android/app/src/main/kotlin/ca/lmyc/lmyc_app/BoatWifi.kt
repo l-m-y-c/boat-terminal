@@ -88,6 +88,7 @@ object BoatWifi : MethodChannel.MethodCallHandler {
                 "relayDataAgeMs" to BoatRelayService.dataAgeMs(),
                 "relayClients" to BoatRelayService.clients.size,
                 "relayDeclined" to BoatRelayService.declined,
+                "relayNeedsApp" to BoatRelayService.needsApp,
             ),
         )
     }

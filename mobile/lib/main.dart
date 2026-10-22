@@ -925,6 +925,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final status = await BoatWifi.status(ip: info.ip);
       if (!mounted) return;
       if (status.ready) BoatSession.markJoined();
+      // The relay came back without the Wi-Fi details: hand them over again.
+      if (status.relayNeedsApp) unawaited(_startRelay(info));
       if (status != _wifiStatus) {
         debugPrint('boat wifi: $status');
         setState(() => _wifiStatus = status);
@@ -965,7 +967,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       switch (action) {
         case SetupAction.retry:
           final device = _device;
-          if (device != null) await _bringUpBoatWifi(device);
+          final info = BoatSession.info;
+          if (device != null) {
+            await _bringUpBoatWifi(device);
+          } else if (info != null) {
+            // No Bluetooth link now, but the Wi-Fi details are known: ask
+            // Android again rather than leave Try again doing nothing.
+            await _startRelay(info);
+            await _checkWifi();
+          }
       }
     } on PlatformException catch (e) {
       if (!mounted) return;
