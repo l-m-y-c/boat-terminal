@@ -1424,6 +1424,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               onPressed: () => unawaited(_discover()),
               child: const Text('Search again'),
             ),
+            _pasteCodeButton(),
           ],
         );
       case _Landing.none:
@@ -1440,6 +1441,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               icon: Icons.radar,
               onPressed: () => unawaited(_discover()),
             ),
+            _pasteCodeButton(),
+            _diagnosticsLink(),
           ],
         );
     }
@@ -1465,6 +1468,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             onPressed: _busy ? null : () => unawaited(_discover()),
             child: const Text('Choose another boat'),
           ),
+          _diagnosticsLink(),
         ],
       );
     }
@@ -1500,7 +1504,75 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               label: copy.actionLabel!,
               onPressed: () => unawaited(_onSetupAction(action)),
             ),
+      secondary: [if (setup == WifiSetup.problem) _diagnosticsLink()],
     );
+  }
+
+  /// On a step that failed: the full picture, as a page over the journey.
+  Widget _diagnosticsLink() => TextButton.icon(
+    key: const ValueKey('diagnostics-link'),
+    onPressed: _openStatus,
+    icon: const Icon(Icons.troubleshoot, size: 18),
+    label: const Text('Diagnostics'),
+  );
+
+  /// Join from an lmyc:// link copied out of a message or the terminal's
+  /// web page, when the QR cannot be scanned.
+  Widget _pasteCodeButton() => TextButton.icon(
+    key: const ValueKey('paste-code'),
+    onPressed: _busy ? null : () => unawaited(_pasteCodeSheet()),
+    icon: const Icon(Icons.content_paste, size: 18),
+    label: const Text('Paste a pairing link'),
+  );
+
+  Future<void> _pasteCodeSheet() async {
+    final apply = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheet) => Padding(
+        padding: EdgeInsets.fromLTRB(
+          24,
+          0,
+          24,
+          24 + MediaQuery.of(sheet).viewInsets.bottom,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Paste a pairing link',
+              style: Theme.of(sheet).textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'The lmyc:// link the terminal\'s QR code holds. Use it when '
+              'the camera cannot read the QR.',
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _pasteController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'lmyc://…',
+                border: OutlineInputBorder(),
+              ),
+              minLines: 1,
+              maxLines: 3,
+              onSubmitted: (_) => Navigator.of(sheet).pop(true),
+            ),
+            const SizedBox(height: 14),
+            FilledButton(
+              onPressed: () => Navigator.of(sheet).pop(true),
+              child: const Text('Join'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (apply == true && mounted) _applyPastedUri();
   }
 
   /// The moment of arrival: a big tick and the boat's name, then the tabs.
@@ -1565,8 +1637,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Widget _statusPage(BuildContext routeContext) {
-    final hits = _nearby.values.toList()
-      ..sort((a, b) => b.rssi.compareTo(a.rssi));
     final paired = _blePhase == BlePhase.paired;
     return Scaffold(
       appBar: AppBar(title: const Text('Diagnostics')),
@@ -1635,63 +1705,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               child: const Text('Disconnect'),
             ),
           ],
-          const SizedBox(height: 12),
-          ExpansionTile(
-            title: const Text('Find a terminal'),
-            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            children: [
-              TextField(
-                controller: _pasteController,
-                decoration: const InputDecoration(
-                  labelText: 'Paste an lmyc:// code',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-                minLines: 1,
-                maxLines: 3,
-                onSubmitted: (_) => _applyPastedUri(),
-              ),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: _applyPastedUri,
-                  child: const Text('Apply'),
-                ),
-              ),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: _busy
-                      ? null
-                      : () => unawaited(_startScan(autoConnectExact: false)),
-                  icon: const Icon(Icons.radar),
-                  label: Text(_busy ? 'Working…' : 'Find terminals'),
-                ),
-              ),
-              ...hits.map((h) {
-                return ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(h.name),
-                  subtitle: Text('${h.rssi} dBm'),
-                  trailing: TextButton(
-                    onPressed: _busy
-                        ? null
-                        : () {
-                            setState(() {
-                              _bleName = h.name;
-                              _device = h.result.device;
-                              _rssi = h.rssi;
-                              _blePhase = BlePhase.connecting;
-                              _bleDetail = 'Connecting to ${h.name}…';
-                            });
-                            unawaited(_connectAndConfirm(h.result.device));
-                          },
-                    child: const Text('Connect'),
-                  ),
-                );
-              }),
-            ],
-          ),
         ],
       ),
     );

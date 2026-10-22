@@ -343,7 +343,7 @@ void main() {
     await tester.tap(find.byTooltip('Diagnostics'));
     await tester.pumpAndSettle();
     expect(find.text('Diagnostics'), findsWidgets);
-    expect(find.text('Find a terminal'), findsOneWidget);
+    expect(find.text('Find a terminal'), findsNothing);
     expect(find.text('Maintenance book'), findsNothing);
     expect(find.text('Chart snapshot'), findsNothing);
   });
