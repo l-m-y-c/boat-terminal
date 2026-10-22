@@ -1,6 +1,5 @@
 package ca.lmyc.lmyc_app
 
-import android.content.Intent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -11,12 +10,6 @@ class MainActivity : FlutterActivity() {
         BoatWifi.currentContext = this
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ca.lmyc/boat_wifi")
             .setMethodCallHandler(BoatWifi)
-    }
-
-    @Deprecated("FlutterActivity still routes plugin results through this.")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (BoatWifi.onActivityResult(requestCode, resultCode, data)) return
-        super.onActivityResult(requestCode, resultCode, data)
     }
 
     override fun onDestroy() {

@@ -13,10 +13,13 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
 import java.io.IOException
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -41,11 +44,14 @@ class BoatRelayService : Service() {
         private const val NOTIFICATION_ID = 4411
         private const val ACTION_STOP = "ca.lmyc.lmyc_app.STOP_RELAY"
         private const val EXTRA_IP = "ip"
+        private const val EXTRA_SSID = "ssid"
+        private const val EXTRA_PSK = "psk"
         private const val CONNECT_TIMEOUT_MS = 3000
         /** Longer than the terminal's 15 s heartbeat, so a quiet bus is not a drop. */
         private const val READ_TIMEOUT_MS = 25000
         private const val RETRY_MS = 2000L
         private const val CLIENT_QUEUE = 256
+        private val UDP_PORTS = intArrayOf(10110, 2000)
 
         @Volatile var running = false
             private set
@@ -57,10 +63,22 @@ class BoatRelayService : Service() {
             private set
         @Volatile var listening = false
             private set
+
+        /** The member said no to Android's Connect dialog for the boat Wi-Fi. */
+        @Volatile var declined = false
+            private set
         val clients = CopyOnWriteArrayList<Client>()
 
-        fun start(context: Context, ip: String) {
-            val intent = Intent(context, BoatRelayService::class.java).putExtra(EXTRA_IP, ip)
+        /**
+         * With [ssid] and [psk] the service joins the boat Wi-Fi for this app
+         * alone. Nothing is saved for the phone, and the phone's own Wi-Fi and
+         * mobile data stay as they are; chart apps read 127.0.0.1 instead.
+         */
+        fun start(context: Context, ip: String, ssid: String?, psk: String?) {
+            val intent = Intent(context, BoatRelayService::class.java)
+                .putExtra(EXTRA_IP, ip)
+                .putExtra(EXTRA_SSID, ssid)
+                .putExtra(EXTRA_PSK, psk)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
@@ -103,6 +121,11 @@ class BoatRelayService : Service() {
             if (boatNetwork == network) lostBoat()
             refresh()
         }
+
+        override fun onUnavailable() {
+            declined = true
+            refresh()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -124,11 +147,18 @@ class BoatRelayService : Service() {
         if (!running) {
             running = true
             stopping = false
-            val request = NetworkRequest.Builder()
+            declined = false
+            val builder = NetworkRequest.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                 .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .build()
-            cm.requestNetwork(request, wifiCallback)
+            val ssid = intent?.getStringExtra(EXTRA_SSID)
+            val psk = intent?.getStringExtra(EXTRA_PSK)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && ssid != null && psk != null) {
+                builder.setNetworkSpecifier(
+                    WifiNetworkSpecifier.Builder().setSsid(ssid).setWpa2Passphrase(psk).build(),
+                )
+            }
+            cm.requestNetwork(builder.build(), wifiCallback)
             serverThread = Thread(::serve, "relay-server").also { it.start() }
             upstreamThread = Thread(::readTerminal, "relay-upstream").also { it.start() }
         }
@@ -192,6 +222,7 @@ class BoatRelayService : Service() {
     /** One connection to the terminal over the boat network, kept open. */
     private fun readTerminal() {
         val buf = ByteArray(2048)
+        val udp = LoopbackUdp()
         while (!stopping) {
             val network = boatNetwork
             val ip = target
@@ -216,14 +247,67 @@ class BoatRelayService : Service() {
                         lastDataAt = SystemClock.elapsedRealtime()
                         val chunk = buf.copyOf(n)
                         for (c in clients) c.offer(chunk)
+                        udp.feed(chunk)
                     }
                 }
             } catch (_: IOException) {
             }
             upstream = false
             upstreamSocket = null
+            udp.reset()
             refresh()
             if (!stopping) sleepQuietly(RETRY_MS)
+        }
+        udp.close()
+    }
+
+    /**
+     * UDP chart apps listen for the terminal's broadcasts, which arrive on a
+     * network that belongs to this app alone. Each sentence is repeated as
+     * one datagram to 127.0.0.1 on the terminal's two UDP ports.
+     */
+    private class LoopbackUdp {
+        private val socket = try {
+            DatagramSocket()
+        } catch (_: IOException) {
+            null
+        }
+        private val line = ByteArray(256)
+        private var len = 0
+
+        fun feed(bytes: ByteArray) {
+            for (b in bytes) {
+                if (b == '\n'.code.toByte()) {
+                    if (len > 0) send(len)
+                    len = 0
+                } else if (len < line.size - 2) {
+                    line[len++] = b
+                } else {
+                    len = 0 // longer than any NMEA sentence: drop it
+                }
+            }
+        }
+
+        private fun send(n: Int) {
+            val s = socket ?: return
+            var end = n
+            if (line[end - 1] == '\r'.code.toByte()) end--
+            line[end] = '\r'.code.toByte()
+            line[end + 1] = '\n'.code.toByte()
+            for (port in UDP_PORTS) {
+                try {
+                    s.send(DatagramPacket(line, end + 2, InetAddress.getLoopbackAddress(), port))
+                } catch (_: IOException) {
+                }
+            }
+        }
+
+        fun reset() {
+            len = 0
+        }
+
+        fun close() {
+            socket?.close()
         }
     }
 
@@ -263,6 +347,7 @@ class BoatRelayService : Service() {
 
     private fun state(): String = when {
         !listening -> "Starting"
+        declined -> "The boat Wi-Fi was not allowed. Open the LMYC app."
         boatNetwork == null -> "Waiting for the boat Wi-Fi"
         !upstream -> "Waiting for the terminal"
         else -> {

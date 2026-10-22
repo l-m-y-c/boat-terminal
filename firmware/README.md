@@ -192,7 +192,7 @@ Pairing GATT is `…000020` / `…000021`. After OOB OK, `…000040` serves the 
 
 ## Wi-Fi
 
-- **SoftAP** `LMYC-<boat id>` is the boat Wi-Fi. The password is `AP_PASSWORD` in `secrets.h`. The LMYC app receives it over BLE `…000040` after pairing and saves it with Android's prompt. Chart apps on a phone use UDP 10110 (address `127.0.0.1` where asked) through the app; see [doc 06](../docs/06-phone-app-and-pairing.md#why-chart-apps-use-the-phone-itself).
+- **SoftAP** `LMYC-<boat id>` is the boat Wi-Fi. The password is `AP_PASSWORD` in `secrets.h`. The LMYC app receives it over BLE `…000040` after pairing and joins it for itself; nothing is saved on the phone. Chart apps on a phone use UDP 10110 (address `127.0.0.1` where asked) through the app; see [doc 06](../docs/06-phone-app-and-pairing.md#why-chart-apps-use-the-phone-itself).
 - **STA** (optional) joins a bench or marina LAN from `WIFI_SSID` and `WIFI_PASSWORD`. An empty `WIFI_SSID` runs the hotspot alone. Each connect attempt scans every channel and takes the radio off the hotspot channel, which stalls chart apps and BLE, so a network that is not there is tried three times and then left until the next restart (`Wi-Fi: uplink '<ssid>' not found, hotspot only until restart`).
 
 ```bash

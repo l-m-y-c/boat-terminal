@@ -168,10 +168,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _statsReading = false;
 
   bool _wifiReading = false;
-  bool _wifiSaving = false;
-
-  /// The user tapped Save on the Android prompt this session.
-  bool _wifiSaved = false;
   bool _wifiChecking = false;
   String? _wifiProblem;
   BoatWifiStatus? _wifiStatus;
@@ -859,7 +855,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// already uses the boat Wi-Fi, then keep watching until chart apps can
   /// reach the terminal.
   Future<void> _bringUpBoatWifi(BluetoothDevice device) async {
-    if (_wifiReading || _wifiSaving) return;
+    if (_wifiReading) return;
     setState(() {
       _wifiReading = true;
       _wifiProblem = null;
@@ -901,43 +897,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (info == null) return;
 
     BoatSession.offer(info);
-    await _startRelay(info.ip);
+    await _startRelay(info);
     _startWifiWatch();
     await _checkWifi();
-    if (!mounted || _wifiStatus?.onBoat == true) return;
-    await _saveWifi();
   }
 
   /// Chart apps read 127.0.0.1:10110. The notification is the only sign the
   /// relay is running, so ask for it first; the relay works without it.
-  Future<void> _startRelay(String ip) async {
+  Future<void> _startRelay(BoatWifiInfo info) async {
     try {
       await Permission.notification.request();
-      await BoatWifi.startRelay(ip: ip);
+      // A refused Connect dialog is not asked again by a running service.
+      if (_wifiStatus?.relayDeclined == true) await BoatWifi.stopRelay();
+      await BoatWifi.startRelay(ip: info.ip, ssid: info.ssid, psk: info.psk);
     } on PlatformException catch (e) {
       debugPrint('relay: ${e.message}');
     }
-  }
-
-  /// Android's Save network prompt for the boat hotspot.
-  Future<void> _saveWifi() async {
-    final info = BoatSession.info;
-    if (info == null || _wifiSaving) return;
-    setState(() => _wifiSaving = true);
-    try {
-      final saved = await BoatWifi.join(ssid: info.ssid, psk: info.psk);
-      if (!mounted) return;
-      setState(() => _wifiSaved = saved);
-    } on PlatformException catch (e) {
-      if (!mounted) return;
-      setState(
-        () =>
-            _wifiProblem = e.message ?? 'Android did not save the boat Wi-Fi.',
-      );
-    } finally {
-      if (mounted) setState(() => _wifiSaving = false);
-    }
-    await _checkWifi();
   }
 
   /// One look at the phone's networks. Cheap: it only opens a socket when
@@ -978,8 +953,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   WifiSetup get _wifiSetup => wifiSetupFor(
     reading: _wifiReading,
-    saving: _wifiSaving,
-    saved: _wifiSaved,
     info: BoatSession.info,
     status: _wifiStatus,
     problem: _wifiProblem,
@@ -990,10 +963,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> _onSetupAction(SetupAction action) async {
     try {
       switch (action) {
-        case SetupAction.save:
-          await _saveWifi();
-        case SetupAction.wifiList:
-          await BoatWifi.openSettings();
         case SetupAction.retry:
           final device = _device;
           if (device != null) await _bringUpBoatWifi(device);
@@ -1418,7 +1387,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Widget _wifiPanel() {
     final ssid = BoatSession.ssid.isEmpty ? 'the boat Wi-Fi' : BoatSession.ssid;
     final setup = _wifiSetup;
-    final copy = setupCopy(setup, ssid, problem: _wifiProblem);
+    final declined = _wifiStatus?.relayDeclined == true;
+    final copy = setupCopy(
+      setup,
+      ssid,
+      problem: declined
+          ? 'Android was not allowed to join $ssid. Tap Try again, then Connect.'
+          : _wifiProblem,
+    );
     final action = copy.action;
     return JourneyPanel(
       icon: setup == WifiSetup.noAnswer ? Icons.sensors : Icons.wifi,
@@ -1539,10 +1515,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
     BoatSession.clear();
     if (!mounted) return;
-    setState(() {
-      _wifiStatus = null;
-      _wifiSaved = false;
-    });
+    setState(() => _wifiStatus = null);
     await _disconnect();
   }
 

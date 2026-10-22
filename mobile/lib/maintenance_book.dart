@@ -100,42 +100,6 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _joinBoatWifi() async {
-    final info = BoatSession.info;
-    if (info == null || _busy) {
-      return;
-    }
-    setState(() {
-      _busy = true;
-      _status =
-          'Joining ${info.ssid}. Tap Connect. The network has no internet; Read Book uses ${info.ip}.';
-    });
-    try {
-      final saved = await BoatWifi.join(ssid: info.ssid, psk: info.psk);
-      if (!mounted) return;
-      if (!saved) {
-        setState(() => _status = '${info.ssid} was not saved.');
-        return;
-      }
-      BoatSession.markJoined();
-      _ipController.text = BoatSession.ip;
-      setState(() => _status = 'Saved ${info.ssid} for this phone.');
-    } on PlatformException catch (e) {
-      if (!mounted) return;
-      _report(e.message ?? 'Could not join the boat Wi-Fi.');
-    } catch (e) {
-      if (!mounted) return;
-      _report('Could not join the boat Wi-Fi ($e).');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _progress = null;
-        });
-      }
-    }
-  }
-
   Future<void> _refresh({String? done}) async {
     final host = terminalHost(_ipController.text);
     if (host.isEmpty) {
@@ -382,14 +346,6 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
                       'Leave Club API blank and the note stays pending.',
             style: const TextStyle(height: 1.4),
           ),
-          if (BoatSession.info != null && !BoatSession.joined) ...[
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: _busy ? null : _joinBoatWifi,
-              icon: const Icon(Icons.wifi),
-              label: Text('Join ${BoatSession.ssid}'),
-            ),
-          ],
           const SizedBox(height: 12),
           TextField(
             key: const Key('terminal-host'),
