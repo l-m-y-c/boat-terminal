@@ -13,7 +13,7 @@ const _labels = {
   JourneyStop.find: 'Find',
   JourneyStop.connect: 'Connect',
   JourneyStop.wifi: 'Wi-Fi',
-  JourneyStop.charts: 'Chart data',
+  JourneyStop.charts: 'NMEA',
 };
 
 /// Four stops on a line: done ones ticked, the current one ringed.

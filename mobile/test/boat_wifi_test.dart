@@ -104,15 +104,11 @@ void main() {
   group('setup step', () {
     WifiSetup step({
       bool reading = false,
-      bool saving = false,
-      bool saved = false,
       BoatWifiInfo? wifi = info,
       BoatWifiStatus? status,
       String? problem,
     }) => wifiSetupFor(
       reading: reading,
-      saving: saving,
-      saved: saved,
       info: wifi,
       status: status,
       problem: problem,
@@ -127,15 +123,16 @@ void main() {
       expect(step(problem: 'lost'), WifiSetup.problem);
     });
 
-    test('a phone already on the boat Wi-Fi skips saving', () {
+    test('the relay joins, then the stop completes on data', () {
+      expect(step(status: away), WifiSetup.joining);
+      expect(step(), WifiSetup.joining);
       expect(step(status: cellular), WifiSetup.ready);
-      expect(step(saving: true, status: cellular), WifiSetup.ready);
     });
 
-    test('saving, then joining, until the phone is on the boat', () {
-      expect(step(saving: true, status: away), WifiSetup.saving);
-      expect(step(status: away), WifiSetup.notSaved);
-      expect(step(saved: true, status: away), WifiSetup.joining);
+    test('a refused Connect dialog is a problem the user can retry', () {
+      const refused = BoatWifiStatus(onBoat: false, relayDeclined: true);
+      expect(step(status: refused), WifiSetup.problem);
+      expect(setupCopy(WifiSetup.problem, 'x').action, SetupAction.retry);
     });
 
     test('on the boat without data waits for the terminal', () {
@@ -143,15 +140,11 @@ void main() {
       expect(step(status: stale), WifiSetup.noAnswer);
     });
 
-    test('every step that needs the user offers exactly one button', () {
+    test('only a problem asks the user to press anything', () {
       for (final s in WifiSetup.values) {
         final copy = setupCopy(s, 'LMYC-BENCH-01');
         expect(copy.action == null, copy.actionLabel == null, reason: '$s');
-        if (s == WifiSetup.notSaved ||
-            s == WifiSetup.joining ||
-            s == WifiSetup.problem) {
-          expect(copy.action, isNotNull, reason: '$s');
-        }
+        expect(copy.action != null, s == WifiSetup.problem, reason: '$s');
       }
     });
 
@@ -160,6 +153,12 @@ void main() {
       expect(copy.body, contains('127.0.0.1'));
       expect(copy.body, contains('10110'));
     });
+  });
+
+  test('the app reaches the terminal web server through the relay', () {
+    final uri = Uri.http(kTerminalHttpHost, '/maintenance');
+    expect(uri.host, '127.0.0.1');
+    expect(uri.port, kRelayHttpPort);
   });
 
   test('WAIT and a short passphrase are not a network', () {
@@ -177,5 +176,33 @@ void main() {
       ),
       isNotNull,
     );
+  });
+
+  test('the terminal counts as gone only after two missed heartbeats', () {
+    expect(kRelayStaleMs, greaterThanOrEqualTo(2 * kHeartbeatMs));
+    BoatWifiStatus at(int age) => BoatWifiStatus(
+      onBoat: true,
+      relayRunning: true,
+      relayListening: true,
+      relayUpstream: true,
+      relayDataAgeMs: age,
+    );
+    expect(at(kHeartbeatMs + 5000).receiving, isTrue);
+    expect(at(kRelayStaleMs - 1).receiving, isTrue);
+    expect(at(kRelayStaleMs).receiving, isFalse);
+  });
+
+  test('a refused Connect dialog shows a problem with Try again', () {
+    const info = BoatWifiInfo(ssid: 'LMYC', psk: 'password', ip: '192.168.4.1');
+    const refused = BoatWifiStatus(
+      onBoat: false,
+      relayRunning: true,
+      relayDeclined: true,
+    );
+    expect(
+      wifiSetupFor(reading: false, info: info, status: refused),
+      WifiSetup.problem,
+    );
+    expect(setupCopy(WifiSetup.problem, 'LMYC').action, SetupAction.retry);
   });
 }

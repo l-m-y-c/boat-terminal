@@ -1,7 +1,7 @@
 import 'boat_wifi.dart';
 
 /// The one button a setup step offers.
-enum SetupAction { save, wifiList, retry }
+enum SetupAction { retry }
 
 /// The words and button for one [WifiSetup] step.
 class SetupCopy {
@@ -32,25 +32,13 @@ SetupCopy setupCopy(WifiSetup setup, String ssid, {String? problem}) {
         body: 'Reading the Wi-Fi name from the terminal.',
         working: true,
       );
-    case WifiSetup.saving:
-      return SetupCopy(
-        title: 'Save the boat Wi-Fi',
-        body: 'Android is asking to save $ssid. Tap Save.',
-        working: true,
-      );
-    case WifiSetup.notSaved:
-      return SetupCopy(
-        title: 'Save the boat Wi-Fi',
-        body: '$ssid is not saved on this phone yet.',
-        action: SetupAction.save,
-        actionLabel: 'Save boat Wi-Fi',
-      );
     case WifiSetup.joining:
       return SetupCopy(
-        title: 'Join the boat Wi-Fi',
-        body: 'Tap the button, then choose $ssid in the list.',
-        action: SetupAction.wifiList,
-        actionLabel: 'Open Wi-Fi list',
+        title: 'Connecting to the boat Wi-Fi',
+        body:
+            'Joining $ssid for the LMYC app. If Android asks, tap Connect. '
+            'Your phone\'s internet carries on over mobile data.',
+        working: true,
       );
     case WifiSetup.noAnswer:
       return SetupCopy(

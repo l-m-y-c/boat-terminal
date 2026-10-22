@@ -147,7 +147,7 @@ class MaintenanceMenuPage extends StatelessWidget {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
                   builder: (_) =>
-                      MaintenanceBookPage(suggestedIp: BoatSession.ip),
+                      MaintenanceBookPage(suggestedIp: kTerminalHttpHost),
                 ),
               );
             },

@@ -70,6 +70,10 @@ The TF card is this boat's maintenance book. That rule was agreed on 2026-09-30 
 
 The book is readable on the Waveshare with no phone. A new report is attributed to a member only while a boarding pass is paired. The phone carries pending items to lmyc.ca. The terminal does not hold a member session across crews.
 
+## Loopback forward on the phone
+
+While the relay runs, `127.0.0.1:10180` on the phone is forwarded to the terminal's web server on port 80, and `127.0.0.1:10110` carries the NMEA stream. Loopback is shared by every app on the phone, so any app there can reach those two ports without the LMYC login, exactly as any device on the boat hotspot already can. Nothing on port 80 may therefore need more trust than "on the boat Wi-Fi": no member data without its own check, no settings changes without pairing. The forward accepts at most four connections at once, drops idle ones after 30 s, and stops with the relay.
+
 ## Privacy Considerations
 
 - The system does not continuously track boat location for the club

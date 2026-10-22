@@ -16,8 +16,20 @@ class BoatWifiInfo {
 /// Loopback address chart apps use. The relay in this app serves it.
 const kRelayHost = '127.0.0.1';
 
-/// Data older than this means the terminal stopped sending.
-const kRelayStaleMs = 5000;
+/// The relay forwards this loopback port to the terminal's web server, so
+/// the app's own HTTP to the boat does not go out over mobile data.
+const kRelayHttpPort = 10180;
+
+/// Where the app's HTTP to the terminal goes (maintenance book, status.json).
+const kTerminalHttpHost = '$kRelayHost:$kRelayHttpPort';
+
+/// The terminal sends a heartbeat at least this often, even on a quiet bus.
+const kHeartbeatMs = 15000;
+
+/// Data older than this means the terminal went away: two missed heartbeats
+/// and a margin, so one lost datagram or a busy terminal is not a drop. The
+/// relay's own read timeout (45 s) is longer, so the app notices first.
+const kRelayStaleMs = 35000;
 
 /// What the phone's networks and the chart-app relay say right now.
 class BoatWifiStatus {
@@ -29,6 +41,8 @@ class BoatWifiStatus {
     this.relayUpstream = false,
     this.relayDataAgeMs = -1,
     this.relayClients = 0,
+    this.relayDeclined = false,
+    this.relayNeedsApp = false,
   });
 
   /// The phone has a Wi-Fi address on the boat hotspot.
@@ -52,6 +66,13 @@ class BoatWifiStatus {
   /// Chart apps connected to the relay now.
   final int relayClients;
 
+  /// The member said no to Android's Connect dialog for the boat Wi-Fi.
+  final bool relayDeclined;
+
+  /// Android restarted the relay without the boat Wi-Fi details; the app
+  /// starts it again with them.
+  final bool relayNeedsApp;
+
   /// The terminal's data is reaching the relay.
   bool get receiving =>
       relayUpstream && relayDataAgeMs >= 0 && relayDataAgeMs < kRelayStaleMs;
@@ -73,7 +94,9 @@ class BoatWifiStatus {
       other.relayListening == relayListening &&
       other.relayUpstream == relayUpstream &&
       other.receiving == receiving &&
-      other.relayClients == relayClients;
+      other.relayClients == relayClients &&
+      other.relayDeclined == relayDeclined &&
+      other.relayNeedsApp == relayNeedsApp;
 
   @override
   int get hashCode => Object.hash(
@@ -83,6 +106,8 @@ class BoatWifiStatus {
     relayUpstream,
     receiving,
     relayClients,
+    relayDeclined,
+    relayNeedsApp,
   );
 }
 
@@ -215,13 +240,7 @@ enum WifiSetup {
   /// Reading the hotspot name and passphrase over Bluetooth.
   reading,
 
-  /// Android's Save network prompt is up.
-  saving,
-
-  /// The prompt was closed without saving.
-  notSaved,
-
-  /// Saved, but the phone is on another network or none.
+  /// The app is asking Android for the boat Wi-Fi.
   joining,
 
   /// On the boat Wi-Fi, but no data is reaching the relay yet.
@@ -234,44 +253,25 @@ enum WifiSetup {
   problem,
 }
 
-/// Picks the one step to show. A live [status] wins over what the app
-/// remembers, so a phone that already set up this boat goes straight on.
+/// Picks the one step to show. A live [status] wins over the setup flags,
+/// so a phone the relay already has on the boat goes straight on.
 WifiSetup wifiSetupFor({
   required bool reading,
-  required bool saving,
-  required bool saved,
   BoatWifiInfo? info,
   BoatWifiStatus? status,
   String? problem,
 }) {
   if (reading) return WifiSetup.reading;
   if (problem != null || info == null) return WifiSetup.problem;
+  if (status != null && status.relayDeclined) return WifiSetup.problem;
   if (status != null && status.onBoat) {
     return status.ready ? WifiSetup.ready : WifiSetup.noAnswer;
   }
-  if (saving) return WifiSetup.saving;
-  return saved ? WifiSetup.joining : WifiSetup.notSaved;
+  return WifiSetup.joining;
 }
 
 class BoatWifi {
   static const _channel = MethodChannel('ca.lmyc/boat_wifi');
-
-  /// Saves [ssid] as a normal Wi-Fi network for the whole phone.
-  /// Android shows its own prompt. False when the user closed it without saving.
-  /// A phone already on home Wi-Fi must still tap the boat network.
-  static Future<bool> join({required String ssid, required String psk}) async {
-    final answer = await _channel.invokeMethod<String>('connect', {
-      'ssid': ssid,
-      'psk': psk,
-    });
-    if (answer == 'failed') {
-      throw PlatformException(
-        code: 'wifi',
-        message: 'Android could not save $ssid.',
-      );
-    }
-    return answer != 'declined';
-  }
 
   /// Where the phone stands with the boat hotspot at [ip], and the relay.
   static Future<BoatWifiStatus> status({required String ip}) async {
@@ -286,22 +286,28 @@ class BoatWifi {
       relayUpstream: map?['relayUpstream'] == true,
       relayDataAgeMs: (map?['relayDataAgeMs'] as num?)?.toInt() ?? -1,
       relayClients: (map?['relayClients'] as num?)?.toInt() ?? 0,
+      relayDeclined: map?['relayDeclined'] == true,
+      relayNeedsApp: map?['relayNeedsApp'] == true,
     );
   }
 
   /// Starts the foreground service that serves the terminal's data on
   /// 127.0.0.1:10110. Safe to call again: it keeps one connection.
-  static Future<void> startRelay({required String ip}) async {
-    await _channel.invokeMethod<void>('startRelay', {'ip': ip});
+  /// With [ssid] and [psk] the relay joins the boat Wi-Fi for this app only.
+  static Future<void> startRelay({
+    required String ip,
+    String? ssid,
+    String? psk,
+  }) async {
+    await _channel.invokeMethod<void>('startRelay', {
+      'ip': ip,
+      'ssid': ssid,
+      'psk': psk,
+    });
   }
 
   static Future<void> stopRelay() async {
     await _channel.invokeMethod<void>('stopRelay');
-  }
-
-  /// Opens the Wi-Fi list so the user can move the phone onto the boat.
-  static Future<void> openSettings() async {
-    await _channel.invokeMethod<void>('openSettings');
   }
 
   /// Runs [call] on whatever network the phone is using.

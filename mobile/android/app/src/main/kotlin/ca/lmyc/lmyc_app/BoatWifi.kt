@@ -1,35 +1,26 @@
 package ca.lmyc.lmyc_app
 
-import android.app.Activity
 import android.content.Context
-import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
-import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
-import android.provider.Settings
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.net.Inet4Address
 import java.net.InetAddress
 
 /**
- * Saves the boat hotspot as a normal Wi-Fi network for the whole phone, and
- * reports whether chart apps can reach the terminal over it.
+ * The app's side of the boat Wi-Fi: start and stop [BoatRelayService], and
+ * report where the phone stands.
  *
- * Only a saved network keeps the "Always connect" answer Android asks for on
- * a network with no internet. A network suggestion loses that answer on the
- * next join, and the phone then sends chart apps over mobile data.
+ * The relay joins the hotspot for this app alone. Nothing is saved for the
+ * phone, so there is no Save prompt, no Wi-Fi list and no "Always connect";
+ * chart apps read 127.0.0.1 and mobile data stays the phone's internet.
  */
 object BoatWifi : MethodChannel.MethodCallHandler {
-    private const val ADD_NETWORKS_REQUEST = 4410
-
-    /** The connect() call waiting for the user to answer the Android prompt. */
-    private var pending: MethodChannel.Result? = null
-
     @Volatile
     var currentContext: Context? = null
 
@@ -39,103 +30,39 @@ object BoatWifi : MethodChannel.MethodCallHandler {
             return
         }
         when (call.method) {
-            "connect" -> {
-                val ssid = call.argument<String>("ssid")?.trim().orEmpty()
-                val psk = call.argument<String>("psk") ?: ""
-                connect(context, ssid, psk, result)
-            }
-            "status" -> {
-                status(context, call.argument<String>("ip").orEmpty(), result)
-            }
+            "status" -> status(context, call.argument<String>("ip").orEmpty(), result)
             "startRelay" -> {
                 val ip = call.argument<String>("ip").orEmpty()
                 if (parseIpv4(ip) == null) {
                     result.error("wifi", "The terminal address $ip is not an IPv4 address.", null)
-                } else {
-                    BoatRelayService.start(context.applicationContext, ip)
-                    result.success(null)
+                    return
                 }
+                removeOldSuggestions(context)
+                BoatRelayService.start(
+                    context.applicationContext,
+                    ip,
+                    call.argument<String>("ssid"),
+                    call.argument<String>("psk"),
+                )
+                result.success(null)
             }
             "stopRelay" -> {
                 BoatRelayService.stop(context.applicationContext)
                 result.success(null)
             }
-            "openSettings" -> openSettings(context, result)
             else -> result.notImplemented()
         }
     }
 
-    /** Answers connect() with what the user chose on the Android prompt. */
-    fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
-        if (requestCode != ADD_NETWORKS_REQUEST) return false
-        val waiting = pending ?: return true
-        pending = null
-        if (resultCode != Activity.RESULT_OK) {
-            waiting.success("declined")
-            return true
-        }
-        val codes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            data?.getIntegerArrayListExtra(Settings.EXTRA_WIFI_NETWORK_RESULT_LIST)
-        } else {
-            null
-        }
-        val failed = codes != null && codes.isNotEmpty() &&
-            codes.all { it == Settings.ADD_WIFI_RESULT_ADD_OR_UPDATE_FAILED }
-        waiting.success(if (failed) "failed" else "saved")
-        return true
-    }
-
-    private fun connect(
-        context: Context,
-        ssid: String,
-        psk: String,
-        result: MethodChannel.Result,
-    ) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            result.error("wifi", "This phone cannot join the boat Wi-Fi from the app.", null)
-            return
-        }
-        if (ssid.isEmpty() || psk.length < 8) {
-            result.error("wifi", "The terminal sent an unusable Wi-Fi name or passphrase.", null)
-            return
-        }
+    /**
+     * Earlier versions registered the hotspot as a network suggestion. Android
+     * joins it for the whole phone through that, ahead of the relay's own link.
+     */
+    private fun removeOldSuggestions(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         val wifi = context.applicationContext.getSystemService(WifiManager::class.java)
-        val network = WifiNetworkSuggestion.Builder()
-            .setSsid(ssid)
-            .setWpa2Passphrase(psk)
-            .build()
-
-        val activity = context as? Activity
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || activity == null) {
-            // Android 10 has no save prompt. A suggestion is the only way in.
-            val status = wifi.addNetworkSuggestions(listOf(network))
-            if (status == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS ||
-                status == WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_DUPLICATE
-            ) {
-                result.success("saved")
-            } else {
-                result.error("wifi", "Android did not save $ssid for this phone.", null)
-            }
-            return
-        }
-
-        // Earlier versions of the app also registered a suggestion. Android
-        // joins through it in preference to the saved network, so drop it.
         val ours = wifi.networkSuggestions
-        if (ours.isNotEmpty()) {
-            wifi.removeNetworkSuggestions(ours)
-        }
-
-        val intent = Intent(Settings.ACTION_WIFI_ADD_NETWORKS)
-        intent.putParcelableArrayListExtra(Settings.EXTRA_WIFI_NETWORK_LIST, arrayListOf(network))
-        pending?.success("declined")
-        pending = result
-        try {
-            activity.startActivityForResult(intent, ADD_NETWORKS_REQUEST)
-        } catch (_: RuntimeException) {
-            pending = null
-            result.error("wifi", "Android did not show the Save network prompt.", null)
-        }
+        if (ours.isNotEmpty()) wifi.removeNetworkSuggestions(ours)
     }
 
     /**
@@ -160,6 +87,8 @@ object BoatWifi : MethodChannel.MethodCallHandler {
                 "relayUpstream" to BoatRelayService.upstream,
                 "relayDataAgeMs" to BoatRelayService.dataAgeMs(),
                 "relayClients" to BoatRelayService.clients.size,
+                "relayDeclined" to BoatRelayService.declined,
+                "relayNeedsApp" to BoatRelayService.needsApp,
             ),
         )
     }
@@ -206,20 +135,5 @@ object BoatWifi : MethodChannel.MethodCallHandler {
             if (bits == 0) return true
         }
         return true
-    }
-
-    /** The Wi-Fi panel over the app, or the full Wi-Fi settings page. */
-    private fun openSettings(context: Context, result: MethodChannel.Result) {
-        val action = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            Settings.Panel.ACTION_WIFI
-        } else {
-            Settings.ACTION_WIFI_SETTINGS
-        }
-        try {
-            context.startActivity(Intent(action))
-            result.success(null)
-        } catch (_: RuntimeException) {
-            result.error("wifi", "Android did not open Wi-Fi settings.", null)
-        }
     }
 }

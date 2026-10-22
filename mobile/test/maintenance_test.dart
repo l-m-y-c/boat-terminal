@@ -330,7 +330,7 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const LmycApp());
     await tester.pump();
-    for (final stop in ['Find', 'Connect', 'Wi-Fi', 'Chart data']) {
+    for (final stop in ['Find', 'Connect', 'Wi-Fi', 'NMEA']) {
       expect(find.text(stop), findsOneWidget);
     }
     expect(find.text('Find your boat'), findsOneWidget);
