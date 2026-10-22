@@ -110,6 +110,12 @@ Saving the network for the whole phone was tried first and dropped for those rea
 
 The terminal's own UDP broadcasts arrive on a network that belongs to the LMYC app, so other apps never see them; the loopback datagrams are what chart apps receive. Two chart apps cannot listen on the same UDP port, so the relay also sends to port 2000 for a second one, though Android pauses the app that is not on screen anyway. Everything depends on the relay running: Leave the boat, or stopping it from its notification, ends the feed.
 
+**Which address to use.** Chart apps on the phone running the LMYC app read `127.0.0.1`, port 10110 (TCP or UDP), because only the LMYC app is on the boat Wi-Fi. Every other device, such as a second phone, a tablet or a laptop running Navionics, joins the terminal's hotspot as before and reads `192.168.4.1:10110` over TCP, or the UDP broadcasts on 10110.
+
+**Android 10 or newer.** The app joins the boat Wi-Fi with `WifiNetworkSpecifier`, which Android 9 and older do not have, so the app's minimum is Android 10 (API 29). Older phones can still join the hotspot by hand and use `192.168.4.1:10110` like any other device.
+
+**Recovery.** Android asks **Connect** only while the app is open. If the member says no, the setup screen says so and **Try again** asks again. The relay keeps the Wi-Fi details in memory only. If Android restarts it in the background, it asks nothing; its notification reads **Tap to reconnect to the boat**, and opening the app hands the details back. A changed boat or passphrase replaces the old request. The app counts the terminal as gone after 35 s with no data (two missed 15 s heartbeats); the relay's read timeout is 45 s.
+
 The app's own HTTP to the terminal (`/status.json`, and the maintenance book in the full build) would also go out over mobile data, so the relay forwards `127.0.0.1:10180` to the terminal's port 80 over the boat link. The book uses that address; club sync to lmyc.ca keeps the phone's internet. The Sentences console reads TCP through `127.0.0.1:10110` the same way.
 
 ## Suggested Feature Set (v1)
