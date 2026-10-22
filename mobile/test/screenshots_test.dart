@@ -8,7 +8,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmyc_app/boat_wifi.dart';
 import 'package:lmyc_app/counter_help.dart';
+import 'package:lmyc_app/diagnostics.dart';
+import 'package:lmyc_app/event_log.dart';
 import 'package:lmyc_app/instruments.dart';
 import 'package:lmyc_app/journey.dart';
 import 'package:lmyc_app/nmea_data_page.dart';
@@ -80,9 +83,10 @@ Widget _shell(int tab, Widget body) => MaterialApp(
       destinations: const [
         NavigationDestination(icon: Icon(Icons.sailing), label: 'Boat'),
         NavigationDestination(icon: Icon(Icons.explore), label: 'Instruments'),
+        NavigationDestination(icon: Icon(Icons.analytics), label: 'NMEA data'),
         NavigationDestination(
-          icon: Icon(Icons.analytics),
-          label: 'NMEA data',
+          icon: Icon(Icons.troubleshoot),
+          label: 'Diagnostics',
         ),
       ],
     ),
@@ -109,7 +113,11 @@ void main() {
     );
     lines
       ..add(nmeaSentence('SDDPT,8.4,0.0'))
-      ..add(nmeaSentence('GPRMC,120000.00,A,4916.0,N,12311.0,W,5.6,231.0,221026,,,A'))
+      ..add(
+        nmeaSentence(
+          'GPRMC,120000.00,A,4916.0,N,12311.0,W,5.6,231.0,221026,,,A',
+        ),
+      )
       ..add(nmeaSentence('WIMWV,320.0,R,14.0,N,A'));
     await tester.pump();
     await expectLater(
@@ -168,6 +176,87 @@ void main() {
     await expectLater(
       find.byType(MaterialApp),
       matchesGoldenFile('screenshots/simulation_sheet.png'),
+    );
+  });
+
+  DiagnosticsSnapshot diag({BoatWifiStatus? wifi}) => DiagnosticsSnapshot(
+    takenAt: DateTime(2026, 10, 22, 16, 40, 5),
+    boat: 'BENCH-01',
+    terminalId: 'T-0001',
+    bleName: 'LMYC-BENCH-01',
+    bleState: BleState.paired,
+    bleLabel: 'Connected',
+    bleDetail: 'Paired with BENCH-01\nTerminal confirmed OOB.',
+    rssi: -61,
+    sessionReply: 'OK',
+    ssid: 'LMYC-BENCH-01',
+    ip: '192.168.4.1',
+    wifi:
+        wifi ??
+        const BoatWifiStatus(
+          onBoat: true,
+          relayRunning: true,
+          relayListening: true,
+          relayUpstream: true,
+          relayDataAgeMs: 420,
+          relayClients: 1,
+        ),
+    stats: TerminalStats.parse(_json),
+    statsAt: DateTime(2026, 10, 22, 16, 40, 4),
+  );
+
+  EventLog sampleLog() {
+    var t = DateTime(2026, 10, 22, 16, 39, 30);
+    final log = EventLog(clock: () => t = t.add(const Duration(seconds: 2)));
+    for (final e in [
+      'Bluetooth: Scanning',
+      'Found LMYC-BENCH-01 (-61 dBm) — connecting…',
+      'Bluetooth: Confirming',
+      'Bluetooth: Paired',
+      'boat wifi: BoatWifiStatus(onBoat: true, relay: listening, upstream: true, receiving: true, clients: 1)',
+    ]) {
+      log.add(e);
+    }
+    return log;
+  }
+
+  testWidgets('diagnostics', skip: !_enabled, (tester) async {
+    await phone(tester);
+    await tester.pumpWidget(
+      _shell(3, DiagnosticsView(snapshot: diag(), log: sampleLog())),
+    );
+    await expectLater(
+      find.byType(MaterialApp),
+      matchesGoldenFile('screenshots/diagnostics.png'),
+    );
+    await tester.drag(
+      find.byKey(const ValueKey('diagnostics')),
+      const Offset(0, -1500),
+    );
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(MaterialApp),
+      matchesGoldenFile('screenshots/diagnostics_lower.png'),
+    );
+  });
+
+  testWidgets('diagnostics failing', skip: !_enabled, (tester) async {
+    await phone(tester);
+    await tester.pumpWidget(
+      _shell(
+        3,
+        DiagnosticsView(
+          snapshot: diag(
+            wifi: const BoatWifiStatus(onBoat: false, relayRunning: true),
+          ),
+          log: sampleLog(),
+          onReconnect: () {},
+        ),
+      ),
+    );
+    await expectLater(
+      find.byType(MaterialApp),
+      matchesGoldenFile('screenshots/diagnostics_failing.png'),
     );
   });
 }

@@ -97,7 +97,9 @@ class SimulationBadge extends StatelessWidget {
       child: ExcludeSemantics(
         child: Material(
           color: fg.withValues(alpha: onDark ? 0.18 : 0.12),
-          shape: StadiumBorder(side: BorderSide(color: fg.withValues(alpha: 0.6))),
+          shape: StadiumBorder(
+            side: BorderSide(color: fg.withValues(alpha: 0.6)),
+          ),
           child: InkWell(
             key: const ValueKey('simulation-badge'),
             customBorder: const StadiumBorder(),
@@ -167,4 +169,50 @@ class SectionLabel extends StatelessWidget {
       color: Colors.black45,
     ),
   );
+}
+
+/// Surface and text colours that follow the light or dark theme. The brand
+/// colours (kNavy, kGreen, kAmber, kRed) stay the same in both; [ink] is
+/// navy on light pages and near-white on dark ones.
+class Palette {
+  const Palette({
+    required this.page,
+    required this.card,
+    required this.line,
+    required this.ink,
+    required this.body,
+    required this.muted,
+    required this.faint,
+  });
+
+  final Color page;
+  final Color card;
+  final Color line;
+  final Color ink;
+  final Color body;
+  final Color muted;
+  final Color faint;
+
+  static const light = Palette(
+    page: Color(0xFFF7F9FB),
+    card: Colors.white,
+    line: kLine,
+    ink: kNavy,
+    body: Colors.black87,
+    muted: Colors.black54,
+    faint: Colors.black45,
+  );
+
+  static const dark = Palette(
+    page: Color(0xFF0B1220),
+    card: Color(0xFF141D2C),
+    line: Color(0xFF26324A),
+    ink: Color(0xFFE6EDF5),
+    body: Color(0xFFD3DCE6),
+    muted: Color(0xFF9AA8B8),
+    faint: Color(0xFF7D8B9C),
+  );
+
+  static Palette of(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? dark : light;
 }
