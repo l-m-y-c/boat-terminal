@@ -177,4 +177,32 @@ void main() {
       isNotNull,
     );
   });
+
+  test('the terminal counts as gone only after two missed heartbeats', () {
+    expect(kRelayStaleMs, greaterThanOrEqualTo(2 * kHeartbeatMs));
+    BoatWifiStatus at(int age) => BoatWifiStatus(
+      onBoat: true,
+      relayRunning: true,
+      relayListening: true,
+      relayUpstream: true,
+      relayDataAgeMs: age,
+    );
+    expect(at(kHeartbeatMs + 5000).receiving, isTrue);
+    expect(at(kRelayStaleMs - 1).receiving, isTrue);
+    expect(at(kRelayStaleMs).receiving, isFalse);
+  });
+
+  test('a refused Connect dialog shows a problem with Try again', () {
+    const info = BoatWifiInfo(ssid: 'LMYC', psk: 'password', ip: '192.168.4.1');
+    const refused = BoatWifiStatus(
+      onBoat: false,
+      relayRunning: true,
+      relayDeclined: true,
+    );
+    expect(
+      wifiSetupFor(reading: false, info: info, status: refused),
+      WifiSetup.problem,
+    );
+    expect(setupCopy(WifiSetup.problem, 'LMYC').action, SetupAction.retry);
+  });
 }

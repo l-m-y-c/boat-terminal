@@ -23,9 +23,13 @@ const kRelayHttpPort = 10180;
 /// Where the app's HTTP to the terminal goes (maintenance book, status.json).
 const kTerminalHttpHost = '$kRelayHost:$kRelayHttpPort';
 
-/// Data older than this means the terminal went away. A quiet bus still
-/// sends the terminal's heartbeat every 15 s, so allow one and a margin.
-const kRelayStaleMs = 20000;
+/// The terminal sends a heartbeat at least this often, even on a quiet bus.
+const kHeartbeatMs = 15000;
+
+/// Data older than this means the terminal went away: two missed heartbeats
+/// and a margin, so one lost datagram or a busy terminal is not a drop. The
+/// relay's own read timeout (45 s) is longer, so the app notices first.
+const kRelayStaleMs = 35000;
 
 /// What the phone's networks and the chart-app relay say right now.
 class BoatWifiStatus {
@@ -38,6 +42,7 @@ class BoatWifiStatus {
     this.relayDataAgeMs = -1,
     this.relayClients = 0,
     this.relayDeclined = false,
+    this.relayNeedsApp = false,
   });
 
   /// The phone has a Wi-Fi address on the boat hotspot.
@@ -64,6 +69,10 @@ class BoatWifiStatus {
   /// The member said no to Android's Connect dialog for the boat Wi-Fi.
   final bool relayDeclined;
 
+  /// Android restarted the relay without the boat Wi-Fi details; the app
+  /// starts it again with them.
+  final bool relayNeedsApp;
+
   /// The terminal's data is reaching the relay.
   bool get receiving =>
       relayUpstream && relayDataAgeMs >= 0 && relayDataAgeMs < kRelayStaleMs;
@@ -86,7 +95,8 @@ class BoatWifiStatus {
       other.relayUpstream == relayUpstream &&
       other.receiving == receiving &&
       other.relayClients == relayClients &&
-      other.relayDeclined == relayDeclined;
+      other.relayDeclined == relayDeclined &&
+      other.relayNeedsApp == relayNeedsApp;
 
   @override
   int get hashCode => Object.hash(
@@ -97,6 +107,7 @@ class BoatWifiStatus {
     receiving,
     relayClients,
     relayDeclined,
+    relayNeedsApp,
   );
 }
 
@@ -242,8 +253,8 @@ enum WifiSetup {
   problem,
 }
 
-/// Picks the one step to show. A live [status] wins over what the app
-/// remembers, so a phone that already set up this boat goes straight on.
+/// Picks the one step to show. A live [status] wins over the setup flags,
+/// so a phone the relay already has on the boat goes straight on.
 WifiSetup wifiSetupFor({
   required bool reading,
   BoatWifiInfo? info,
@@ -276,6 +287,7 @@ class BoatWifi {
       relayDataAgeMs: (map?['relayDataAgeMs'] as num?)?.toInt() ?? -1,
       relayClients: (map?['relayClients'] as num?)?.toInt() ?? 0,
       relayDeclined: map?['relayDeclined'] == true,
+      relayNeedsApp: map?['relayNeedsApp'] == true,
     );
   }
 
@@ -297,8 +309,6 @@ class BoatWifi {
   static Future<void> stopRelay() async {
     await _channel.invokeMethod<void>('stopRelay');
   }
-
-  /// Opens the Wi-Fi list so the user can move the phone onto the boat.
 
   /// Runs [call] on whatever network the phone is using.
   ///
