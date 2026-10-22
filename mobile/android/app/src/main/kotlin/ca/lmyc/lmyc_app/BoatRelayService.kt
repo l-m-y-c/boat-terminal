@@ -44,6 +44,8 @@ class BoatRelayService : Service() {
         /** Loopback port forwarded to the terminal's web server, port 80. */
         const val HTTP_PORT = 10180
         private const val TERMINAL_HTTP_PORT = 80
+        /** A forwarded HTTP connection silent this long is given up. */
+        private const val HTTP_IDLE_MS = 30000
         private const val CHANNEL = "boat_relay"
         private const val NOTIFICATION_ID = 4411
         private const val ACTION_STOP = "ca.lmyc.lmyc_app.STOP_RELAY"
@@ -56,6 +58,13 @@ class BoatRelayService : Service() {
         private const val RETRY_MS = 2000L
         private const val CLIENT_QUEUE = 256
         private val UDP_PORTS = intArrayOf(10110, 2000)
+
+        /**
+         * IPv4 127.0.0.1, which members type into chart apps. Java's own
+         * loopback address is ::1 on Android, and an IPv6 listener refuses
+         * connections to 127.0.0.1.
+         */
+        private val LOOPBACK: InetAddress = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
 
         @Volatile var running = false
             private set
@@ -206,7 +215,7 @@ class BoatRelayService : Service() {
             try {
                 ServerSocket().use { s ->
                     s.reuseAddress = true
-                    s.bind(InetSocketAddress(InetAddress.getLoopbackAddress(), PORT))
+                    s.bind(InetSocketAddress(LOOPBACK, PORT))
                     server = s
                     listening = true
                     refresh()
@@ -238,7 +247,7 @@ class BoatRelayService : Service() {
             try {
                 ServerSocket().use { s ->
                     s.reuseAddress = true
-                    s.bind(InetSocketAddress(InetAddress.getLoopbackAddress(), HTTP_PORT))
+                    s.bind(InetSocketAddress(LOOPBACK, HTTP_PORT))
                     httpServer = s
                     while (!stopping) {
                         val local = s.accept()
@@ -266,13 +275,20 @@ class BoatRelayService : Service() {
             closeQuietly(local)
             return
         }
+        local.soTimeout = HTTP_IDLE_MS
+        remote.soTimeout = HTTP_IDLE_MS
         val back = Thread({ pump(remote, local) }, "relay-http-back")
         back.start()
         pump(local, remote)
         back.join()
+        closeQuietly(local)
+        closeQuietly(remote)
     }
 
-    /** Copies until either side closes, then closes both. */
+    /**
+     * Copies one direction until it ends, then half-closes the other side so
+     * a client that shuts its sending half still gets the whole answer.
+     */
     private fun pump(from: Socket, to: Socket) {
         val buf = ByteArray(8192)
         try {
@@ -286,8 +302,10 @@ class BoatRelayService : Service() {
             }
         } catch (_: IOException) {
         }
-        closeQuietly(from)
-        closeQuietly(to)
+        try {
+            to.shutdownOutput()
+        } catch (_: IOException) {
+        }
     }
 
     /** One connection to the terminal over the boat network, kept open. */
@@ -367,7 +385,7 @@ class BoatRelayService : Service() {
             line[end + 1] = '\n'.code.toByte()
             for (port in UDP_PORTS) {
                 try {
-                    s.send(DatagramPacket(line, end + 2, InetAddress.getLoopbackAddress(), port))
+                    s.send(DatagramPacket(line, end + 2, LOOPBACK, port))
                 } catch (_: IOException) {
                 }
             }
