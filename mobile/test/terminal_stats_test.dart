@@ -74,8 +74,8 @@ void main() {
       expect(of('sim', 'sim').tone, Tone.caution);
       expect(of('sim', 'sim').pill, 'Simulation');
       expect(of('sim', 'sim').simulated, isTrue);
-      expect(of('n2k', 'quiet').tone, Tone.bad);
-      expect(of('n2k', 'quiet').pill, 'No bus data');
+      expect(of('n2k', 'quiet').tone, Tone.neutral);
+      expect(of('n2k', 'quiet').pill, 'Waiting for boat data');
       expect(of('n2k', 'bus_off').pill, 'Bus fault');
       expect(of('n2k', 'opening').tone, Tone.neutral);
     });

@@ -142,11 +142,9 @@ class TerminalStats {
   Tone get tone => switch (state) {
     BusState.live => Tone.good,
     BusState.simulated || BusState.paused => Tone.caution,
-    BusState.opening => Tone.neutral,
-    BusState.waiting ||
-    BusState.quiet ||
-    BusState.busOff ||
-    BusState.failed => Tone.bad,
+    // A silent bus is not a fault: the link works, the instruments are quiet.
+    BusState.opening || BusState.waiting || BusState.quiet => Tone.neutral,
+    BusState.busOff || BusState.failed => Tone.bad,
   };
 
   /// The few words on the status pill.
@@ -155,7 +153,7 @@ class TerminalStats {
     BusState.simulated => 'Simulation',
     BusState.paused => 'Simulation paused',
     BusState.opening => 'Starting',
-    BusState.waiting || BusState.quiet => 'No bus data',
+    BusState.waiting || BusState.quiet => 'Waiting for boat data',
     BusState.busOff || BusState.failed => 'Bus fault',
   };
 

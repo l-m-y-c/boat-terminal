@@ -42,7 +42,8 @@ class BoatRelayService : Service() {
         private const val ACTION_STOP = "ca.lmyc.lmyc_app.STOP_RELAY"
         private const val EXTRA_IP = "ip"
         private const val CONNECT_TIMEOUT_MS = 3000
-        private const val READ_TIMEOUT_MS = 10000
+        /** Longer than the terminal's 15 s heartbeat, so a quiet bus is not a drop. */
+        private const val READ_TIMEOUT_MS = 25000
         private const val RETRY_MS = 2000L
         private const val CLIENT_QUEUE = 256
 

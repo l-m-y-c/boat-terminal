@@ -1438,6 +1438,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Widget _arrivedPanel(BuildContext context) {
     final stats = _stats;
     final linked = _blePhase == BlePhase.paired;
+    final state = stats?.state;
+    final quiet = state == BusState.waiting || state == BusState.quiet;
+    final fault = state == BusState.busOff || state == BusState.failed;
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
       children: [
@@ -1460,10 +1463,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ?.copyWith(fontWeight: FontWeight.w700, color: kNavy),
         ),
         const SizedBox(height: 8),
-        const Text(
-          'Chart apps on this phone can get the boat\'s data.',
+        Text(
+          fault
+              ? 'Connected, but the boat\'s NMEA 2000 bus has a fault.'
+              : quiet
+              ? 'Connected. Waiting for data from the boat\'s instruments.'
+              : 'Chart apps on this phone can get the boat\'s data.',
           textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.black54, fontSize: 16, height: 1.4),
+          style: TextStyle(
+            color: fault ? kRed : Colors.black54,
+            fontSize: 16,
+            height: 1.4,
+          ),
         ),
         if (stats != null) ...[
           const SizedBox(height: 14),

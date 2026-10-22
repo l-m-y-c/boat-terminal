@@ -1,5 +1,8 @@
 #include "gateway.h"
 
+#include "nmea.h"
+#include "pairing.h"
+
 #include <Arduino.h>
 
 #include <cerrno>
@@ -151,6 +154,21 @@ static bool flush_client(size_t i)
     return true;
 }
 
+/* A quiet bus sends no sentences, and a phone cannot tell that from a
+ * terminal that went away. The standard heartbeat proves the link: to each
+ * new TCP client at once, and every 15 s on TCP, UDP and BLE notify. */
+static constexpr uint32_t kHeartbeatMs = 15000;
+static uint32_t g_heartbeat_ms = 0;
+static uint8_t g_heartbeat_seq = 0;
+
+static size_t heartbeat_line(char *out, size_t cap)
+{
+    snprintf(out, cap, "$IIHBT,%lu.0,A,%u", static_cast<unsigned long>(kHeartbeatMs / 1000),
+             static_cast<unsigned>(g_heartbeat_seq));
+    nmea_append_checksum(out, cap);
+    return strlen(out);
+}
+
 void gateway_poll(void)
 {
     if (!g_started || g_listen_fd < 0) {
@@ -179,7 +197,23 @@ void gateway_poll(void)
             c.len = 0;
             c.progress_ms = millis();
             Serial.printf("NMEA gateway: TCP client #%d\n", slot);
+            char hb[40];
+            const size_t n = heartbeat_line(hb, sizeof(hb) - 2);
+            memcpy(c.buf, hb, n);
+            memcpy(c.buf + n, "\r\n", 2);
+            c.len = n + 2;
+            flush_client(static_cast<size_t>(slot));
         }
+    }
+
+    const uint32_t now = millis();
+    if (now - g_heartbeat_ms >= kHeartbeatMs) {
+        g_heartbeat_ms = now;
+        g_heartbeat_seq = static_cast<uint8_t>((g_heartbeat_seq + 1) % 10);
+        char hb[40];
+        heartbeat_line(hb, sizeof(hb));
+        gateway_send_sentence(hb);
+        pairing_nmea_notify(hb);
     }
 
     char sink[64];

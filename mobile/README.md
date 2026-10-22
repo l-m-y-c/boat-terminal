@@ -12,10 +12,10 @@ See `../docs/06-phone-app-and-pairing.md` and `../docs/08-user-flows.md`.
 
 ## Current status (v0.3)
 
-- **One guided journey** on one screen: **Find → Connect → Wi-Fi → Chart data**, the same four stops the terminal shows. One title, one sentence, and at most one main button per stop; it moves on by itself. See [doc 06](../docs/06-phone-app-and-pairing.md#the-journey).
+- **One guided journey** on one screen: **Find → Connect → Wi-Fi → NMEA**, the same four stops the terminal shows. One title, one sentence, and at most one main button per stop; it moves on by itself. See [doc 06](../docs/06-phone-app-and-pairing.md#the-journey).
 - **Find**: **Scan QR code** first, **Find nearby boats** second. A boat joined before is found and joined after a five-second countdown.
 - **Wi-Fi**: saved with Android's Save network prompt (not a suggestion), then the app watches the phone's networks every two seconds and when it returns from Wi-Fi settings.
-- **Chart data**: a foreground service, **Connected to the boat**, holds the boat Wi-Fi and repeats the terminal's stream on `127.0.0.1:10110` (`android/app/src/main/kotlin/ca/lmyc/lmyc_app/BoatRelayService.kt`). Navionics and i-Boating use **UDP port 10110**, address `127.0.0.1` where asked, so mobile data stays on.
+- **NMEA**: a foreground service, **Connected to the boat**, holds the boat Wi-Fi and repeats the terminal's stream on `127.0.0.1:10110` (`android/app/src/main/kotlin/ca/lmyc/lmyc_app/BoatRelayService.kt`). Navionics and i-Boating use **UDP port 10110**, address `127.0.0.1` where asked, so mobile data stays on.
 - **On board**: the data-source pill, **Connect a chart app**, **Boat data** (BLE `…000050` counters), and **Leave the boat**.
 - **Diagnostics** behind the settings icon: link rows, Bluetooth detail, the **Sentences** console, Find a terminal.
 - The maintenance book and chart snapshot pages are still in the code but not reachable, matching the terminal's default build.

@@ -16,8 +16,9 @@ class BoatWifiInfo {
 /// Loopback address chart apps use. The relay in this app serves it.
 const kRelayHost = '127.0.0.1';
 
-/// Data older than this means the terminal stopped sending.
-const kRelayStaleMs = 5000;
+/// Data older than this means the terminal went away. A quiet bus still
+/// sends the terminal's heartbeat every 15 s, so allow one and a margin.
+const kRelayStaleMs = 20000;
 
 /// What the phone's networks and the chart-app relay say right now.
 class BoatWifiStatus {

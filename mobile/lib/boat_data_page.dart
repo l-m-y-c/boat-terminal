@@ -12,7 +12,7 @@ Color toneColor(Tone tone) => switch (tone) {
   Tone.neutral => const Color(0xFF5C6B7A),
 };
 
-/// "Live · NMEA 2000" / "Simulation" / "No bus data", with a dot.
+/// "Live · NMEA 2000" / "Simulation" / "Waiting for boat data", with a dot.
 class DataStatusPill extends StatelessWidget {
   const DataStatusPill({super.key, required this.stats});
 
@@ -50,11 +50,12 @@ class DataStatusPill extends StatelessWidget {
   }
 }
 
-String _headline(TerminalStats s) => switch (s.tone) {
-  Tone.good => 'Live boat data',
-  Tone.caution => 'Simulated data',
-  Tone.bad => 'No data from the bus',
-  Tone.neutral => 'Starting up',
+String _headline(TerminalStats s) => switch (s.state) {
+  BusState.live => 'Live boat data',
+  BusState.simulated || BusState.paused => 'Simulated data',
+  BusState.opening => 'Starting up',
+  BusState.waiting || BusState.quiet => 'Waiting for boat data',
+  BusState.busOff || BusState.failed => 'NMEA 2000 bus fault',
 };
 
 class _IntegrityLine extends StatelessWidget {
