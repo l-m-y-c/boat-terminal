@@ -14,6 +14,7 @@ import 'instruments.dart';
 import 'journey.dart';
 import 'last_boat.dart';
 import 'nmea_data_page.dart';
+import 'tab_pager.dart';
 import 'nmea_console.dart';
 import 'pairing_link.dart';
 import 'protocol.dart';
@@ -1228,7 +1229,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _noteArrival(stop);
     final onBoard = stop == JourneyStop.arrived && !_splashing;
     final contentKey = stop == JourneyStop.arrived
-        ? (_splashing ? 'splash' : 'tab/${_tab.name}')
+        ? (_splashing ? 'splash' : 'tabs')
         : '$stop/${_landing.name}/${_wifiSetup.name}';
     return Scaffold(
       backgroundColor: const Color(0xFFF7F9FB),
@@ -1303,7 +1304,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _onBoardTab() => switch (_tab) {
+  Widget _onBoardTab() => WrapTabPager(
+    count: OnBoardTab.values.length,
+    index: _tab.index,
+    onChanged: (i) => _openTab(OnBoardTab.values[i]),
+    builder: (context, i) => _tabPage(OnBoardTab.values[i]),
+  );
+
+  Widget _tabPage(OnBoardTab tab) => switch (tab) {
     OnBoardTab.boat => _boatTab(context),
     OnBoardTab.instruments => const InstrumentsView(),
     OnBoardTab.nmeaData => NmeaDataView(
@@ -1534,77 +1542,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _boatTab(BuildContext context) {
-    final stats = _stats;
-    final linked = _blePhase == BlePhase.paired;
-    final state = stats?.state;
-    final quiet = state == BusState.waiting || state == BusState.quiet;
-    final fault = state == BusState.busOff || state == BusState.failed;
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
-      children: [
-        Container(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: kLine, width: 1.5),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (stats != null) ...[
-                InkWell(
-                  borderRadius: BorderRadius.circular(20),
-                  onTap: () => showDataSourceSheet(context, stats),
-                  child: DataStatusPill(stats: stats),
-                ),
-                const SizedBox(height: 10),
-              ],
-              Text(
-                fault
-                    ? 'Connected, but the boat\'s NMEA 2000 bus has a fault.'
-                    : quiet
-                    ? 'Connected. Waiting for data from the boat\'s instruments.'
-                    : 'Chart apps on this phone can get the boat\'s data.',
-                style: TextStyle(
-                  color: fault ? kRed : Colors.black87,
-                  fontSize: 15.5,
-                  height: 1.4,
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (!linked) ...[
-          const SizedBox(height: 12),
-          _Notice(
-            color: Colors.black54,
-            text: 'Bluetooth to the terminal dropped. Chart apps keep working.',
-            action: TextButton(
-              onPressed: _busy ? null : _retry,
-              child: const Text('Reconnect'),
-            ),
-          ),
-        ],
-        const SizedBox(height: 22),
-        const SectionLabel('On this phone'),
-        const SizedBox(height: 10),
-        OptionTile(
-          icon: Icons.map_outlined,
-          title: 'Connect a chart app',
-          subtitle: 'Navionics or i-Boating: UDP, port 10110',
-          onTap: _openNmea,
-        ),
-        OptionTile(
-          icon: Icons.logout,
-          title: 'Leave the boat',
-          subtitle: 'Stop sharing the boat data on this phone',
-          onTap: () => unawaited(_leaveBoat()),
-        ),
-      ],
-    );
-  }
+  Widget _boatTab(BuildContext context) => BoatTabView(
+    state: _stats?.state,
+    linked: _blePhase == BlePhase.paired,
+    onReconnect: _busy ? null : _retry,
+    onChartApp: _openNmea,
+    onLeave: () => unawaited(_leaveBoat()),
+  );
 
   /// Back to the start: no relay, no watch, no Bluetooth.
   Future<void> _leaveBoat() async {
@@ -1800,8 +1744,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 }
 
 /// A short line under the arrived header, tinted by what it is about.
-class _Notice extends StatelessWidget {
-  const _Notice({required this.color, required this.text, this.action});
+class NoticeBox extends StatelessWidget {
+  const NoticeBox({
+    super.key,
+    required this.color,
+    required this.text,
+    this.action,
+  });
 
   final Color color;
   final String text;
@@ -1824,6 +1773,72 @@ class _Notice extends StatelessWidget {
           ?action,
         ],
       ),
+    );
+  }
+}
+
+/// The Boat tab: problems worth knowing about, then what to do on this
+/// phone. No status panel; the data source lives on NMEA data and in the
+/// title badge.
+class BoatTabView extends StatelessWidget {
+  const BoatTabView({
+    super.key,
+    required this.state,
+    required this.linked,
+    required this.onReconnect,
+    required this.onChartApp,
+    required this.onLeave,
+  });
+
+  final BusState? state;
+  final bool linked;
+  final VoidCallback? onReconnect;
+  final VoidCallback onChartApp;
+  final VoidCallback onLeave;
+
+  @override
+  Widget build(BuildContext context) {
+    final quiet = state == BusState.waiting || state == BusState.quiet;
+    final fault = state == BusState.busOff || state == BusState.failed;
+    return ListView(
+      key: const ValueKey('boat-tab'),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+      children: [
+        if (fault || quiet) ...[
+          NoticeBox(
+            color: fault ? kRed : Colors.black54,
+            text: fault
+                ? 'Connected, but the boat\'s NMEA 2000 bus has a fault.'
+                : 'Connected. Waiting for data from the boat\'s instruments.',
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (!linked) ...[
+          NoticeBox(
+            color: Colors.black54,
+            text: 'Bluetooth to the terminal dropped. Chart apps keep working.',
+            action: TextButton(
+              onPressed: onReconnect,
+              child: const Text('Reconnect'),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        const SectionLabel('On this phone'),
+        const SizedBox(height: 10),
+        OptionTile(
+          icon: Icons.map_outlined,
+          title: 'Connect a chart app',
+          subtitle: 'Navionics or i-Boating: UDP, port 10110',
+          onTap: onChartApp,
+        ),
+        OptionTile(
+          icon: Icons.logout,
+          title: 'Leave the boat',
+          subtitle: 'Stop sharing the boat data on this phone',
+          onTap: onLeave,
+        ),
+      ],
     );
   }
 }
