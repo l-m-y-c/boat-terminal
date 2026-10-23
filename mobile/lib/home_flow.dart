@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'boat_wifi.dart';
 import 'maintenance_book.dart';
+import 'ui_kit.dart';
 
 /// Wi-Fi name, address, and the ports chart apps use.
 class NmeaInfoPage extends StatelessWidget {
@@ -25,28 +26,21 @@ class NmeaInfoPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final network = ssid.isEmpty ? 'Not received yet' : ssid;
     return Scaffold(
-      appBar: AppBar(title: const Text('Chart apps')),
+      appBar: AppBar(
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Chart apps'),
+            if (simulated) ...[
+              const SizedBox(width: 8),
+              const SimulationBadge(onDark: true),
+            ],
+          ],
+        ),
+      ),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          if (simulated) ...[
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFFB7791F).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: const Color(0xFFB7791F).withValues(alpha: 0.4),
-                ),
-              ),
-              child: const Text(
-                'The terminal is simulating a boat. Chart apps will show '
-                'simulated position, depth and wind, not the boat\'s.',
-                style: TextStyle(height: 1.4, color: Color(0xFF7A4F0E)),
-              ),
-            ),
-            const SizedBox(height: 20),
-          ],
           Text(
             onBoat
                 ? 'This phone is getting the boat data. Point the chart app at '
@@ -59,11 +53,11 @@ class NmeaInfoPage extends StatelessWidget {
           _fact(context, 'Address', kRelayHost, kRelayHost),
           _fact(context, 'Port', '10110', '10110'),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'In Navionics or i-Boating, add a UDP device on port 10110. '
             'If the app asks for an address, use $kRelayHost. '
             'TCP to $kRelayHost port 10110 works too, while this app is running.',
-            style: TextStyle(color: Colors.black54, height: 1.4),
+            style: TextStyle(color: Palette.of(context).muted, height: 1.4),
           ),
           const SizedBox(height: 24),
           const Divider(),
@@ -91,7 +85,7 @@ class NmeaInfoPage extends StatelessWidget {
             width: 72,
             child: Text(
               label,
-              style: const TextStyle(color: Colors.black54, height: 1.4),
+              style: TextStyle(color: Palette.of(context).muted, height: 1.4),
             ),
           ),
           Expanded(
@@ -136,9 +130,9 @@ class MaintenanceMenuPage extends StatelessWidget {
               horizontal: 24,
               vertical: 8,
             ),
-            leading: const Icon(
+            leading: Icon(
               Icons.report_outlined,
-              color: Color(0xFF001F3F),
+              color: Palette.of(context).ink,
             ),
             title: const Text('Create a defect report'),
             subtitle: const Text('Photos and notes saved on the boat'),
@@ -158,9 +152,9 @@ class MaintenanceMenuPage extends StatelessWidget {
               horizontal: 24,
               vertical: 8,
             ),
-            leading: const Icon(
+            leading: Icon(
               Icons.menu_book_outlined,
-              color: Color(0xFF001F3F),
+              color: Palette.of(context).ink,
             ),
             title: const Text('Log entry'),
             subtitle: const Text('Not set up yet'),

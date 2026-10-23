@@ -210,7 +210,7 @@ Test switching to the simulator and back on **Data source** off the bus, where U
 
 The terminal never acknowledges frames. On a bench bus with one sender and the terminal, the sender gets no ACK and resends every frame, so the terminal sees duplicates and the sender's error counter climbs. Keep a second listening node on the bench bus, such as the USB sniffer, which acknowledges. On the boat the other devices do this.
 
-While frames flow, open **Data source** on the glass, or **Boat data** on the phone. **Lost frames** must stay at 0, and the buffer peak should stay far below 2048. `NMEA STATS` on the UART console prints the same counters.
+While frames flow, open **Data source** on the glass, or **NMEA data** on the phone. **Lost frames** must stay at 0, and the buffer peak should stay far below 2048. `NMEA STATS` on the UART console prints the same counters.
 
 ## 6. Commissioning on the boat
 

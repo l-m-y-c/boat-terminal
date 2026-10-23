@@ -499,6 +499,7 @@ class _MaintenanceBookPageState extends State<MaintenanceBookPage> {
                     ),
                   ),
                   IconButton(
+                    tooltip: 'Remove photo',
                     onPressed: _busy ? null : () => _dropPhoto(i),
                     icon: const Icon(Icons.close),
                   ),

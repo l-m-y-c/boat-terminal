@@ -55,3 +55,6 @@ const kMaintStatuses = <String>[
   'completed',
   'future-wishlist',
 ];
+
+/// Largest chart snapshot JPEG the terminal accepts (firmware `kSnapshotJpegMax`).
+const int kSnapshotJpegMax = 220 * 1024;

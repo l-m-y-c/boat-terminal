@@ -25,7 +25,6 @@ C_FILES = [
 ]
 DART_FILES = [
     ROOT / "mobile/lib/protocol.dart",
-    ROOT / "mobile/lib/boatlink.dart",
 ]
 STAND_IN = ROOT / "tools/maint_card_server.py"
 STATS_C = ROOT / "firmware/src/terminal_stats.cpp"

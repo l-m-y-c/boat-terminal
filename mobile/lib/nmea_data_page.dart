@@ -1,9 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import 'counter_help.dart';
 import 'terminal_stats.dart';
-
-const _navy = Color(0xFF001F3F);
-const _border = Color(0xFFE2E8F0);
+import 'ui_kit.dart';
 
 Color toneColor(Tone tone) => switch (tone) {
   Tone.good => const Color(0xFF1E7F5C),
@@ -58,6 +59,24 @@ String _headline(TerminalStats s) => switch (s.state) {
   BusState.busOff || BusState.failed => 'NMEA 2000 bus fault',
 };
 
+/// Explains the data source pill: the simulation sheet while simulating,
+/// otherwise the state in a sentence.
+void showDataSourceSheet(BuildContext context, TerminalStats s) {
+  if (s.simulated) {
+    unawaited(showSimulationSheet(context));
+    return;
+  }
+  unawaited(
+    showInfoSheet(
+      context,
+      title: _headline(s),
+      icon: Icons.lan_outlined,
+      tone: toneColor(s.tone),
+      paragraphs: [s.summary],
+    ),
+  );
+}
+
 class _IntegrityLine extends StatelessWidget {
   const _IntegrityLine({required this.stats});
 
@@ -91,8 +110,9 @@ class _IntegrityLine extends StatelessWidget {
 }
 
 /// The terminal's data source, traffic, integrity and delivery counters.
-class BoatDataPage extends StatelessWidget {
-  const BoatDataPage({
+/// Every panel opens an explanation. No app bar: the home shell owns it.
+class NmeaDataView extends StatelessWidget {
+  const NmeaDataView({
     super.key,
     required this.stats,
     required this.updatedAt,
@@ -108,10 +128,7 @@ class BoatDataPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = stats;
-    return Scaffold(
-      appBar: AppBar(title: const Text('Boat data')),
-      body: SafeArea(child: s == null ? _waiting(context) : _body(context, s)),
-    );
+    return s == null ? _waiting(context) : _body(context, s);
   }
 
   Widget _waiting(BuildContext context) {
@@ -126,8 +143,9 @@ class BoatDataPage extends StatelessWidget {
             Text(
               supported
                   ? 'Reading the terminal…'
-                  : 'This terminal does not report its data source yet. '
-                        'Update its firmware.',
+                  : 'NMEA data needs the Bluetooth link to the terminal. '
+                        'Reconnect on the Boat tab, or update the '
+                        'terminal\'s firmware if it is old.',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 16, height: 1.4),
             ),
@@ -138,76 +156,71 @@ class BoatDataPage extends StatelessWidget {
   }
 
   Widget _body(BuildContext context, TerminalStats s) {
-    final color = toneColor(s.tone);
     final updated = updatedAt == null
         ? ''
         : ' · updated ${DateTime.now().difference(updatedAt!).inSeconds} s ago';
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
       children: [
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.07),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: color.withValues(alpha: 0.35)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              DataStatusPill(stats: s),
-              const SizedBox(height: 14),
-              Text(
-                _headline(s),
-                style: Theme.of(context).textTheme.headlineSmall
-                    ?.copyWith(fontWeight: FontWeight.w700, color: _navy),
+        Row(
+          children: [
+            InkWell(
+              key: const ValueKey('data-source-pill'),
+              borderRadius: BorderRadius.circular(20),
+              onTap: () => showDataSourceSheet(context, s),
+              child: DataStatusPill(stats: s),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Tap a panel for help',
+                textAlign: TextAlign.right,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Palette.of(context).faint,
+                  fontSize: 12.5,
+                ),
               ),
-              const SizedBox(height: 6),
-              Text(
-                s.summary,
-                style: const TextStyle(color: Colors.black87, height: 1.4),
-              ),
-              const SizedBox(height: 14),
-              _IntegrityLine(stats: s),
-            ],
-          ),
+            ),
+          ],
         ),
-        if (s.simulated) ...[
-          const SizedBox(height: 14),
-          const _Note(
-            icon: Icons.info_outline,
-            text:
-                'To use the boat\'s own instruments, tap the SIMULATION badge on '
-                'the terminal\'s top bar and choose NMEA 2000.',
-          ),
-        ],
+        const SizedBox(height: 12),
+        _IntegrityLine(stats: s),
         _Section(
           title: 'Traffic',
           metrics: [
-            _Metric('Messages / s', formatCount(s.messagesPerSecond)),
-            _Metric('Frames / s', formatCount(s.framesPerSecond)),
-            _Metric('Peak frames / s', formatCount(s.framesPerSecondPeak)),
-            _Metric('Frames received', formatCount(s.frames)),
-            _Metric('PGN types', formatCount(s.pgnTypes)),
-            _Metric('Devices', formatCount(s.devices)),
+            _Metric('mps', 'Messages / s', formatCount(s.messagesPerSecond)),
+            _Metric('fps', 'Frames / s', formatCount(s.framesPerSecond)),
+            _Metric(
+              'fps_peak',
+              'Peak frames / s',
+              formatCount(s.framesPerSecondPeak),
+            ),
+            _Metric('frames', 'Frames received', formatCount(s.frames)),
+            _Metric('pgns', 'PGN types', formatCount(s.pgnTypes)),
+            _Metric('devices', 'Devices', formatCount(s.devices)),
           ],
         ),
         _Section(
           title: 'Integrity',
           metrics: [
             _Metric(
+              'lost',
               'Lost frames',
               formatCount(s.lost),
               tone: s.lost == 0 ? Tone.good : Tone.bad,
             ),
             _Metric(
+              'bus_err',
               'Bus errors',
               formatCount(s.busErrors),
               tone: s.busErrors == 0 ? null : Tone.caution,
             ),
-            _Metric('Error counter', formatCount(s.receiveErrorCounter)),
+            _Metric('rec', 'Error counter', formatCount(s.receiveErrorCounter)),
           ],
           footer: _BufferBar(
+            helpKey: 'rx_buffer',
             label: 'Receive buffer',
             share: s.bufferPeakShare,
             detail:
@@ -218,15 +231,17 @@ class BoatDataPage extends StatelessWidget {
         _Section(
           title: 'Chart apps',
           metrics: [
-            _Metric('Connected', formatCount(s.chartApps)),
-            _Metric('Sentences sent', formatCount(s.sentencesOut)),
+            _Metric('apps', 'Connected', formatCount(s.chartApps)),
+            _Metric('out', 'Sentences sent', formatCount(s.sentencesOut)),
             _Metric(
+              'not_delivered',
               'Not delivered',
               formatCount(s.notDelivered),
               tone: s.notDelivered == 0 ? null : Tone.caution,
             ),
           ],
           footer: _BufferBar(
+            helpKey: 'app_buffer',
             label: 'App buffer',
             share: s.appBufferPeakShare,
             detail:
@@ -237,46 +252,28 @@ class BoatDataPage extends StatelessWidget {
         Text(
           'Terminal up ${formatUptime(s.uptimeSeconds)} · '
           'last frame ${formatAge(s.lastFrameAgeMs)}$updated',
-          style: const TextStyle(color: Colors.black45, fontSize: 13),
+          style: TextStyle(color: Palette.of(context).faint, fontSize: 13),
         ),
       ],
     );
   }
 }
 
+void _openHelp(BuildContext context, String key) {
+  final help = counterHelp[key];
+  if (help == null) return;
+  unawaited(
+    showInfoSheet(
+      context,
+      title: help.title,
+      icon: Icons.help_outline,
+      paragraphs: help.paragraphs,
+    ),
+  );
+}
+
 String _kb(int bytes) =>
     bytes < 1024 ? '$bytes B' : '${(bytes / 1024).toStringAsFixed(1)} KB';
-
-class _Note extends StatelessWidget {
-  const _Note({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 20, color: Colors.black54),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(color: Colors.black87, height: 1.4),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _Section extends StatelessWidget {
   const _Section({required this.title, required this.metrics, this.footer});
@@ -292,15 +289,7 @@ class _Section extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title.toUpperCase(),
-            style: const TextStyle(
-              fontSize: 12,
-              letterSpacing: 1.1,
-              fontWeight: FontWeight.w700,
-              color: Colors.black45,
-            ),
-          ),
+          SectionLabel(title),
           const SizedBox(height: 10),
           LayoutBuilder(
             builder: (context, box) {
@@ -324,30 +313,42 @@ class _Section extends StatelessWidget {
 }
 
 class _Metric extends StatelessWidget {
-  const _Metric(this.label, this.value, {this.tone});
+  const _Metric(this.helpKey, this.label, this.value, {this.tone});
 
+  final String helpKey;
   final String label;
   final String value;
   final Tone? tone;
 
   @override
   Widget build(BuildContext context) {
-    final color = tone == null ? _navy : toneColor(tone!);
-    return Container(
+    final color = tone == null ? Palette.of(context).ink : toneColor(tone!);
+    return _Tappable(
+      helpKey: helpKey,
+      label: label,
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _border),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.black54, fontSize: 12.5),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Palette.of(context).muted,
+                    fontSize: 12.5,
+                  ),
+                ),
+              ),
+              Icon(
+                Icons.info_outline,
+                size: 14,
+                color: Palette.of(context).faint,
+              ),
+            ],
           ),
           const SizedBox(height: 4),
           FittedBox(
@@ -371,11 +372,13 @@ class _Metric extends StatelessWidget {
 
 class _BufferBar extends StatelessWidget {
   const _BufferBar({
+    required this.helpKey,
     required this.label,
     required this.share,
     required this.detail,
   });
 
+  final String helpKey;
   final String label;
   final double share;
   final String detail;
@@ -387,13 +390,10 @@ class _BufferBar extends StatelessWidget {
         : share >= 0.5
         ? Tone.caution
         : Tone.good;
-    return Container(
+    return _Tappable(
+      helpKey: helpKey,
+      label: label,
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _border),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -401,9 +401,9 @@ class _BufferBar extends StatelessWidget {
             children: [
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w600,
-                  color: _navy,
+                  color: Palette.of(context).ink,
                 ),
               ),
               const Spacer(),
@@ -422,16 +422,53 @@ class _BufferBar extends StatelessWidget {
             child: LinearProgressIndicator(
               value: share,
               minHeight: 8,
-              backgroundColor: const Color(0xFFE2E8F0),
+              backgroundColor: Palette.of(context).line,
               color: toneColor(tone),
             ),
           ),
           const SizedBox(height: 8),
           Text(
             detail,
-            style: const TextStyle(color: Colors.black54, fontSize: 13),
+            style: TextStyle(color: Palette.of(context).muted, fontSize: 13),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A white panel that opens its help sheet when tapped.
+class _Tappable extends StatelessWidget {
+  const _Tappable({
+    required this.helpKey,
+    required this.label,
+    required this.padding,
+    required this.child,
+  });
+
+  final String helpKey;
+  final String label;
+  final EdgeInsets padding;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(14),
+      side: BorderSide(color: Palette.of(context).line),
+    );
+    return Semantics(
+      button: true,
+      hint: 'What is $label?',
+      child: Material(
+        color: Palette.of(context).card,
+        shape: shape,
+        child: InkWell(
+          key: ValueKey('metric-$helpKey'),
+          customBorder: shape,
+          onTap: () => _openHelp(context, helpKey),
+          child: Padding(padding: padding, child: child),
+        ),
       ),
     );
   }

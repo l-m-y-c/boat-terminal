@@ -19,4 +19,11 @@ class LastBoat {
       await prefs.setString(_key, bleName);
     } catch (_) {}
   }
+
+  static Future<void> forget() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_key);
+    } catch (_) {}
+  }
 }

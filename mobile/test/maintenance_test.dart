@@ -340,10 +340,14 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Maintenance'), findsNothing);
-    await tester.tap(find.byTooltip('Diagnostics'));
+    await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
-    expect(find.text('Diagnostics'), findsWidgets);
-    expect(find.text('Find a terminal'), findsOneWidget);
+    expect(find.byKey(const ValueKey('settings')), findsOneWidget);
+    expect(find.text('Maintenance'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('settings-diagnostics')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('diagnostics')), findsOneWidget);
+    expect(find.text('Find a terminal'), findsNothing);
     expect(find.text('Maintenance book'), findsNothing);
     expect(find.text('Chart snapshot'), findsNothing);
   });

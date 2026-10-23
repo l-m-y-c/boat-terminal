@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmyc_app/boat_data_page.dart';
+import 'package:lmyc_app/nmea_data_page.dart';
 import 'package:lmyc_app/terminal_stats.dart';
 
 /// Laid out exactly as firmware/src/terminal_stats.cpp prints it.
@@ -22,7 +22,9 @@ Future<void> pumpPage(WidgetTester tester, TerminalStats stats) async {
   addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     MaterialApp(
-      home: BoatDataPage(stats: stats, updatedAt: null, supported: true),
+      home: Scaffold(
+        body: NmeaDataView(stats: stats, updatedAt: null, supported: true),
+      ),
     ),
   );
 }
@@ -101,7 +103,6 @@ void main() {
   group('boat data page', () {
     testWidgets('live data says so and counts no loss', (tester) async {
       await pumpPage(tester, TerminalStats.parse(firmwareJson())!);
-      expect(find.text('Live boat data'), findsOneWidget);
       expect(find.text('Live · NMEA 2000'), findsOneWidget);
       expect(
         find.text('No frames lost since the terminal started'),
@@ -117,8 +118,11 @@ void main() {
         tester,
         TerminalStats.parse(firmwareJson(src: 'sim', state: 'sim'))!,
       );
-      expect(find.text('Simulated data'), findsOneWidget);
-      expect(find.textContaining("not the boat's data"), findsOneWidget);
+      // No big panel: a Simulation pill that explains itself when tapped.
+      expect(find.text('Simulation'), findsOneWidget);
+      expect(find.textContaining('SIMULATION badge'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('data-source-pill')));
+      await tester.pumpAndSettle();
       expect(find.textContaining('SIMULATION badge'), findsOneWidget);
     });
 
