@@ -42,6 +42,11 @@ adb shell am start -a android.intent.action.VIEW \
 
 `oob` must be 32 hex chars (16 raw bytes). Copy the live URI off the terminal serial log (`Pairing payload: lmyc://...`) — OOB rotates every boot.
 
+Newer terminals append `&name=Baca%20Lele`, the boat's display name
+(`LMYC_BOAT_NAME` in `firmware/src/secrets.h`). The app shows it as the title
+and falls back to `boat=` (the ID) when it is absent. `/status.json` carries the
+same value as `"name"`.
+
 ### Without the Waveshare
 
 The board can stay at the shop. From the repo root, on a computer joined to the same Wi-Fi as the phone:

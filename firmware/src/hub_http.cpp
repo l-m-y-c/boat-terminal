@@ -189,9 +189,9 @@ static esp_err_t get_status(httpd_req_t *req)
     terminal_stats_copy(data, sizeof(data));
     char json[320 + kTerminalStatsMax];
     snprintf(json, sizeof(json),
-             "{\"boat\":\"%s\",\"sailboat_id\":%lu,\"tcp\":%lu,\"nmea_good\":%lu,\"nmea_bad\":%lu,"
+             "{\"boat\":\"%s\",\"name\":\"%s\",\"sailboat_id\":%lu,\"tcp\":%lu,\"nmea_good\":%lu,\"nmea_bad\":%lu,"
              "\"inject_local\":%s,\"snapshot\":%s,\"data\":%s}\n",
-             LMYC_BOAT_ID,
+             LMYC_BOAT_ID, LMYC_BOAT_NAME,
              static_cast<unsigned long>(LMYC_SAILBOAT_ID),
              static_cast<unsigned long>(gateway_client_count()),
              static_cast<unsigned long>(nmea_good_count()),

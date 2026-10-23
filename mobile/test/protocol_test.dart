@@ -25,6 +25,13 @@ void main() {
       expect(link.terminalId, 'WS7-001');
       expect(link.bleName, 'LMYC-D649');
       expect(link.oob, '0123456789abcdef0123456789abcdef');
+      expect(link.boatName, isNull);
+    });
+
+    test('a newer terminal adds its display name', () {
+      final link = PairingLink.parse(Uri.parse('$good&name=Baca%20Lele'))!;
+      expect(link.boatId, 'BENCH-01');
+      expect(link.boatName, 'Baca Lele');
     });
 
     test('another host or version is refused with a reason', () {

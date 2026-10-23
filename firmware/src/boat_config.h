@@ -19,6 +19,13 @@
 #define LMYC_BOAT_ID "BENCH-01"
 #endif
 
+/* The boat's name as crew say it ("Baca Lele"), shown as the title on the
+ * terminal and in the app. LMYC_BOAT_ID stays the machine name in the SSID,
+ * the BLE name and the pairing link. Plain text: no quotes or backslashes. */
+#ifndef LMYC_BOAT_NAME
+#define LMYC_BOAT_NAME LMYC_BOAT_ID
+#endif
+
 #ifndef LMYC_TERMINAL_ID
 #define LMYC_TERMINAL_ID "WS7-001"
 #endif

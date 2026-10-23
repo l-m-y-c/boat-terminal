@@ -132,6 +132,7 @@ static lv_obj_t *g_qr_plate = nullptr;
 static lv_obj_t *g_home_logo = nullptr;
 static lv_obj_t *g_home_title = nullptr;
 static lv_obj_t *g_home_body = nullptr;
+static lv_obj_t *g_home_hint = nullptr;
 static constexpr int kStops = 4;
 static lv_obj_t *g_stop_dot[kStops] = {};
 static lv_obj_t *g_stop_mark[kStops] = {};
@@ -705,8 +706,10 @@ static void update_home_status(void)
     const char *title = "";
     switch (stop) {
     case Stop::Find:
-        title = "Find your boat";
-        snprintf(body, sizeof(body), "Scan this code in the LMYC app.");
+        /* A crew member stepping aboard: the boat's name first, then what
+         * to do, then the network the app's boat list will show. */
+        title = LMYC_BOAT_NAME;
+        snprintf(body, sizeof(body), "Welcome aboard. Scan this code in the LMYC app to connect.");
         break;
     case Stop::Connect:
         if (problem) {
@@ -727,7 +730,7 @@ static void update_home_status(void)
                  "The phone is on the boat Wi-Fi. Waiting for the LMYC app.");
         break;
     case Stop::Arrived: {
-        title = "On board " LMYC_BOAT_ID;
+        title = "On board " LMYC_BOAT_NAME;
         const int phones = net_wifi_ap_stations();
         /* N2K chosen with nothing arriving: the link works, the instruments
          * are quiet. That is not a fault, so it is said calmly. A bus fault
@@ -745,8 +748,22 @@ static void update_home_status(void)
         break;
     }
     }
+    const bool find = stop == Stop::Find;
+    lv_obj_set_style_text_font(g_home_title,
+                               find ? &lv_font_montserrat_44 : &lv_font_montserrat_32, 0);
     set_label(g_home_title, title);
     set_label(g_home_body, body);
+    show_obj(g_home_hint, find);
+    if (find) {
+        char hint[48];
+        snprintf(hint, sizeof(hint), "Boat Wi-Fi  %s", net_wifi_ap_ssid());
+        set_label(g_home_hint, hint);
+    }
+    /* The title grows on Find; keep the body and hint just under it. */
+    lv_obj_update_layout(g_home_title);
+    lv_obj_align_to(g_home_body, g_home_title, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 14);
+    lv_obj_update_layout(g_home_body);
+    lv_obj_align_to(g_home_hint, g_home_body, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 20);
 }
 
 /* The code is the boot secret. It shows while a phone has to scan it, and
@@ -1134,6 +1151,15 @@ static void build_home(lv_obj_t *parent)
     lv_obj_set_pos(g_home_body, 32, kTop + 80);
     lv_obj_clear_flag(g_home_body, LV_OBJ_FLAG_CLICKABLE);
 
+    g_home_hint = lv_label_create(parent);
+    lv_label_set_text(g_home_hint, "");
+    lv_label_set_long_mode(g_home_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_home_hint, right_x - 56);
+    lv_obj_set_style_text_color(g_home_hint, lv_color_hex(0x8EA2B8), 0);
+    lv_obj_set_style_text_font(g_home_hint, &lv_font_montserrat_18, 0);
+    lv_obj_set_pos(g_home_hint, 32, kTop + 200);
+    lv_obj_clear_flag(g_home_hint, LV_OBJ_FLAG_CLICKABLE);
+
     g_home_logo = lv_img_create(parent);
     lv_img_set_src(g_home_logo, &lmyc_logo);
     lv_obj_set_pos(g_home_logo, right_x + (kQrPlate - 200) / 2, kTop + (kQrPlate - 213) / 2);
@@ -1189,7 +1215,7 @@ static void build_diag_page(lv_obj_t *parent)
     lv_obj_t *tid_value = nullptr;
     lv_obj_t *name_value = nullptr;
     add_kv_row(boat, "Boat", 32, &boat_value);
-    set_label(boat_value, LMYC_BOAT_ID);
+    set_label(boat_value, LMYC_BOAT_NAME);
     add_kv_row(boat, "Terminal", 60, &tid_value);
     set_label(tid_value, LMYC_TERMINAL_ID);
     add_kv_row(boat, "BLE name", 88, &name_value);

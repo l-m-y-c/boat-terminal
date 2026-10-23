@@ -10,6 +10,7 @@
  * advertised; we do not require the phone to request it.
  */
 
+#include <ctype.h>
 #include "pairing.h"
 
 #include "protocol.h"
@@ -208,11 +209,33 @@ static void build_ble_identity(void)
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
+/* Percent-encodes [in] for a query value. Unreserved characters pass. */
+static void url_encode(const char *in, char *out, size_t cap)
+{
+    static const char kHex[] = "0123456789ABCDEF";
+    size_t o = 0;
+    for (const unsigned char *p = reinterpret_cast<const unsigned char *>(in);
+         *p != '\0' && o + 4 < cap; ++p) {
+        const unsigned char c = *p;
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            out[o++] = static_cast<char>(c);
+        } else {
+            out[o++] = '%';
+            out[o++] = kHex[c >> 4];
+            out[o++] = kHex[c & 0x0F];
+        }
+    }
+    out[o] = '\0';
+}
+
 static void build_payload(void)
 {
+    /* name= is the display name; older apps ignore it and show boat=. */
+    char name[64];
+    url_encode(LMYC_BOAT_NAME, name, sizeof(name));
     snprintf(g_payload, sizeof(g_payload),
-             "lmyc://pair?v=1&boat=%s&tid=%s&ble=%s&oob=%s",
-             LMYC_BOAT_ID, LMYC_TERMINAL_ID, g_ble_name, g_oob_hex);
+             "lmyc://pair?v=1&boat=%s&tid=%s&ble=%s&oob=%s&name=%s",
+             LMYC_BOAT_ID, LMYC_TERMINAL_ID, g_ble_name, g_oob_hex, name);
 }
 
 static bool oob_matches_hex(const char *candidate)

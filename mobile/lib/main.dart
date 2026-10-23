@@ -133,6 +133,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   StreamSubscription<BluetoothConnectionState>? _connSubscription;
 
   String? _boatId;
+
+  /// Display name from the terminal's link; null from older terminals.
+  String? _boatName;
   String? _terminalId;
   String? _bleName;
   String? _oob;
@@ -298,6 +301,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     setState(() {
       _landing = _Landing.start;
       _boatId = link.boatId;
+      _boatName = link.boatName;
       _terminalId = link.terminalId;
       _bleName = link.bleName;
       _oob = link.oob;
@@ -615,6 +619,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _landing = _Landing.start;
       _bleName = hit.name;
       _boatId = TerminalName.parse(hit.name).boat;
+      _boatName = null;
       _terminalId = null;
       _oob = null;
       _device = hit.result.device;
@@ -749,6 +754,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             );
           }
           _boatId = link?.boatId ?? _boatId;
+          _boatName = link?.boatName ?? _boatName;
           _terminalId = link?.terminalId ?? _terminalId;
         } catch (e) {
           debugPrint('payload read: $e');
@@ -1311,6 +1317,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   };
 
   String get _boatTitle {
+    final display = _boatName;
+    if (display != null && display.isNotEmpty) return display;
     final id = _boatId;
     if (id != null && id.isNotEmpty) return id;
     final name = _bleName;

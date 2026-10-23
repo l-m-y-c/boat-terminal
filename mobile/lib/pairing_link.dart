@@ -2,7 +2,9 @@ import 'dart:typed_data';
 
 import 'protocol.dart';
 
-/// The `lmyc://pair?v=1&boat=…&tid=…&ble=…&oob=…` link in the terminal QR.
+/// The `lmyc://pair?v=1&boat=…&tid=…&ble=…&oob=…&name=…` link in the
+/// terminal QR. `name` (the boat's display name) is newer; older terminals
+/// leave it out.
 class PairingLink {
   const PairingLink({
     required this.version,
@@ -10,6 +12,7 @@ class PairingLink {
     required this.terminalId,
     required this.bleName,
     required this.oob,
+    this.boatName,
   });
 
   /// The only link layout this app understands.
@@ -19,6 +22,9 @@ class PairingLink {
   final String? boatId;
   final String? terminalId;
   final String? bleName;
+
+  /// The name crew say ("Baca Lele"), or null from an older terminal.
+  final String? boatName;
 
   /// 32 hex characters, or null when the link carries none.
   final String? oob;
@@ -40,6 +46,7 @@ class PairingLink {
       boatId: _nonEmpty(params['boat']),
       terminalId: _nonEmpty(params['tid']),
       bleName: _nonEmpty(params['ble']),
+      boatName: _nonEmpty(params['name']?.trim()),
       oob: (oob != null && oobBytesFromHex(oob) != null) ? oob : null,
     );
   }
