@@ -10,6 +10,7 @@ import 'boat_wifi.dart';
 import 'event_log.dart';
 import 'journey.dart';
 import 'pairing_link.dart';
+import 'platform_info.dart';
 import 'terminal_stats.dart';
 import 'ui_kit.dart';
 
@@ -633,6 +634,8 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
 
   Future<void> _copy() async {
     await Clipboard.setData(ClipboardData(text: _report));
+    // Android 13+ shows its own "Copied" confirmation; don't double it.
+    if (await systemShowsCopyToast()) return;
     if (!mounted) return;
     ScaffoldMessenger.of(context)
         .showSnackBar(const SnackBar(content: Text('Report copied')));
@@ -723,7 +726,12 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
               OutlinedButton.icon(
                 key: const ValueKey('diag-forget'),
                 onPressed: () => unawaited(_forget()),
-                style: OutlinedButton.styleFrom(foregroundColor: kRed),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor:
+                      Theme.of(context).brightness == Brightness.dark
+                      ? kRedOnDark
+                      : kRed,
+                ),
                 icon: const Icon(Icons.delete_outline),
                 label: Text(
                   widget.forgetLabel == null

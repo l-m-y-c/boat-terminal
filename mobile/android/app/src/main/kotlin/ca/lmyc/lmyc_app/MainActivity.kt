@@ -10,6 +10,11 @@ class MainActivity : FlutterActivity() {
         BoatWifi.currentContext = this
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ca.lmyc/boat_wifi")
             .setMethodCallHandler(BoatWifi)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ca.lmyc/platform")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "sdkInt") result.success(android.os.Build.VERSION.SDK_INT)
+                else result.notImplemented()
+            }
     }
 
     override fun onDestroy() {

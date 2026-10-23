@@ -9,6 +9,9 @@ const kNavy = Color(0xFF001F3F);
 const kGreen = Color(0xFF1E7F5C);
 const kAmber = Color(0xFFB7791F);
 const kRed = Color(0xFFB42318);
+
+/// [kRed] lifted for text on dark cards, where the deep red reads poorly.
+const kRedOnDark = Color(0xFFFF8A80);
 const kLine = Color(0xFFE2E8F0);
 
 const _labels = {

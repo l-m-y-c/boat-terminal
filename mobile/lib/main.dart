@@ -355,7 +355,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       return false;
     }
 
-    final adapterState = await FlutterBluePlus.adapterState.first;
+    // On a cold start the first state can be `unknown` before Android
+    // reports; wait briefly for a real one so a saved boat is rejoined.
+    final adapterState = await FlutterBluePlus.adapterState
+        .firstWhere((s) => s != BluetoothAdapterState.unknown)
+        .timeout(
+          const Duration(seconds: 3),
+          onTimeout: () => BluetoothAdapterState.unknown,
+        );
     if (adapterState != BluetoothAdapterState.on) {
       setState(() {
         _blePhase = BlePhase.failed;
