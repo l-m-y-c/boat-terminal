@@ -50,7 +50,9 @@ class AppSettings extends ChangeNotifier {
       depthUnit = _pick(DepthUnit.values, s.getString('${_p}depth'), depthUnit);
       keepScreenOn = s.getBool('${_p}keep_on') ?? keepScreenOn;
       themeMode = _pick(ThemeMode.values, s.getString('${_p}theme'), themeMode);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('prefs: $e');
+    }
     notifyListeners();
   }
 
@@ -73,7 +75,9 @@ class AppSettings extends ChangeNotifier {
         case final Enum e:
           await s.setString('$_p$key', e.name);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('prefs: $e');
+    }
   }
 
   Future<void> setAutoJoin(bool v) {

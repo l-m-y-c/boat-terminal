@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// The terminal this phone joined last, so the next launch can rejoin it.
@@ -8,7 +9,8 @@ class LastBoat {
     try {
       final prefs = await SharedPreferences.getInstance();
       return prefs.getString(_key);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('prefs: $e');
       return null;
     }
   }
@@ -17,13 +19,17 @@ class LastBoat {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_key, bleName);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('prefs: $e');
+    }
   }
 
   static Future<void> forget() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_key);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('prefs: $e');
+    }
   }
 }
