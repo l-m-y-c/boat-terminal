@@ -328,16 +328,19 @@ class _Gauge extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text(
-                caption,
-                style: const TextStyle(
-                  color: Color(0xFF8FB3D9),
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.2,
-                  fontSize: 12.5,
+              Expanded(
+                child: Text(
+                  caption,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF8FB3D9),
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2,
+                    fontSize: 12.5,
+                  ),
                 ),
               ),
-              const Spacer(),
               if (pointer != null)
                 Transform.rotate(
                   angle: pointer! * math.pi / 180,
