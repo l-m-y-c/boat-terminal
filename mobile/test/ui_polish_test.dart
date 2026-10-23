@@ -49,7 +49,9 @@ void main() {
     testWidgets('is absent when the data is real', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
-          home: Scaffold(appBar: AppBar(title: const BoatTitle(name: 'X'))),
+          home: Scaffold(
+            appBar: AppBar(title: const BoatTitle(name: 'X')),
+          ),
         ),
       );
       expect(find.byType(SimulationBadge), findsNothing);
@@ -111,7 +113,11 @@ void main() {
       final r = InstrumentReadings(clock: () => now);
       expect(r.depthM, isNull);
       r.note(nmeaSentence('SDDPT,4.2,0.0'));
-      r.note(nmeaSentence('GPRMC,120000.00,A,4916.0,N,12311.0,W,5.4,231.0,221026,,,A'));
+      r.note(
+        nmeaSentence(
+          'GPRMC,120000.00,A,4916.0,N,12311.0,W,5.4,231.0,221026,,,A',
+        ),
+      );
       r.note(nmeaSentence('WIMWV,315.0,R,12.0,N,A'));
       expect(r.depthM, 4.2);
       expect(r.sogKn, 5.4);
