@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 static constexpr size_t kMaxTalkers = 8;
@@ -149,15 +150,24 @@ void nmea_state_note(const char *sentence)
             g_inst.updated_ms = now;
         }
     } else if (strcmp(formatter, "MWV") == 0 && nfields > 4) {
+        /* The tile is apparent wind (AWS / AWA). True wind (T) would put a
+         * true speed beside an apparent angle, and a boat sending both
+         * would flicker between them, so only R updates it. */
+        const char ref = fields[2][0];
         float ang = 0, spd = 0;
-        if (parse_float(fields[1], &ang) && parse_float(fields[3], &spd)) {
-            if (fields[2][0] == 'R' || fields[2][0] == 'r') {
-                /* Apparent. Fold 0..360 into -180..180 for display. */
-                if (ang > 180.0f) {
-                    ang -= 360.0f;
-                }
-                g_inst.awa_deg = ang;
+        if ((ref == 'R' || ref == 'r') && parse_float(fields[1], &ang) &&
+            parse_float(fields[3], &spd)) {
+            const char unit = fields[4][0];
+            if (unit == 'M' || unit == 'm') {
+                spd *= 1.943844f; /* m/s -> kn */
+            } else if (unit == 'K' || unit == 'k') {
+                spd /= 1.852f; /* km/h -> kn */
             }
+            /* Fold 0..360 into -180..180 for display. */
+            if (ang > 180.0f) {
+                ang -= 360.0f;
+            }
+            g_inst.awa_deg = ang;
             g_inst.aws_kn = spd;
             g_inst.have_wind = true;
             g_inst.wind_ms = now;

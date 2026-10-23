@@ -16,6 +16,10 @@ mkdir -p "$out"
 cxx=${CXX:-c++}
 $cxx -std=gnu++17 -O1 -Wall -Wextra -Werror -I "$fw/src" \
     "$here/test_json_lite.cpp" "$fw/src/json_lite.cpp" -o "$out/test_json_lite"
+# The helm instrument decoder: apparent wind only on the wind tile.
+$cxx -std=gnu++17 -O1 -Wall -Wextra -Werror -I "$here/stub" -I "$fw/src" \
+    "$here/test_nmea_state.cpp" "$fw/src/nmea_state.cpp" -o "$out/test_nmea_state"
+"$out/test_nmea_state"
 "$out/test_json_lite"
 $cxx -std=gnu++17 -O1 -Wall -Wno-unused-parameter -w \
     -include cstdlib -I "$here/stub" -I "$fw/src" -I "$lib" \
