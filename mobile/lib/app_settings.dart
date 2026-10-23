@@ -28,7 +28,7 @@ class AppSettings extends ChangeNotifier {
   SpeedUnit speedUnit = SpeedUnit.knots;
   DepthUnit depthUnit = DepthUnit.metres;
   bool keepScreenOn = false;
-  ThemeMode themeMode = ThemeMode.light;
+  ThemeMode themeMode = ThemeMode.system;
 
   Duration get countdown => Duration(seconds: countdownSeconds);
 

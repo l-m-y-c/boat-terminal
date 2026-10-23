@@ -1089,6 +1089,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final boat = _boatTitle;
     if (_splashShownFor == boat) return;
     _splashShownFor = boat;
+    unawaited(HapticFeedback.mediumImpact());
     _tab = OnBoardTab.values.byName(AppSettings.instance.startTab.name);
     _splashTimer?.cancel();
     if (!AppSettings.instance.arrivalSplash) return;

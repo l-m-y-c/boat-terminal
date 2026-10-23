@@ -30,7 +30,7 @@ void main() {
       expect(s.speedUnit, SpeedUnit.knots);
       expect(s.depthUnit, DepthUnit.metres);
       expect(s.keepScreenOn, isFalse);
-      expect(s.themeMode, ThemeMode.light);
+      expect(s.themeMode, ThemeMode.system);
     });
 
     test('changes are kept for the next launch', () async {
@@ -63,7 +63,7 @@ void main() {
       final s = AppSettings();
       await s.load();
       expect(s.countdownSeconds, 5);
-      expect(s.themeMode, ThemeMode.light);
+      expect(s.themeMode, ThemeMode.system);
     });
 
     test('unit conversion', () {
