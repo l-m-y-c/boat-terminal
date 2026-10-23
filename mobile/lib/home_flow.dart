@@ -53,11 +53,11 @@ class NmeaInfoPage extends StatelessWidget {
           _fact(context, 'Address', kRelayHost, kRelayHost),
           _fact(context, 'Port', '10110', '10110'),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'In Navionics or i-Boating, add a UDP device on port 10110. '
             'If the app asks for an address, use $kRelayHost. '
             'TCP to $kRelayHost port 10110 works too, while this app is running.',
-            style: TextStyle(color: Colors.black54, height: 1.4),
+            style: TextStyle(color: Palette.of(context).muted, height: 1.4),
           ),
           const SizedBox(height: 24),
           const Divider(),
@@ -85,7 +85,7 @@ class NmeaInfoPage extends StatelessWidget {
             width: 72,
             child: Text(
               label,
-              style: const TextStyle(color: Colors.black54, height: 1.4),
+              style: TextStyle(color: Palette.of(context).muted, height: 1.4),
             ),
           ),
           Expanded(
@@ -130,9 +130,9 @@ class MaintenanceMenuPage extends StatelessWidget {
               horizontal: 24,
               vertical: 8,
             ),
-            leading: const Icon(
+            leading: Icon(
               Icons.report_outlined,
-              color: Color(0xFF001F3F),
+              color: Palette.of(context).ink,
             ),
             title: const Text('Create a defect report'),
             subtitle: const Text('Photos and notes saved on the boat'),
@@ -152,9 +152,9 @@ class MaintenanceMenuPage extends StatelessWidget {
               horizontal: 24,
               vertical: 8,
             ),
-            leading: const Icon(
+            leading: Icon(
               Icons.menu_book_outlined,
-              color: Color(0xFF001F3F),
+              color: Palette.of(context).ink,
             ),
             title: const Text('Log entry'),
             subtitle: const Text('Not set up yet'),
