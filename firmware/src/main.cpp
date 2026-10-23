@@ -670,6 +670,8 @@ static constexpr uint32_t kStopDone = 0x3DDC97;
 static constexpr uint32_t kStopNow = 0xFFFFFF;
 static constexpr uint32_t kStopLater = 0x3A4E66;
 static constexpr uint32_t kStopProblem = 0xFF8A80;
+/* The boat's name on the landing screen: a warm gold that reads at arm's length. */
+static constexpr uint32_t kBoatAccent = 0xF2C94C;
 
 static void paint_stops(Stop stop, bool problem)
 {
@@ -749,8 +751,11 @@ static void update_home_status(void)
     }
     }
     const bool find = stop == Stop::Find;
+    /* On Find the boat's name is the headline, not part of the sentence:
+     * set apart by size and the boat accent colour. */
     lv_obj_set_style_text_font(g_home_title,
                                find ? &lv_font_montserrat_44 : &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(g_home_title, lv_color_hex(find ? kBoatAccent : 0xFFFFFF), 0);
     set_label(g_home_title, title);
     set_label(g_home_body, body);
     show_obj(g_home_hint, find);

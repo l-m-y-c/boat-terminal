@@ -1196,9 +1196,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           listenable: _ui,
           builder: (_, _) => SettingsPage(
             settings: AppSettings.instance,
-            savedBoat: _lastBoat == null
-                ? null
-                : TerminalName.parse(_lastBoat!).title,
+            savedBoat: _lastBoat == null ? null : _savedBoatLabel,
             onForget: _forgetBoat,
             terminalId: _terminalId,
             onOpenDiagnostics: _openStatus,
@@ -1263,9 +1261,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
             ),
       onForget: _lastBoat == null ? null : _forgetBoat,
-      forgetLabel: _lastBoat == null
-          ? null
-          : TerminalName.parse(_lastBoat!).title,
+      forgetLabel: _lastBoat == null ? null : _savedBoatLabel,
     );
   }
 
@@ -1315,6 +1311,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     JourneyStop.wifi => _wifiSetup == WifiSetup.problem,
     _ => false,
   };
+
+  /// The saved boat as crew say it: the terminal's display name while it is
+  /// known, else the title parsed from the saved Bluetooth name.
+  String get _savedBoatLabel {
+    final display = _boatName;
+    if (display != null && display.isNotEmpty) return display;
+    return TerminalName.parse(_lastBoat!).title;
+  }
 
   String get _boatTitle {
     final display = _boatName;
