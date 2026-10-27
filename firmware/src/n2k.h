@@ -84,6 +84,7 @@ struct N2kStats {
     uint8_t address;            /* claimed source address, 254 for none */
     uint32_t tx_frames;         /* frames this node sent (network management only) */
     uint32_t tx_failed;         /* frames the driver would not take; the library resends */
+    uint32_t tx_pending;        /* in the controller's queue, not yet acknowledged by anyone */
     uint32_t bus_off_count;
     uint32_t lost_messages;     /* reassembled messages the converter queue had no room for */
     uint32_t unique_number;     /* this node's NAME */

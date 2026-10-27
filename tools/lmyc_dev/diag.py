@@ -49,7 +49,8 @@ def summarise_n2k(d: dict[str, Any]) -> str:
     if node == "claimed":
         out.append(f"This terminal: NMEA 2000 node, address {self_.get('address')}, "
                    f"NAME unique {self_.get('unique')}, maker code {self_.get('mfr')}, "
-                   f"sent {self_.get('tx_frames', 0)} frames ({self_.get('tx_failed', 0)} refused), "
+                   f"sent {self_.get('tx_frames', 0)} frames ({self_.get('tx_failed', 0)} refused, "
+                   f"{self_.get('tx_pending', 0)} waiting for an ACK), "
                    f"bus-off {self_.get('bus_off', 0)}")
     else:
         out.append(f"This terminal: {node.replace('_', ' ')}")

@@ -2603,7 +2603,7 @@ void setup()
     boot_log("UI ready. BLE name is in the primary ADV packet; scan in the LMYC app.");
     if (n2k_source() == DataSource::Nmea2000) {
         boot_log(n2k_using_uart()
-                     ? "NMEA source N2K listen-only. Serial log is on the UART Type-C socket."
+                     ? "NMEA source N2K: NMEA 2000 node. Serial log is on the UART Type-C socket."
                      : "NMEA source N2K selected, but CAN did not open. USB serial stays up.");
     } else {
         boot_log("NMEA source simulator (FIX: SIM). Change it on Data source, or NMEA N2K on the console.");
