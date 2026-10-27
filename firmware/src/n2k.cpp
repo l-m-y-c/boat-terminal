@@ -126,6 +126,7 @@ static volatile uint32_t g_bus_errors = 0;
 static volatile uint32_t g_rec = 0;
 static volatile uint32_t g_tx_frames = 0;
 static volatile uint32_t g_tx_failed = 0;
+static volatile uint32_t g_tx_pending = 0;
 static volatile uint32_t g_bus_off_count = 0;
 static volatile uint32_t g_lost_messages = 0;
 static volatile uint32_t g_parse_peak_us = 0;
@@ -479,6 +480,7 @@ static void read_driver_counters(bool fold)
     g_lost_controller = g_base_overrun + st.rx_overrun_count;
     g_bus_errors = g_base_bus_errors + st.bus_error_count;
     g_rec = st.rx_error_counter;
+    g_tx_pending = st.msgs_to_tx;
     if (fold) {
         g_base_missed = g_lost_driver;
         g_base_overrun = g_lost_controller;
@@ -1047,6 +1049,7 @@ void n2k_stats(N2kStats *out)
     out->address = g_address;
     out->tx_frames = g_tx_frames;
     out->tx_failed = g_tx_failed;
+    out->tx_pending = g_tx_pending;
     out->bus_off_count = g_bus_off_count;
     out->lost_messages = g_lost_messages;
     out->unique_number = n2k_node_unique_number();
@@ -1132,10 +1135,11 @@ static void log_diag(void)
     n2k_stats(&s);
     char line[320];
     snprintf(line, sizeof(line),
-             "NMEA %s, node: %s, address %u, sent %lu frames (%lu refused), bus-off %lu, repeats %lu (%lu/s), "
+             "NMEA %s, node: %s, address %u, sent %lu frames (%lu refused, %lu waiting), bus-off %lu, repeats %lu (%lu/s), "
              "fast-packet incomplete %lu, bad values %lu. %s",
              n2k_hint_code(s.hint), n2k_node_state_name(s.node), static_cast<unsigned>(s.address),
              static_cast<unsigned long>(s.tx_frames), static_cast<unsigned long>(s.tx_failed),
+             static_cast<unsigned long>(s.tx_pending),
              static_cast<unsigned long>(s.bus_off_count), static_cast<unsigned long>(s.repeats),
              static_cast<unsigned long>(s.repeats_per_s), static_cast<unsigned long>(s.fast_incomplete),
              static_cast<unsigned long>(s.conv_bad), n2k_hint_text(s.hint));
