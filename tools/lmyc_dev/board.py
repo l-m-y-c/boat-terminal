@@ -158,7 +158,11 @@ def probe(prefer: str = "any", path: str | None = None) -> Status:
         ok, text = esptool(port.path, "no_reset", "no_reset", "chip_id", timeout=15)
         if ok and "Staying in bootloader" in text:
             return Status("bootloader", port, "ROM download mode: the app is not running.")
-    return Status("silent", port, "Port open, but the app did not answer NMEA STATS.")
+    detail = "Port open, but the app did not answer NMEA STATS."
+    if port.kind == "uart":
+        detail += (" Check the board's UART select switch is on UART1: on UART2 the Type-C socket "
+                   "is disconnected and not even the boot banner comes through.")
+    return Status("silent", port, detail)
 
 
 def boot_app(port: Port) -> tuple[bool, str]:

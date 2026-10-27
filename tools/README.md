@@ -17,6 +17,8 @@ Tools for building, flashing and debugging the boat terminal, at the bench and o
 | Socket | Chip | Use it for |
 |--------|------|------------|
 | **UART** | CH343 USB-serial (VID `1a86`) | Logs and commands, in **every** mode. Opening it never resets the board. The only log port on NMEA 2000. |
+
+**The UART select switch must be on UART1.** The Type-C socket marked UART and the "UART" terminal header share one UART, and a small switch on the board (item 15 on Waveshare's diagram) connects one or the other. On UART2 the Type-C socket still enumerates as a CH343 but carries nothing, not even the boot banner.
 | **USB** | ESP32-S3 USB Serial/JTAG (VID `303a`) | Flashing. Exists **only on the simulator**: on NMEA 2000 the board moves GPIO19/20 to the CAN transceiver and this socket goes away by design. |
 
 The serial tools pick the UART socket when it is there and never toggle DTR/RTS, so they don't reset the board. Pass `--usb` to use the USB socket, or `--port /dev/…` to choose one.
@@ -75,6 +77,7 @@ To flash on the boat, **unplug the terminal's drop from the backbone first**, sw
 | Console silent after a flash | The upload's reset left the chip in the ROM bootloader | `make board-status` says `bootloader`; `make board-boot` starts the app. `make flash` does this itself. |
 | No USB socket at all | The terminal is on NMEA 2000 | Use the UART socket, or switch to Simulator to flash |
 | Windows never sees a device | Cable, or company device control (`board-status` reports CrowdStrike's `CsDeviceControl` filter when usbipd sees it) | Different cable or socket. For policy, ask IT; don't work around it. |
+| UART socket enumerates (CH343) but is completely silent, even at RESET | The UART select switch is on UART2 (the header) | Move it to UART1. `board-status` says so when the UART socket is silent. |
 | Opening a port resets the board | Some serial programs toggle DTR/RTS | Use these tools, which leave the lines alone |
 
 ## Files
