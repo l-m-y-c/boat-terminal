@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import FIRMWARE
-from .ports import Console, Port, find_port, is_wsl
+from .ports import Console, Port, find_port, is_wsl, list_ports
 
 USBIPD = "/mnt/c/Program Files/usbipd-win/usbipd.exe"
 TERMINAL_VIDS = ("303a", "1a86")
@@ -141,6 +141,12 @@ class Status:
     detail: str
 
 
+def _in_bootloader(port: Port) -> bool:
+    """The ROM loader answers esptool on both sockets; no_reset leaves the chip alone."""
+    ok, text = esptool(port.path, "no_reset", "no_reset", "chip_id", timeout=15)
+    return ok and "Staying in bootloader" in text
+
+
 def probe(prefer: str = "any", path: str | None = None) -> Status:
     try:
         port = find_port(prefer, path)
@@ -154,10 +160,12 @@ def probe(prefer: str = "any", path: str | None = None) -> Status:
     stats = [l for l in reply if l.startswith("NMEA ")]
     if stats:
         return Status("app", port, stats[-1])
-    if port.kind == "usb":
-        ok, text = esptool(port.path, "no_reset", "no_reset", "chip_id", timeout=15)
-        if ok and "Staying in bootloader" in text:
-            return Status("bootloader", port, "ROM download mode: the app is not running.")
+    # Silent: the ROM bootloader first (BOOT held at reset, or left there by
+    # an upload), on this port and the board's other socket.
+    others = [p for p in list_ports() if p.kind in ("uart", "usb") and p.path != port.path]
+    for candidate in [port] + others:
+        if _in_bootloader(candidate):
+            return Status("bootloader", candidate, "ROM download mode: the app is not running.")
     detail = "Port open, but the app did not answer NMEA STATS."
     if port.kind == "uart":
         detail += (" Check the board's UART select switch is on UART1: on UART2 the Type-C socket "
@@ -177,12 +185,17 @@ def boot_app(port: Port) -> tuple[bool, str]:
 
 
 def wait_for_port(prefer: str, seconds: float) -> Port | None:
+    """A port that exists and that we may open: after a re-attach udev
+    takes a moment to hand the new device node to the dialout group."""
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         try:
-            return find_port(prefer)
+            port = find_port(prefer)
+            if os.access(port.path, os.R_OK | os.W_OK):
+                return port
         except LookupError:
-            time.sleep(0.5)
+            pass
+        time.sleep(0.5)
     return None
 
 

@@ -54,9 +54,19 @@ def cmd_attach(_: argparse.Namespace) -> int:
         return 1
     for d in devs:
         print(board.attach(d, board.default_log_dir()))
-    port = board.wait_for_port("any", 15)
-    print(f"Port: {port.describe()}" if port else "No port appeared within 15 s.")
-    return 0 if port else 1
+    # Wait for every device just attached, not just the first port to exist.
+    want = {"303a": "usb", "1a86": "uart"}
+    kinds = {want[d.vid_pid[:4]] for d in devs if d.vid_pid[:4] in want}
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and not kinds <= {p.kind for p in list_ports()}:
+        time.sleep(0.5)
+    found = [p for p in list_ports() if p.kind in kinds]
+    for p in found:
+        print(f"Port: {p.describe()}")
+    missing = kinds - {p.kind for p in found}
+    if missing:
+        print(f"Not there after 20 s: {', '.join(sorted(missing))} socket.")
+    return 0 if not missing else 1
 
 
 def cmd_boot(args: argparse.Namespace) -> int:
