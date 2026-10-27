@@ -41,3 +41,11 @@ bool n2k_sim_gnss(void);
 /* Emits every frame due by now_ms. Call at 100 Hz or faster. The first call
  * starts the clock. Returns the number of frames handed to sink. */
 size_t n2k_sim_step(uint32_t now_ms, N2kFrameSink sink, void *ctx);
+
+/* The virtual devices are NMEA 2000 nodes: each claims its address at
+ * start, sends a heartbeat every 60 s, and answers an ISO request (59904)
+ * addressed to it or to everyone, for its address claim, product
+ * information, configuration information, PGN lists or heartbeat, with a
+ * NAK for anything else asked of it directly. Feed it every frame the
+ * terminal sends on the virtual bus; answers go to sink. */
+size_t n2k_sim_receive(const N2kFrame &frame, uint32_t now_ms, N2kFrameSink sink, void *ctx);

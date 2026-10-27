@@ -1409,9 +1409,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   label: 'Instruments',
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.analytics_outlined),
-                  selectedIcon: Icon(Icons.analytics),
-                  label: 'NMEA data',
+                  icon: Icon(Icons.hub_outlined),
+                  selectedIcon: Icon(Icons.hub),
+                  label: 'Network',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.troubleshoot_outlined),

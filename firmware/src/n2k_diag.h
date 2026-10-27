@@ -64,3 +64,23 @@ size_t n2k_diag_json(char *out, size_t cap, const N2kStats &stats, uint32_t now_
 
 /* Fast-packet first frames seen, all PGNs. */
 uint32_t n2k_diag_fast_starts(void);
+
+/* "Display", "Navigation", ... for an NMEA 2000 device class, or "". */
+const char *n2k_class_name(uint8_t cls);
+
+/* One device's traffic for the node detail page, as JSON members (no
+ * braces): "pgns":[...] with each PGN's rate, counts, the newest payload in
+ * hex and decoded, and "recent":[...], its newest messages first. */
+size_t n2k_diag_device_json(char *out, size_t cap, uint8_t src, uint32_t now_ms);
+
+/* One device's PGNs and recent messages, decoded, for the node detail page. */
+struct N2kPgnLine {
+    uint32_t pgn;
+    char name[20];
+    uint16_t rate_x10;
+    uint32_t msgs;
+    uint32_t age_ms;
+    char text[72]; /* decoded, or the payload in hex */
+};
+size_t n2k_diag_device_pgns(uint8_t src, N2kPgnLine *out, size_t max, uint32_t now_ms);
+size_t n2k_diag_device_recent(uint8_t src, N2kPgnLine *out, size_t max, uint32_t now_ms);

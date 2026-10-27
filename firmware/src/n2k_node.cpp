@@ -47,6 +47,7 @@ static const unsigned long kReceivePgns[] PROGMEM = {
 };
 
 static uint32_t g_unique = 0;
+static char g_serial[Max_N2kModelSerialCode_len + 1] = "";
 
 static uint32_t unique_from_mac(void)
 {
@@ -58,14 +59,15 @@ static uint32_t unique_from_mac(void)
 
 uint32_t n2k_node_unique_number(void) { return g_unique; }
 uint16_t n2k_node_manufacturer_code(void) { return LMYC_N2K_MANUFACTURER_CODE; }
+const char *n2k_node_serial(void) { return g_serial; }
 
 void n2k_node_configure(tNMEA2000 &stack, bool node)
 {
     g_unique = unique_from_mac();
     uint8_t mac[6] = {};
     esp_efuse_mac_get_default(mac);
-    char serial[Max_N2kModelSerialCode_len + 1];
-    snprintf(serial, sizeof(serial), "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    char *serial = g_serial;
+    snprintf(serial, sizeof(g_serial), "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     stack.SetProductInformation(serial, LMYC_N2K_PRODUCT_CODE, kModelId, LMYC_FW_VERSION, kModelVersion,
                                 kLoadEquivalency, kN2kVersion);

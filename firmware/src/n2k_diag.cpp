@@ -1,14 +1,23 @@
 #include "n2k_diag.h"
 
+#include "n2k_describe.h"
 #include "n2k_to_0183.h"
 
 #include <N2kMsg.h>
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
+#if defined(ESP_PLATFORM)
+#include <esp_heap_caps.h>
+#endif
+
 static constexpr size_t kPgnMax = 64;
+static constexpr size_t kLastBytes = 64;
+static constexpr size_t kRecentBytes = 24;
+static constexpr size_t kRecentMax = 192;
 static constexpr size_t kDeviceMax = 32;
 /* A device or PGN not heard for this long is shown as gone, not dropped. */
 static constexpr uint32_t kTwoSourceWindowMs = 10000;
@@ -22,8 +31,29 @@ struct PgnRow {
     uint32_t msgs;
     uint32_t last_ms;
     uint32_t msgs_at_tick;
-    uint16_t rate_x10; /* messages per second, tenths */
+    uint16_t rate_x10;  /* messages per second, tenths, averaged over ~10 s */
+    uint32_t rate_x1000; /* the average itself, thousandths */
+    /* The newest message, for the node detail page. */
+    uint8_t last_dst;
+    uint16_t last_total;
+    uint8_t last_len;
+    uint8_t last_data[kLastBytes];
 };
+
+/* Recent messages from every device, newest last, for "what is this node
+ * saying". In PSRAM on the board. */
+struct Recent {
+    uint32_t ms;
+    uint32_t pgn;
+    uint8_t src;
+    uint8_t dst;
+    uint16_t total;
+    uint8_t len;
+    uint8_t data[kRecentBytes];
+};
+static Recent *g_recent = nullptr;
+static uint32_t g_recent_n = 0; /* total ever written */
+
 
 struct Device {
     uint8_t src;
@@ -43,6 +73,15 @@ static size_t g_device_n = 0;
 void n2k_diag_reset(void)
 {
     memset(g_pgns, 0, sizeof(g_pgns));
+    if (g_recent == nullptr) {
+#if defined(ESP_PLATFORM)
+        g_recent = static_cast<Recent *>(heap_caps_calloc(kRecentMax, sizeof(Recent), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+#endif
+        if (g_recent == nullptr) {
+            g_recent = static_cast<Recent *>(calloc(kRecentMax, sizeof(Recent)));
+        }
+    }
+    g_recent_n = 0;
     g_pgn_n = 0;
     g_pgn_overflow = 0;
     memset(g_devices, 0, sizeof(g_devices));
@@ -135,9 +174,25 @@ static void read_model(Device *d, const tN2kMsg &msg)
 void n2k_diag_message(const tN2kMsg &msg, uint32_t now_ms)
 {
     PgnRow *r = pgn_row(static_cast<uint32_t>(msg.PGN), msg.Source);
+    const uint16_t total = msg.DataLen > 0 ? static_cast<uint16_t>(msg.DataLen) : 0;
     if (r != nullptr) {
         ++r->msgs;
         r->last_ms = now_ms;
+        r->last_dst = msg.Destination;
+        r->last_total = total;
+        r->last_len = static_cast<uint8_t>(total < kLastBytes ? total : kLastBytes);
+        memcpy(r->last_data, msg.Data, r->last_len);
+    }
+    if (g_recent != nullptr) {
+        Recent &e = g_recent[g_recent_n % kRecentMax];
+        e.ms = now_ms;
+        e.pgn = static_cast<uint32_t>(msg.PGN);
+        e.src = msg.Source;
+        e.dst = msg.Destination;
+        e.total = total;
+        e.len = static_cast<uint8_t>(total < kRecentBytes ? total : kRecentBytes);
+        memcpy(e.data, msg.Data, e.len);
+        ++g_recent_n;
     }
     if (msg.PGN == 60928L && msg.DataLen >= 8) {
         Device *d = device(msg.Source);
@@ -159,12 +214,19 @@ void n2k_diag_message(const tN2kMsg &msg, uint32_t now_ms)
 
 void n2k_diag_tick(uint32_t now_ms)
 {
-    (void)now_ms;
+    static uint32_t last_ms = 0;
+    const uint32_t span = (last_ms == 0 || now_ms - last_ms == 0) ? 1000 : now_ms - last_ms;
+    last_ms = now_ms;
     for (size_t i = 0; i < g_pgn_n; ++i) {
         PgnRow &r = g_pgns[i];
+        /* Exponential average, ~10 s: a 0.5 Hz PGN reads 0.5, not 0 or 1. */
         const uint32_t d = r.msgs - r.msgs_at_tick;
-        r.rate_x10 = static_cast<uint16_t>(d > 6553 ? 65535 : d * 10);
         r.msgs_at_tick = r.msgs;
+        /* Per second, whatever the gap between ticks. */
+        const uint32_t sample = static_cast<uint32_t>((static_cast<uint64_t>(d > 4000 ? 4000 : d) * 1000000u) / span);
+        r.rate_x1000 = r.rate_x1000 == 0 && r.msgs == d ? sample : (r.rate_x1000 * 9 + sample) / 10;
+        const uint32_t x10 = (r.rate_x1000 + 50) / 100;
+        r.rate_x10 = static_cast<uint16_t>(x10 > 65535 ? 65535 : x10);
     }
 }
 
@@ -330,7 +392,7 @@ const char *n2k_maker_name(uint16_t code)
     }
 }
 
-static const char *class_name(uint8_t cls)
+const char *n2k_class_name(uint8_t cls)
 {
     switch (cls) {
     case 10:
@@ -590,7 +652,7 @@ size_t n2k_diag_json(char *out, size_t cap, const N2kStats &s, uint32_t now_ms)
         if (d.named) {
             put(o, ",\"mfr\":%u,\"maker\":\"%s\",\"function\":%u,\"class\":%u,\"class_name\":\"%s\",\"unique\":%lu",
                 static_cast<unsigned>(mfr), maker != nullptr ? maker : "", static_cast<unsigned>(fn),
-                static_cast<unsigned>(cls), class_name(cls), static_cast<unsigned long>(unique));
+                static_cast<unsigned>(cls), n2k_class_name(cls), static_cast<unsigned long>(unique));
         }
         if (d.model[0] != '\0') {
             put(o, ",\"model\":\"%s\"", d.model);
@@ -640,6 +702,144 @@ uint32_t n2k_diag_fast_starts(void)
     uint32_t n = 0;
     for (size_t i = 0; i < g_pgn_n; ++i) {
         n += g_pgns[i].fast ? g_pgns[i].starts : 0;
+    }
+    return n;
+}
+
+/* ---- one device, for the node detail page -------------------------------- */
+
+static void hex_of(const uint8_t *data, uint8_t len, char *out, size_t cap)
+{
+    size_t n = 0;
+    for (uint8_t i = 0; i < len && n + 3 < cap; ++i) {
+        n += static_cast<size_t>(snprintf(out + n, cap - n, "%02X", data[i]));
+    }
+    out[n] = '\0';
+}
+
+/* Decoded text, only for a payload kept whole: a cut one would misread. */
+static void text_of(uint32_t pgn, uint8_t src, uint8_t dst, const uint8_t *data, uint8_t len, uint16_t total,
+                    char *out, size_t cap)
+{
+    out[0] = '\0';
+    if (len != total || len == 0) {
+        if (pgn == 126996 || pgn == 126998 || pgn == 126464) {
+            snprintf(out, cap, "%s: details in the identity panel", pgn_label(pgn));
+        }
+        return;
+    }
+    tN2kMsg m;
+    m.SetPGN(pgn);
+    m.Source = src;
+    m.Destination = dst;
+    for (uint8_t i = 0; i < len; ++i) {
+        m.AddByte(data[i]);
+    }
+    n2k_describe(m, out, cap);
+    for (char *p = out; *p != '\0'; ++p) {
+        if (*p == '"' || *p == '\\') {
+            *p = '\'';
+        }
+    }
+}
+
+size_t n2k_diag_device_json(char *out, size_t cap, uint8_t src, uint32_t now_ms)
+{
+    if (out == nullptr || cap == 0) {
+        return 0;
+    }
+    Out o = {out, cap, 0, false};
+    char hex[kLastBytes * 2 + 1];
+    char text[120];
+    put(o, "\"pgns\":[");
+    bool first = true;
+    for (size_t i = 0; i < g_pgn_n; ++i) {
+        const PgnRow &r = g_pgns[i];
+        if (r.src != src) {
+            continue;
+        }
+        hex_of(r.last_data, r.last_len, hex, sizeof(hex));
+        text_of(r.pgn, r.src, r.last_dst, r.last_data, r.last_len, r.last_total, text, sizeof(text));
+        put(o,
+            "%s{\"pgn\":%lu,\"name\":\"%s\",\"fast\":%s,\"frames\":%lu,\"starts\":%lu,\"msgs\":%lu,\"rate\":%u.%u,"
+            "\"age_ms\":%lu,\"len\":%u,\"hex\":\"%s\",\"text\":\"%s\"}",
+            first ? "" : ",", static_cast<unsigned long>(r.pgn), pgn_label(r.pgn), r.fast ? "true" : "false",
+            static_cast<unsigned long>(r.frames), static_cast<unsigned long>(r.starts),
+            static_cast<unsigned long>(r.msgs), static_cast<unsigned>(r.rate_x10 / 10),
+            static_cast<unsigned>(r.rate_x10 % 10), static_cast<unsigned long>(age(now_ms, r.last_ms)),
+            static_cast<unsigned>(r.last_total), hex, text);
+        first = false;
+    }
+    put(o, "],\"recent\":[");
+    first = true;
+    size_t shown = 0;
+    if (g_recent != nullptr) {
+        const uint32_t n = g_recent_n < kRecentMax ? g_recent_n : kRecentMax;
+        for (uint32_t k = 0; k < n && shown < 40; ++k) {
+            const Recent &e = g_recent[(g_recent_n - 1 - k) % kRecentMax];
+            if (e.src != src) {
+                continue;
+            }
+            hex_of(e.data, e.len, hex, sizeof(hex));
+            text_of(e.pgn, e.src, e.dst, e.data, e.len, e.total, text, sizeof(text));
+            put(o, "%s{\"age_ms\":%lu,\"pgn\":%lu,\"name\":\"%s\",\"dst\":%u,\"len\":%u,\"hex\":\"%s\",\"text\":\"%s\"}",
+                first ? "" : ",", static_cast<unsigned long>(now_ms - e.ms), static_cast<unsigned long>(e.pgn),
+                pgn_label(e.pgn), static_cast<unsigned>(e.dst), static_cast<unsigned>(e.total), hex, text);
+            first = false;
+            ++shown;
+        }
+    }
+    put(o, "]");
+    return o.full ? 0 : o.n;
+}
+
+static void line_text(uint32_t pgn, uint8_t src, uint8_t dst, const uint8_t *data, uint8_t len, uint16_t total,
+                      char *out, size_t cap)
+{
+    text_of(pgn, src, dst, data, len, total, out, cap);
+    if (out[0] == '\0') {
+        hex_of(data, len, out, cap);
+    }
+}
+
+size_t n2k_diag_device_pgns(uint8_t src, N2kPgnLine *out, size_t max, uint32_t now_ms)
+{
+    size_t n = 0;
+    for (size_t i = 0; out != nullptr && i < g_pgn_n && n < max; ++i) {
+        const PgnRow &r = g_pgns[i];
+        if (r.src != src) {
+            continue;
+        }
+        N2kPgnLine &l = out[n++];
+        l.pgn = r.pgn;
+        snprintf(l.name, sizeof(l.name), "%s", pgn_label(r.pgn));
+        l.rate_x10 = r.rate_x10;
+        l.msgs = r.msgs;
+        l.age_ms = age(now_ms, r.last_ms);
+        line_text(r.pgn, r.src, r.last_dst, r.last_data, r.last_len, r.last_total, l.text, sizeof(l.text));
+    }
+    return n;
+}
+
+size_t n2k_diag_device_recent(uint8_t src, N2kPgnLine *out, size_t max, uint32_t now_ms)
+{
+    size_t n = 0;
+    if (out == nullptr || g_recent == nullptr) {
+        return 0;
+    }
+    const uint32_t have = g_recent_n < kRecentMax ? g_recent_n : kRecentMax;
+    for (uint32_t k = 0; k < have && n < max; ++k) {
+        const Recent &e = g_recent[(g_recent_n - 1 - k) % kRecentMax];
+        if (e.src != src) {
+            continue;
+        }
+        N2kPgnLine &l = out[n++];
+        l.pgn = e.pgn;
+        snprintf(l.name, sizeof(l.name), "%s", pgn_label(e.pgn));
+        l.rate_x10 = 0;
+        l.msgs = 0;
+        l.age_ms = now_ms - e.ms;
+        line_text(e.pgn, e.src, e.dst, e.data, e.len, e.total, l.text, sizeof(l.text));
     }
     return n;
 }

@@ -16,7 +16,7 @@
         phone-reinstall phone-test phone-analyze protocol-check pair-test devices doctor \
         clean clean-firmware clean-phone flash-pio board-ports board-status board-attach board-boot \
         console send diag watch session bus-check bus-status record nmea-tcp capture-summary replay \
-        sim-capture tools-test
+        sim-capture tools-test network device network-wifi boat boat-show boat-list
 
 FIRMWARE_DIR := firmware
 MOBILE_DIR   := mobile
@@ -221,3 +221,25 @@ sim-capture:
 
 tools-test:
 	$(PY) -m unittest discover -s tools/tests
+
+# The NMEA 2000 network: over the UART console, or the boat Wi-Fi.
+network:
+	$(PY) tools/console.py net
+
+# make device SRC=35
+device:
+	$(PY) tools/console.py net --src $(SRC)
+
+network-wifi:
+	$(PY) tools/terminal.py --host $(HOST) network
+
+# The boat this terminal belongs to (firmware/src/secrets.h). Then make flash.
+# make boat BOAT=baca-lele
+boat:
+	$(PY) tools/boat.py set $(BOAT)
+
+boat-show:
+	$(PY) tools/boat.py show
+
+boat-list:
+	$(PY) tools/boat.py list

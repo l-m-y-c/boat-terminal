@@ -6,6 +6,7 @@
     python3 tools/console.py send NMEA STATS     # one command, print the reply
     python3 tools/console.py diag                # NMEA DIAG, summarised
     python3 tools/console.py diag --out diag.json
+    python3 tools/console.py net [--src 35] [--refresh]   # the NMEA 2000 network
     python3 tools/console.py watch --every 10 --out session/   # snapshots only
     python3 tools/console.py session              # boat mode: log + snapshots, saved
 
@@ -23,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-from lmyc_dev.diag import find_json, summarise_n2k
+from lmyc_dev.diag import find_json, summarise_device, summarise_n2k, summarise_network
 from lmyc_dev.ports import Console, find_port
 
 
@@ -83,6 +84,25 @@ def cmd_diag(args: argparse.Namespace) -> int:
         print(json.dumps(data, indent=2))
     else:
         print(summarise_n2k(data))
+    if args.out:
+        Path(args.out).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        print(f"\nSaved {args.out}")
+    return 0
+
+
+def cmd_net(args: argparse.Namespace) -> int:
+    """NMEA NET: the topology, or one device with --src."""
+    line = "NMEA NET" + (f" {args.src}" if args.src is not None else "") + (" REFRESH" if args.refresh else "")
+    with _open(args) as con:
+        lines = con.command(line, 4.0)
+        if args.refresh:
+            time.sleep(3)
+            lines = con.command("NMEA NET", 4.0)
+    data = find_json(lines)
+    if data is None:
+        print("\n".join(l for l in lines if l.startswith("NMEA")) or "No network JSON (older firmware?)")
+        return 1
+    print(json.dumps(data, indent=2) if args.raw else (summarise_device(data) if "device" in data else summarise_network(data)))
     if args.out:
         Path(args.out).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         print(f"\nSaved {args.out}")
@@ -197,6 +217,12 @@ def main() -> int:
     p.add_argument("--out", help="save the JSON here")
     p.add_argument("--raw", action="store_true", help="print the JSON, not the summary")
     p.set_defaults(fn=cmd_diag)
+    p = sub.add_parser("net", help="the NMEA 2000 network (NMEA NET), or one device")
+    p.add_argument("--src", type=int, help="one device's details")
+    p.add_argument("--refresh", action="store_true", help="ask every device again first")
+    p.add_argument("--raw", action="store_true")
+    p.add_argument("--out")
+    p.set_defaults(fn=cmd_net)
     p = sub.add_parser("watch")
     p.add_argument("--every", type=float, default=10.0)
     p.add_argument("--out", help="directory for diag.jsonl")

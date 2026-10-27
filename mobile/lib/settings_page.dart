@@ -13,7 +13,7 @@ const kDocsUrl =
 const kStartTabLabels = {
   StartTab.boat: 'Boat',
   StartTab.instruments: 'Instruments',
-  StartTab.nmeaData: 'NMEA data',
+  StartTab.nmeaData: 'Network',
   StartTab.diagnostics: 'Diagnostics',
 };
 

@@ -52,7 +52,16 @@ What you see, and what to do:
 
 ## 5. What to check with data flowing
 
-On the phone, open **NMEA data → Bus check**:
+On the phone, open **NMEA data → Network** (or on the terminal, **Network** from the Diagnostics or Data source rail):
+
+- [ ] The map shows the terminal and the 740s (possibly as more than one address: plotter, sonar, GPS). Each card has a model and a LEN. Compare with the 740s's own NMEA 2000 device list: the same devices, the same addresses.
+- [ ] No card is amber. If one is, tap it: the detail page says why (no product information, lost heartbeat, instance conflict, address changed, silent).
+- [ ] The bus load (LEN total) is within what the backbone supply delivers (doc 20).
+- [ ] Tap the 740s: "Terminal uses it for" lists the values it supplies (position, depth, …), and "What it sends" shows each PGN decoded. Note any PGN without a decoded value.
+- [ ] Use **Record this device** for 60 s on the 740s and share it: a capture of the plotter alone.
+- [ ] `make network` on the laptop prints the same list over the UART cable; save it with `python3 tools/console.py net --out network.json`.
+
+Then **NMEA data → Bus check**:
 
 - [ ] **Devices.** Write down each source address and name. The 740s may show as more than one address (for example plotter and sonar). None of them uses the terminal's address from section 4.
 - [ ] **Values and the device they come from.** Position, course & speed, time, depth, sea temperature and variation each have an owner. Any amber line ("… also sends it") means two devices send the same value. Note which addresses.

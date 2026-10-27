@@ -11,6 +11,7 @@
  *  - heartbeat every 60 s;
  *  - nothing on the bus but network-management PGNs. */
 
+#include "boat_config.h"
 #include "n2k_node.h"
 
 #include <NMEA2000.h>
@@ -218,7 +219,7 @@ int main()
         char d1[72] = {}, d2[72] = {}, mfr[72] = {};
         size_t l1 = sizeof(d1), l2 = sizeof(d2), l3 = sizeof(mfr);
         ParseN2kPGN126998(*config, l3, mfr, l1, d1, l2, d2);
-        expect_true("installation description 1 is the boat name", strcmp(d1, "BENCH-01") == 0);
+        expect_true("installation description 1 is the boat name", strcmp(d1, LMYC_BOAT_NAME) == 0);
         expect_true("manufacturer information", strcmp(mfr, "LMYC boat-terminal") == 0);
     }
 

@@ -224,7 +224,7 @@ void nmea_state_talkers_summary(char *out, size_t cap)
         snprintf(out + used, cap - used, "%s%s", i == 0 ? "" : "  ", g_talkers[i].id);
     }
     if (g_talker_n == 0) {
-        strncpy(out, "—", cap);
+        strncpy(out, "-", cap);
         out[cap - 1] = '\0';
     }
 }

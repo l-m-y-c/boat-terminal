@@ -233,12 +233,18 @@ static esp_err_t get_n2k_json(httpd_req_t *req)
  * First line "#next N lost M more 0|1". after=0 (or none) starts from now. */
 static esp_err_t get_n2k_frames(httpd_req_t *req)
 {
-    char query[40];
+    char query[48];
     char after_s[16];
+    char src_s[8];
     unsigned long after = 0;
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
-        httpd_query_key_value(query, "after", after_s, sizeof(after_s)) == ESP_OK) {
-        after = strtoul(after_s, nullptr, 10);
+    int src = -1;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        if (httpd_query_key_value(query, "after", after_s, sizeof(after_s)) == ESP_OK) {
+            after = strtoul(after_s, nullptr, 10);
+        }
+        if (httpd_query_key_value(query, "src", src_s, sizeof(src_s)) == ESP_OK) {
+            src = static_cast<int>(strtoul(src_s, nullptr, 10));
+        }
     }
     constexpr size_t kCap = 24576;
     constexpr size_t kHead = 64;
@@ -249,7 +255,7 @@ static esp_err_t get_n2k_frames(httpd_req_t *req)
     }
     uint32_t next = 0;
     uint32_t lost = 0;
-    const size_t body = n2k_capture_read(static_cast<uint32_t>(after), buf + kHead, kCap - kHead, &next, &lost);
+    const size_t body = n2k_capture_read(static_cast<uint32_t>(after), buf + kHead, kCap - kHead, &next, &lost, src);
     /* Full means there was more than fit: the phone asks again at once. */
     const bool more = body + 52 * 33 >= kCap - kHead;
     char head[kHead];
@@ -260,6 +266,60 @@ static esp_err_t get_n2k_frames(httpd_req_t *req)
     httpd_resp_set_type(req, "text/plain");
     const esp_err_t err = httpd_resp_send(req, buf + start, static_cast<ssize_t>(hn + body));
     heap_caps_free(buf);
+    return err;
+}
+
+/* GET /n2k/network.json[?refresh=1]: every device on the bus, for the
+ * topology map. refresh=1 asks them all again first. */
+static esp_err_t get_n2k_network(httpd_req_t *req)
+{
+    char query[24];
+    char v[4];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "refresh", v, sizeof(v)) == ESP_OK && v[0] == '1') {
+        n2k_network_refresh();
+    }
+    constexpr size_t kCap = 49152;
+    char *json = static_cast<char *>(heap_caps_malloc(kCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (json == nullptr) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    size_t n = n2k_network_copy(json, kCap);
+    if (n == 0) {
+        n = static_cast<size_t>(snprintf(json, kCap, "{\"v\":1,\"devices\":[]}\n"));
+    }
+    httpd_resp_set_type(req, "application/json");
+    const esp_err_t err = httpd_resp_send(req, json, static_cast<ssize_t>(n));
+    heap_caps_free(json);
+    return err;
+}
+
+/* GET /n2k/device.json?src=N: one device for the node detail page. */
+static esp_err_t get_n2k_device(httpd_req_t *req)
+{
+    char query[24];
+    char src_s[8];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "src", src_s, sizeof(src_s)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "src=N");
+        return ESP_FAIL;
+    }
+    constexpr size_t kCap = 32768;
+    char *json = static_cast<char *>(heap_caps_malloc(kCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (json == nullptr) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    const size_t n = n2k_device_copy(static_cast<uint8_t>(strtoul(src_s, nullptr, 10)), json, kCap);
+    esp_err_t err;
+    if (n == 0) {
+        err = httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such device");
+    } else {
+        httpd_resp_set_type(req, "application/json");
+        err = httpd_resp_send(req, json, static_cast<ssize_t>(n));
+    }
+    heap_caps_free(json);
     return err;
 }
 
@@ -730,7 +790,7 @@ void hub_http_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
     cfg.lru_purge_enable = true;
-    cfg.max_uri_handlers = 16;
+    cfg.max_uri_handlers = 20;
     cfg.stack_size = 8192;
     cfg.recv_wait_timeout = 15;
     if (httpd_start(&g_httpd, &cfg) != ESP_OK) {
@@ -756,6 +816,12 @@ void hub_http_start(void)
         .uri = "/n2k/frames", .method = HTTP_GET, .handler = get_n2k_frames, .user_ctx = nullptr};
     httpd_register_uri_handler(g_httpd, &n2k_json);
     httpd_register_uri_handler(g_httpd, &n2k_frames);
+    static httpd_uri_t n2k_network = {
+        .uri = "/n2k/network.json", .method = HTTP_GET, .handler = get_n2k_network, .user_ctx = nullptr};
+    static httpd_uri_t n2k_device = {
+        .uri = "/n2k/device.json", .method = HTTP_GET, .handler = get_n2k_device, .user_ctx = nullptr};
+    httpd_register_uri_handler(g_httpd, &n2k_network);
+    httpd_register_uri_handler(g_httpd, &n2k_device);
 #if LMYC_WITH_REPORTS_CHARTS
     static httpd_uri_t snap = {
         .uri = "/snapshot", .method = HTTP_POST, .handler = post_snapshot,
