@@ -10,7 +10,7 @@ How the terminal behaves as a node, its diagnostics and the PGN table are in [05
 - [ ] Phone app installed from the same commit. **NMEA data → Bus check** opens and shows six simulated devices.
 - [ ] On the phone, **Bus check → Record bus** for 30 s, then **Stop → Share recording**. The file opens and has `can0` lines. This proves the capture path before you need it.
 - [ ] A laptop with a USB-C cable for the terminal's **UART** Type-C socket (the CH343). It is the only log port once the terminal is on NMEA 2000, and opening it does not reset the board. 115200 baud. **Only on its own battery**, see the isolation item below.
-- [ ] `NMEA DIAG` on the UART console prints a hint line and a JSON blob.
+- [ ] On the laptop, with the cable in the **UART** socket: `make board-status` says `app`, and `make diag` prints the summary. Try `make session` for a minute, then Ctrl-C. That is the boat mode, see [tools/README.md](../tools/README.md#on-the-boat).
 - [ ] **Isolation.** The prototype's CAN interface and its 12 V to 5 V supply are not isolated (an open hardware item, see [05](05-nmea-connectivity.md#hardware-compliance-open-items)). While the terminal is on the backbone, nothing else that shares ground is connected to it: no laptop on mains or charging, no phone charger, no USB lead, no RS485, no second 12 V, no battery on the board. If you need the console, use a laptop running on its own battery with nothing else plugged in.
 
 ## 2. On the 740s, before connecting
@@ -71,11 +71,11 @@ Each capture is a `lmyc-bus-*.log` file in candump format. canboat's `analyzer` 
 2. At the dock, 2 minutes.
 3. Under way for 5 minutes, if possible.
 
-On the UART console (laptop on its own battery), `NMEA STATS` and `NMEA DIAG` at the end of each, copied into the notes.
+With a laptop on the UART socket (on its own battery), keep `make session` running for the whole visit: it saves the log and a diagnostics snapshot every 10 s. Check each recording on the spot with `make capture-summary CAP=<file> TERMINAL=<address>`: it should say the terminal sent only network-management PGNs.
 
 ## 7. Back at the bench
 
-- Replay a capture into the host tests (the simulator test already runs frames through the library's real reassembly).
+- `make replay CAP=<file>` runs each capture through the real NMEA2000 library, diagnostics and 0183 converter on the host, giving `<file>.0183.txt` and `<file>.n2k.json`. Keep the captures: they become regression tests.
 - Check capture 1 in canboat's `analyzer`: the terminal's address claim, NAME and product information decode as expected, and the 740s and the terminal end up on different addresses.
 - Add the 740s's real PGN list and rates to [doc 05](05-nmea-connectivity.md).
 - Note anything the 740s showed about the terminal in its device list (name, model version, software version) in [doc 05](05-nmea-connectivity.md).

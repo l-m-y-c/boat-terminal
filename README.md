@@ -93,6 +93,8 @@ See [04 – Hardware](docs/04-hardware.md) and [14 – Prototype Hardware](docs/
 
 **Prototype software (this repo):** firmware for the 7″ ESP32-S3 terminal (`firmware/`) and an Android companion (`mobile/`). Bench pairing is QR + BLE OOB. **Use the app’s Find terminals** — Android Settings hide most LE-only devices. After a pull: `make pair-test`, then rescan the QR (OOB rotates every boot). The bench also speaks BoatLink: simulated NMEA on TCP 10110, a SoftAP, and chart snapshots. See `firmware/README.md`.
 
+**Developer tools:** [tools/README.md](tools/README.md). Find and flash the board (`make board-status`, `make flash`), the serial console without resets (`make console`, `make diag`), boat mode (`make session`), and bus recordings that replay through the real firmware on the host (`make capture-summary`, `make replay`).
+
 **Member-facing roadmap:** [18 – Maintenance handoff & login](docs/18-maintenance-handoff-and-auth.md). The phone, the Waveshare, and lmyc.ca share one member login. The boat's TF card keeps this boat's maintenance book, photos included, so the next crew can read it with no cell service. The 13.3″ E-Ink is a separate project that shows pictures the phone sends.
 
 **Instrument roadmap:** [17 – Android Boat / BoatLink](docs/17-android-boat-roadmap.md). Mirror the bus, not the pixels. Real RS485 listen is still ahead.

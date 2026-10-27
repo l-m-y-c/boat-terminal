@@ -35,4 +35,4 @@ jobs:
         run: python3 tools/check_protocol.py
 
       - name: Python scripts compile
-        run: python3 -m py_compile tools/*.py firmware/test_host/*.py firmware/scripts/*.py docs/assets/n2k-power/*.py
+        run: python3 -m py_compile tools/*.py tools/lmyc_dev/*.py tools/tests/*.py firmware/test_host/*.py firmware/scripts/*.py docs/assets/n2k-power/*.py

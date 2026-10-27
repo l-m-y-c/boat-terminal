@@ -3,7 +3,8 @@
 # Prefer these targets over ad-hoc flutter/pio commands so both sides stay in sync.
 #
 #   make help
-#   make flash              Build + upload terminal firmware
+#   make flash              Build + upload terminal firmware, check it booted
+#   make session            Boat mode: console log + diagnostics snapshots (tools/README.md)
 #   make phone              Run app (quick iteration)
 #   make phone-reinstall    Clean rebuild + install (use after BLE/native changes)
 #   make pair-test          Flash terminal, then clean-reinstall phone app
@@ -13,10 +14,15 @@
 
 .PHONY: help all test firmware firmware-test n2k-demo flash monitor phone phone-get phone-run \
         phone-reinstall phone-test phone-analyze protocol-check pair-test devices doctor \
-        clean clean-firmware clean-phone
+        clean clean-firmware clean-phone flash-pio board-ports board-status board-attach board-boot \
+        console send diag watch session bus-check bus-status record nmea-tcp capture-summary replay \
+        sim-capture tools-test
 
 FIRMWARE_DIR := firmware
 MOBILE_DIR   := mobile
+
+# Python for tools/: uv's own interpreter when uv is installed, never the OS one.
+PY := $(shell command -v uv >/dev/null 2>&1 && echo "uv run -q --no-project python" || echo python3)
 
 help:
 	@echo ""
@@ -69,14 +75,19 @@ firmware-test:
 
 # CH343 UART socket only. Does not open the USB socket (that resets the chip).
 n2k-demo:
-	python3 tools/n2k_play.py
+	$(PY) tools/n2k_play.py
 
+# Upload through the USB socket, then check the app booted; recovers the board
+# from the ROM bootloader the upload reset can leave it in.
 flash:
-	cd $(FIRMWARE_DIR) && pio run -t upload
+	$(PY) tools/board.py flash
 	@echo ""
-	@echo "Upload done. Press RESET on the board if the UI does not start."
 	@echo "OOB / QR secret is regenerated every boot — always rescan QR after flash."
 	@echo ""
+
+# Plain PlatformIO upload, no checks.
+flash-pio:
+	cd $(FIRMWARE_DIR) && pio run -t upload
 
 monitor:
 	cd $(FIRMWARE_DIR) && pio device monitor -b 115200
@@ -114,11 +125,11 @@ all: firmware phone-get
 	@echo "Firmware built; mobile dependencies resolved."
 
 protocol-check:
-	python3 tools/check_protocol.py
+	$(PY) tools/check_protocol.py
 
 # The checks CI runs that need no board or phone. firmware-test needs one
 # `make firmware` first so the NMEA2000 library is on disk.
-test: firmware-test phone-analyze phone-test protocol-check
+test: firmware-test phone-analyze phone-test protocol-check tools-test
 	@echo "All host checks passed."
 
 # Full bench path: new firmware (new OOB) + clean phone binary
@@ -142,3 +153,71 @@ clean-phone:
 
 clean: clean-firmware clean-phone
 	@echo "Cleaned firmware and mobile."
+
+# ---------------------------------------------------------------------------
+# Developer tools (tools/README.md). The serial ones prefer the UART socket,
+# which works on NMEA 2000 and never resets the chip.
+# ---------------------------------------------------------------------------
+
+board-ports:
+	$(PY) tools/board.py ports
+
+board-status:
+	$(PY) tools/board.py status
+
+# WSL: attach the board with usbipd --auto-attach (survives every reset).
+board-attach:
+	$(PY) tools/board.py attach
+
+# ROM bootloader -> app, through the USB socket.
+board-boot:
+	$(PY) tools/board.py boot
+
+console:
+	$(PY) tools/console.py log --tee console-$$(date +%Y%m%d).log
+
+# make send CMD="NMEA STATS"
+send:
+	$(PY) tools/console.py send $(CMD)
+
+diag:
+	$(PY) tools/console.py diag
+
+watch:
+	$(PY) tools/console.py watch --every 10
+
+# Boat mode: full log + a diagnostics snapshot every 10 s, saved in sessions/.
+session:
+	$(PY) tools/console.py session --every 10
+
+# Over the boat Wi-Fi (the terminal's hotspot). HOST=127.0.0.1:10180 through the phone relay.
+HOST ?= 192.168.4.1
+bus-check:
+	$(PY) tools/terminal.py --host $(HOST) bus
+
+bus-status:
+	$(PY) tools/terminal.py --host $(HOST) status
+
+# make record SECONDS=120 OUT=dock.log
+SECONDS ?= 60
+OUT ?= capture-$$(date +%Y%m%d-%H%M%S).log
+record:
+	$(PY) tools/terminal.py --host $(HOST) record --seconds $(SECONDS) --out $(OUT)
+
+nmea-tcp:
+	$(PY) tools/terminal.py --nmea-host $(HOST) nmea --seconds 30
+
+# make capture-summary CAP=dock.log [TERMINAL=23]
+capture-summary:
+	$(PY) tools/capture.py summary $(CAP) $(if $(TERMINAL),--terminal $(TERMINAL))
+
+# A recording through the real library, diagnostics and converter on the host.
+# make replay CAP=dock.log
+replay:
+	$(PY) tools/capture.py replay $(CAP) --sentences $(CAP).0183.txt --json $(CAP).n2k.json
+
+sim-capture:
+	$(PY) tools/capture.py sim 60 sim-capture.log
+
+tools-test:
+	$(PY) -m unittest discover -s tools/tests
