@@ -7,12 +7,19 @@ This document captures the more serious risks identified during review and the p
 **Risk:** A poorly designed or failed terminal could degrade or disable the NMEA 2000 backbone, affecting autopilot, chartplotter, or engine data.
 
 **Mitigation:**
-- Mandatory galvanically isolated transceiver
+- The terminal is a standard NMEA 2000 node, built on the ttlappalainen NMEA2000 library (used in several commercially certified devices). It co-exists by following the standard: ISO Address Claim with a NAME, address defence and moving to a free address on contention, answers to requests, heartbeat, standard CAN fault confinement and bus-off recovery, 250 kbit/s with the J1939 / ISO 11783 sample point, and a declared LEN of 10
+- It sends only network-management messages, never instrument data. Phone GNSS never goes onto NMEA 2000
+- The node runs in its own task, so address-claim and request deadlines are met whatever the screen is doing
+- Diagnostics on the terminal and phone (node state, hints such as `repeats` and `no_address`, bus recordings) show problems before they are guessed at
 - Clean drop-off failure mode required by design
 - Certified or high-quality Micro-C drop cables preferred
 - LEN budgeting documented per installation
 - Board informed before any permanent modification; insurer consulted if appropriate
 - Pilot prefers boats with well-understood networks
+
+**Open items (hardware, not fixable in firmware):**
+- **Not isolated.** The library author's certification checklist requires electrical isolation from the network. The onboard TJA1051 and the planned Pololu supply are not isolated. Resolution: an isolated CAN transceiver (TI ISO1042 / ISO1050 class, or ADI ADM3053) with isolated bus-side power. Until then the prototype is bus-powered with a single ground, and nothing else that shares ground (laptop on mains, phone charger, USB) is connected while it is on the backbone.
+- **Not certified.** The manufacturer code is the open-source 2046 and the product code is not NMEA-issued. Codes need NMEA membership (about $1,200 and $450 at 2024 member prices, per the library author), and certification testing costs extra (about $4,000 in total for a new member, his estimate). The terminal behaves to the standard but must not be described as certified.
 
 ## 2. BLE Spoofing / Man-in-the-Middle (Medium–High)
 
@@ -65,7 +72,7 @@ This document captures the more serious risks identified during review and the p
 
 **Mitigation:**
 - Board visibility required before permanent installations
-- Prefer isolated, standards-compliant interfaces
+- Prefer isolated, standards-compliant interfaces; the terminal's isolation and NMEA certification are open items (section 1)
 - Keep changes minimal and reversible where practical
 
 ## Summary

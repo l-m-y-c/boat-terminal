@@ -12,6 +12,7 @@ struct N2kFrame {
     uint32_t id;
     uint8_t len;
     uint8_t data[8];
+    int64_t us; /* esp_timer time it reached the frame queue */
 };
 
 /* Takes one frame. Returns false when it could not keep it. */

@@ -15,6 +15,18 @@ import 'ui_kit.dart';
 /// five seconds as kNmeaInstrumentStaleMs in firmware/src/nmea_state.h.
 const kInstrumentStale = Duration(seconds: 5);
 
+/// What a depth is measured from. DPT's offset is the sounder's setting:
+/// negative is transducer to keel, positive is transducer to waterline.
+/// Same rule as DepthRef in firmware/src/nmea_state.h.
+enum DepthRef {
+  transducer('below transducer'),
+  keel('below keel'),
+  surface('below surface');
+
+  const DepthRef(this.label);
+  final String label;
+}
+
 /// Depth, speed, course and wind from NMEA 0183, decoded the way the
 /// terminal's own Instruments screen does it (firmware/src/nmea_state.cpp):
 /// RMC and VTG for SOG/COG, DPT and DBT for depth, MWV for wind.
@@ -25,6 +37,7 @@ class InstrumentReadings {
   final DateTime Function() _clock;
 
   double? _depthM;
+  DepthRef _depthRef = DepthRef.transducer;
   double? _sogKn;
   double? _cogDeg;
   double? _awsKn;
@@ -38,7 +51,9 @@ class InstrumentReadings {
   bool _fresh(DateTime? at) =>
       at != null && _clock().difference(at) <= kInstrumentStale;
 
+  /// Offset already applied: see [depthRef].
   double? get depthM => _fresh(_depthAt) ? _depthM : null;
+  DepthRef get depthRef => _depthRef;
   double? get sogKn => _fresh(_sogAt) ? _sogKn : null;
   double? get cogDeg => _fresh(_cogAt) ? _cogDeg : null;
   double? get awsKn => _fresh(_windAt) ? _awsKn : null;
@@ -74,25 +89,37 @@ class InstrumentReadings {
       changed = true;
     }
 
-    void depth(double? v) {
+    void depth(double? v, [DepthRef ref = DepthRef.transducer]) {
       if (v == null) return;
       _depthM = v;
+      _depthRef = ref;
       _depthAt = now;
       changed = true;
     }
 
     switch (formatter) {
-      case 'RMC' when fields.length > 8:
+      // RMC status V and mode N mean "no fix": its numbers are not news.
+      case 'RMC'
+          when fields.length > 8 &&
+              fields[2] != 'V' &&
+              !(fields.length > 12 && fields[12] == 'N'):
         sog(f(7));
         cog(f(8));
-      case 'VTG' when fields.length > 5:
+      case 'VTG'
+          when fields.length > 5 && !(fields.length > 9 && fields[9] == 'N'):
         // VTG,cog,T,,M,sog,N,kmh,K: 129026 with no position sends VTG only.
         sog(f(5));
         cog(f(1));
       case 'DBT' when fields.length > 3:
         depth(f(3)); // feet, metres, fathoms: field 3 is metres
       case 'DPT' when fields.length > 1:
-        depth(f(1));
+        final d = f(1);
+        final offset = f(2);
+        if (d != null && offset != null && offset != 0) {
+          depth(d + offset, offset < 0 ? DepthRef.keel : DepthRef.surface);
+        } else {
+          depth(d);
+        }
       case 'MWV' when fields.length > 4:
         var angle = f(1);
         final speed = f(3);
@@ -236,7 +263,9 @@ class _InstrumentsViewState extends State<InstrumentsView> {
     final tiles = [
       _Gauge(
         caption: 'DEPTH',
-        unit: u.depthLabel,
+        unit: r.depthM == null
+            ? u.depthLabel
+            : '${u.depthLabel} ${r.depthRef.label}',
         value: _fmt(u.depth(r.depthM), 1),
         icon: Icons.waves,
       ),

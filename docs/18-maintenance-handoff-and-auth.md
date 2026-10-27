@@ -156,4 +156,4 @@ The terminal still must not advertise occupancy or a member name in BLE advertis
 2. The JSON routes that call the current submit and table functions.
 3. Boarding-pass issuer.
 
-Instrument work (real RS485 listen, isolation, N2K) continues on [doc 17](17-android-boat-roadmap.md) and still waits on the Board items in [doc 12](12-next-steps.md) before anyone writes to a live bus.
+Instrument work (real RS485 listen, isolation, N2K) continues on [doc 17](17-android-boat-roadmap.md) and still waits on the Board items in [doc 12](12-next-steps.md) before the terminal joins a live bus.

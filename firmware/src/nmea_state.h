@@ -12,12 +12,24 @@ struct NmeaTalkerInfo {
     uint32_t last_ms;
 };
 
+/* What depth_m is measured from. DPT's offset is the sounder's setting:
+ * negative is transducer to keel, positive is transducer to waterline. */
+enum class DepthRef : uint8_t {
+    Transducer = 0, /* DBT, or DPT with no offset set */
+    Keel = 1,
+    Surface = 2,
+};
+
+/* "below transducer", "below keel", "below surface". */
+const char *nmea_depth_ref_name(DepthRef ref);
+
 struct NmeaInstruments {
     bool have_depth;
     bool have_sog;
     bool have_cog;
     bool have_wind;
-    float depth_m;
+    float depth_m; /* offset already applied */
+    DepthRef depth_ref;
     float sog_kn;
     float cog_deg;
     float aws_kn;

@@ -20,7 +20,7 @@ flowchart LR
     T2 -. drop .- DEP[Airmar DST810 depth sounder]
     TP -. power cable .- PWR[Switched 12 V<br/>3 A fuse]
     T3 -. drop .- PLOT[Garmin GPSMAP 740s]
-    T4 -. drop .- DCDC[1 A fuse + diode + Pololu APM81815<br/>from NET-S / NET-C] --- BT[boat-terminal<br/>Waveshare, bus-powered, listen-only]
+    T4 -. drop .- DCDC[1 A fuse + diode + Pololu APM81815<br/>from NET-S / NET-C] --- BT[boat-terminal<br/>Waveshare, bus-powered, N2K node]
 
     PLOT == Garmin Marine Network ==> RADAR[Radar]
     BT -. WiFi .- EINK[e-Ink display]
@@ -74,7 +74,7 @@ The full boat-terminal power parts list, with specs and links, is in [bom.csv](a
 
 Part numbers marked TBD were not verified in this pass. No prices are listed; the ones seen online ranged widely by reseller.
 
-No isolated CAN interface is needed for the primary connection. See section 4.2 if one is ever needed.
+The prototype connection below has no isolated CAN interface. That is an open compliance item, not a design choice. See section 4.3.
 
 ## 3. LEN / power budget
 
@@ -121,7 +121,7 @@ Airmar says the DST810 is being replaced by the DST820 by mid-2026. If the club 
 
 ### 4.1 Primary: powered from the bus
 
-boat-terminal takes its power and its data from one drop cable. Its only ground is the bus ground, NET-C. With one ground there is no ground loop, so the onboard TJA1051 does not need isolation. Small bus-powered N2K sensors work the same way.
+boat-terminal takes its power and its data from one drop cable. Its only ground is the bus ground, NET-C. With one ground there is no ground loop. This is how the prototype goes on the bus until it has an isolated CAN interface. The onboard TJA1051 and the Pololu are both non-isolated, and a compliant N2K device is isolated from the network (section 4.3).
 
 The board only accepts 5 V, on its USB-C sockets. There is no wide-range DC input on this board. So a DC/DC converter, the Pololu APM81815, turns bus power into 5 V. The full design, parts and power bench test are in [20 – N2K Bus Power Supply](20-n2k-bus-power-supply.md).
 
@@ -161,20 +161,27 @@ The Pololu is a bare 10 × 19 mm board with no mounting holes. Solder the wires 
 - No battery on the PH2.0 header.
 - Wi-Fi and BLE only.
 
-Any second wire brings back a second ground, and with it the ground loop. Flash and debug the board off the bus, or through an isolated USB adapter, or from a laptop running on its own battery with nothing else plugged in.
+Any second wire brings back a second ground, and with it the ground loop. The same goes for a phone charger or a laptop on mains touching the board. Flash and debug the board off the bus, or from a laptop running on its own battery with nothing else plugged in.
 
 boat-terminal turns off whenever the N2K power is switched off. That's expected. The helm display and the phone link come back when the bus does.
 
-If the fuse blows or the DC/DC fails, the TJA1051 has no power. It then disengages from the bus with zero load ([TJA1051 datasheet](https://www.nxp.com/docs/en/data-sheet/TJA1051.pdf)), and the firmware never transmits anyway.
+If the fuse blows or the DC/DC fails, the TJA1051 has no power. It then disengages from the bus with zero load ([TJA1051 datasheet](https://www.nxp.com/docs/en/data-sheet/TJA1051.pdf)). The other devices see the terminal's address go quiet, as with any device that is switched off.
 
-### 4.2 Alternative: isolated connection
+### 4.2 Isolated connection
 
-Use one of these only if boat-terminal must keep its own power, or needs another wired link while it's on the bus (for example an RS485 0183 instrument, or a permanent USB lead). In those cases the board has two grounds, so the bus side must be isolated.
+This is the target for a compliant device, and the only way if boat-terminal must keep its own power or needs another wired link while it's on the bus (for example an RS485 0183 instrument, or a permanent USB lead). In those cases the board has two grounds, so the bus side must be isolated.
 
-- **Isolated CAN module on spare pins.** An [M5Stack Unit CAN](https://docs.m5stack.com/en/unit/Unit_CAN) or a [MikroE CAN Isolator Click](https://www.mikroe.com/can-isolator-click) wired to GPIO43/44 on the UART header, with the onboard TJA1051 left disconnected. It's a pin change in `n2k.cpp` and avoids the USB/CAN pin swap. It takes over the UART log pins. It is an uncertified, home-made node, so it must pass the bench test below. Its bus side must not be terminated. If it draws from NET-S, count its LEN.
-- **Actisense NGW-1 gateway into RS485.** The [NGW-1](https://actisense.com/products/nmea-2000-gateway-ngw-1/) is a certified, isolated N2K to 0183 gateway. Its 0183 output goes into the board's RS485 header. Nothing home-made touches the bus. It needs new firmware to read 0183 from RS485, and the N2K code becomes a fallback.
+- **Isolated CAN transceiver in place of the onboard TJA1051.** A TI ISO1042 / ISO1050 class part, or an ADI ADM3053 (which also isolates power), with isolated power for the bus side. Ready-made modules such as the [M5Stack Unit CAN](https://docs.m5stack.com/en/unit/Unit_CAN) or the [MikroE CAN Isolator Click](https://www.mikroe.com/can-isolator-click) can be wired to GPIO43/44 on the UART header, with the onboard TJA1051 left disconnected. It's a pin change in `n2k.cpp` and avoids the USB/CAN pin swap. It takes over the UART log pins. It must pass the bench test below. Its bus side must not be terminated. If it draws from NET-S, count its LEN.
+- **Actisense NGW-1 gateway into RS485.** The [NGW-1](https://actisense.com/products/nmea-2000-gateway-ngw-1/) is a certified, isolated N2K to 0183 gateway. Its 0183 output goes into the board's RS485 header. Nothing home-made touches the bus, and the terminal is then not an N2K node at all. It needs new firmware to read 0183 from RS485, and the N2K code becomes a fallback.
 
 Waveshare's isolated CAN HATs ([2-CH CAN HAT](https://www.waveshare.com/2-ch-can-hat.htm)) are SPI controllers with their own MCP2515. They don't fit the ESP32's built-in CAN controller and are **not** a recommendation here.
+
+### 4.3 Compliance open items
+
+The firmware makes boat-terminal a standard NMEA 2000 node ([05](05-nmea-connectivity.md#the-terminal-as-an-nmea-2000-node)). Two things are not met by the prototype and cannot be fixed in firmware. Both must be resolved before it is a fully compliant device.
+
+1. **Electrical isolation.** The library author's certification checklist requires the device to be electrically isolated from the network. The onboard TJA1051 is not isolated, and the Pololu APM81815 is not isolated. Resolution: an isolated CAN transceiver with isolated power for the bus side (section 4.2) instead of the onboard TJA1051. Until then, never connect anything else that shares ground (laptop on mains, phone charger, USB) while boat-terminal is on the backbone.
+2. **NMEA-issued codes and certification.** The manufacturer code and product code must be issued by NMEA, which needs NMEA membership. The library author quotes about $1,200 for a manufacturer code and $450 for a product code (2024 member prices). Certification testing and verification cost extra; his total estimate for a new member is about $4,000. Until then boat-terminal uses the open-source manufacturer code 2046. It behaves to the standard, but it is not certified.
 
 ## 5. Bench test before the boat
 
@@ -200,7 +207,8 @@ Checks:
 | 5 | Current at 12 V into the drop, backlight full, Wi-Fi active (phone streaming TCP 10110) | Note the peak. Update the LEN in section 3. Must stay under 1 A (20 LEN). |
 | 6 | Turn the bench supply down to 9 V | Board keeps running, no resets. Note the current at 9 V. |
 | 7 | Pin handover on GPIO19/20 | Frames count up on the FIX chip or phone. This has never been tested on hardware. |
-| 8 | Sniffer filtered on boat-terminal | **Zero** frames from it. No address claim. No error frames when it joins or leaves. |
+| 8 | Sniffer filtered on boat-terminal | Only network-management PGNs from it: an address claim (60928) at start, a heartbeat (126993) every 60 s, and answers to requests (126996 product information shows LEN 10). **No** instrument-data PGNs. No error frames when it joins or leaves. |
+| 8a | Address contention: from the sniffer, send an address claim for boat-terminal's address with a NAME that wins (lower value) | boat-terminal moves to a free address and the **Data source** screen shows the new address. After a restart it comes back on that new address. |
 | 9 | Pull boat-terminal's drop while the bus runs | Other traffic carries on with no errors. |
 | 10 | Pull the fuse while the bus runs | Same. The unpowered TJA1051 loads nothing. |
 | 11 | Phone on BoatLink, TCP 10110 | RMC, DPT and AIVDM sentences arrive. |
@@ -208,7 +216,7 @@ Checks:
 
 Test switching to the simulator and back on **Data source** off the bus, where USB is reachable. Each switch restarts the terminal.
 
-The terminal never acknowledges frames. On a bench bus with one sender and the terminal, the sender gets no ACK and resends every frame, so the terminal sees duplicates and the sender's error counter climbs. Keep a second listening node on the bench bus, such as the USB sniffer, which acknowledges. On the boat the other devices do this.
+The terminal acknowledges frames like every powered N2K device, so a bench bus with one sender and the terminal works without a third node. If **Data source** shows the `repeats` hint, some device is not getting acknowledgements: check wiring and termination.
 
 While frames flow, open **Data source** on the glass, or **NMEA data** on the phone. **Lost frames** must stay at 0, and the buffer peak should stay far below 2048. `NMEA STATS` on the UART console prints the same counters.
 
@@ -220,7 +228,7 @@ While frames flow, open **Data source** on the glass, or **NMEA data** on the ph
 | 2 | boat-terminal: nothing wired but the drop | No USB, RS485, 12 V or battery lead on the board. Jumper 13 off. |
 | 3 | Bus power on, everything running, boat-terminal backlight full. Volts NET-S to NET-C at the far end from the tap. | At least 9 V under load, ideally close to battery. |
 | 4 | Same reading at boat-terminal's drop | At least 9 V. |
-| 5 | 740s device list | VHF 400, depth sounder listed. boat-terminal will **not** appear, because it never claims an address. |
+| 5 | 740s device list | VHF 400, depth sounder and **LMYC Boat Terminal** listed. No address conflict shown. Note boat-terminal's address from its **Data source** screen. |
 | 6 | Depth on the 740s | Reads and matches a known depth. |
 | 7 | VHF GPS and AIS on the 740s | Position and AIS targets show. |
 | 8 | boat-terminal FIX chip | Shows BOAT. |
@@ -231,6 +239,8 @@ Write the as-built order of tees, cable lengths, the measured boat-terminal curr
 
 ## 7. Open questions
 
+- **Isolation.** The prototype is not isolated from the bus (section 4.3). Choose and fit an isolated CAN transceiver with isolated bus-side power before calling the install compliant.
+- **NMEA codes.** The manufacturer code (open-source 2046) and product code are not NMEA-issued, and the terminal is not certified (section 4.3). Whether to pay for NMEA membership, codes and certification is still open.
 - **boat-terminal current.** The 10 LEN is an estimate. Measure it on the bench (section 5, checks 5 and 6).
 - **Power box and display case.** The Pololu, diode, TVS, fuse and splices need a small box near the display. Whether they fit inside the Printables display case hasn't been checked. Openings in the case for the drop and USB-C lead are drilled after printing and sealed with Sikaflex-291.
 - **Hot-plug spike.** Whether the optional 100 µF cap is needed depends on the hot-plug scope test in [20](20-n2k-bus-power-supply.md#bench-test).

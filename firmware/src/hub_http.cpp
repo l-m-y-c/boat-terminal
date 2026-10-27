@@ -7,6 +7,7 @@
 #include "pairing.h"
 #include "terminal_stats.h"
 #include "gateway.h"
+#include "n2k.h"
 
 #if LMYC_WITH_REPORTS_CHARTS
 #include <SD.h>
@@ -18,6 +19,7 @@
 #include <esp_http_server.h>
 #include <esp_heap_caps.h>
 #include <freertos/portmacro.h>
+#include <cstdlib>
 #include <cstring>
 
 static httpd_handle_t g_httpd = nullptr;
@@ -205,6 +207,60 @@ static esp_err_t get_status(httpd_req_t *req)
              data);
     httpd_resp_set_type(req, "application/json");
     return trace.ok(httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN));
+}
+
+/* The phone's Bus check polls these every second or faster, so they stay
+ * out of the HTTP log; one line per poll would bury everything else. */
+static esp_err_t get_n2k_json(httpd_req_t *req)
+{
+    constexpr size_t kCap = 16384;
+    char *json = static_cast<char *>(heap_caps_malloc(kCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (json == nullptr) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    size_t n = n2k_diag_copy(json, kCap);
+    if (n == 0) {
+        n = static_cast<size_t>(snprintf(json, kCap, "{\"v\":1,\"warming\":true}\n"));
+    }
+    httpd_resp_set_type(req, "application/json");
+    const esp_err_t err = httpd_resp_send(req, json, static_cast<ssize_t>(n));
+    heap_caps_free(json);
+    return err;
+}
+
+/* GET /n2k/frames?after=N: raw frames since sequence N as candump lines.
+ * First line "#next N lost M more 0|1". after=0 (or none) starts from now. */
+static esp_err_t get_n2k_frames(httpd_req_t *req)
+{
+    char query[40];
+    char after_s[16];
+    unsigned long after = 0;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "after", after_s, sizeof(after_s)) == ESP_OK) {
+        after = strtoul(after_s, nullptr, 10);
+    }
+    constexpr size_t kCap = 24576;
+    constexpr size_t kHead = 64;
+    char *buf = static_cast<char *>(heap_caps_malloc(kCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (buf == nullptr) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    uint32_t next = 0;
+    uint32_t lost = 0;
+    const size_t body = n2k_capture_read(static_cast<uint32_t>(after), buf + kHead, kCap - kHead, &next, &lost);
+    /* Full means there was more than fit: the phone asks again at once. */
+    const bool more = body + 52 * 33 >= kCap - kHead;
+    char head[kHead];
+    const int hn = snprintf(head, sizeof(head), "#next %lu lost %lu more %d\n", static_cast<unsigned long>(next),
+                            static_cast<unsigned long>(lost), more ? 1 : 0);
+    const size_t start = kHead - static_cast<size_t>(hn);
+    memcpy(buf + start, head, static_cast<size_t>(hn));
+    httpd_resp_set_type(req, "text/plain");
+    const esp_err_t err = httpd_resp_send(req, buf + start, static_cast<ssize_t>(hn + body));
+    heap_caps_free(buf);
+    return err;
 }
 
 #if LMYC_WITH_REPORTS_CHARTS
@@ -694,6 +750,12 @@ void hub_http_start(void)
     httpd_register_uri_handler(g_httpd, &root);
     httpd_register_uri_handler(g_httpd, &status);
     httpd_register_uri_handler(g_httpd, &inj);
+    static httpd_uri_t n2k_json = {
+        .uri = "/n2k.json", .method = HTTP_GET, .handler = get_n2k_json, .user_ctx = nullptr};
+    static httpd_uri_t n2k_frames = {
+        .uri = "/n2k/frames", .method = HTTP_GET, .handler = get_n2k_frames, .user_ctx = nullptr};
+    httpd_register_uri_handler(g_httpd, &n2k_json);
+    httpd_register_uri_handler(g_httpd, &n2k_frames);
 #if LMYC_WITH_REPORTS_CHARTS
     static httpd_uri_t snap = {
         .uri = "/snapshot", .method = HTTP_POST, .handler = post_snapshot,
@@ -729,7 +791,7 @@ void hub_http_start(void)
     httpd_register_uri_handler(g_httpd, &maint_reconcile);
     Serial.println("hub_http: :80  GET /  GET /maintenance  POST /snapshot  POST /inject");
 #else
-    Serial.println("hub_http: :80  GET /  GET /status.json  POST /inject");
+    Serial.println("hub_http: :80  GET /  GET /status.json  GET /n2k.json  GET /n2k/frames  POST /inject");
 #endif
     httpd_register_err_handler(g_httpd, HTTPD_404_NOT_FOUND, on_not_found);
     httpd_register_err_handler(g_httpd, HTTPD_405_METHOD_NOT_ALLOWED, on_not_found);

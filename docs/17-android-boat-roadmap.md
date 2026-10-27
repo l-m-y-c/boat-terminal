@@ -1,6 +1,6 @@
 # 17 – Android Boat / BoatLink Roadmap
 
-**Status:** bench pairing works (QR + BLE OOB). BoatLink slices through the SoftAP gateway, TCP 10110, snapshots, and gated phone GNSS are in the firmware. Listen-only NMEA 2000 conversion is in the firmware and does not transmit. The onboard CAN transceiver is not isolated, so the board goes on the backbone bus-powered with nothing else wired to it (or through an isolated interface if it keeps its own power). See [19](19-n2k-backbone-install.md). Real RS485 listen is not.
+**Status:** bench pairing works (QR + BLE OOB). BoatLink slices through the SoftAP gateway, TCP 10110, snapshots, and gated phone GNSS are in the firmware. NMEA 2000 → 0183 conversion is in the firmware. On NMEA 2000 the terminal is a standard node (address claim, request handling, heartbeat) and sends only network-management messages, never instrument data. The onboard CAN transceiver is not isolated, which is an open compliance item; until an isolated CAN transceiver is fitted, the board goes on the backbone bus-powered with nothing else that shares ground connected. See [19](19-n2k-backbone-install.md). Real RS485 listen is not.
 **Audience:** humans and Grok Build. Prefer this file over chat history when implementing the instrument path.
 **Member-facing work** (login, maintenance, the on-boat copy) is [18 – Maintenance handoff](18-maintenance-handoff-and-auth.md), not this file. The 13.3″ E-Ink is a separate project.
 **Related:** [03 architecture](03-system-architecture.md), [05 NMEA](05-nmea-connectivity.md), [06 pairing](06-phone-app-and-pairing.md), [16 Tritium](16-related-projects-tritium.md).
@@ -16,10 +16,10 @@ The phone is the computer. The Waveshare is the boat’s I/O hub: it aggregates 
 | Piece | What exists | What does not |
 |-------|-------------|----------------|
 | Hardware | Waveshare ESP32-S3-Touch-LCD-7, 800×480 RGB + GT911, CAN + RS485 headers, TF slot, Wi-Fi + BLE 5 | Bus-powered DC/DC drop (or isolation if self-powered), enclosure |
-| Firmware | LVGL v8 QR + helm, NimBLE peripheral, OOB pairing, **APSTA** SoftAP, SD FAT32, NMEA sim + parser, TCP/UDP 10110, `POST /snapshot`, gated `POST /inject`, NMEA 2000 listen-only → 0183 | Real RS485 listen, NMEA 2000 transmit, bus-power drop tested on hardware |
+| Firmware | LVGL v8 QR + helm, NimBLE peripheral, OOB pairing, **APSTA** SoftAP, SD FAT32, NMEA sim + parser, TCP/UDP 10110, `POST /snapshot`, gated `POST /inject`, NMEA 2000 node → 0183 | Real RS485 listen, instrument data onto NMEA 2000 (not planned), isolated CAN transceiver, NMEA-issued codes, bus-power drop tested on hardware |
 | BLE GATT | Service `6c6d7963-0001-4000-8000-000000000001`. Payload read `…000010`, session WRITE `…000020` (raw 16-byte OOB), status READ/NOTIFY `…000021`, NMEA notify `…000030` | Inject write on BLE (inject is HTTP, and only when the 7″ arms LOCAL) |
 | Mobile | Flutter Android, `lmyc://` deep link, Find terminals, raw16 OOB write, sentence console, BoatLink page (TCP, snapshot, GNSS) | Member login, maintenance UI |
-| Safety docs | Single ground or isolation + “instruments survive pairing expiry” are hard requirements | Listen-only N2K code is in tree. The onboard TJA1051 goes on a backbone only bus-powered with no other wired link. No transmit. |
+| Safety docs | Single ground or isolation + “instruments survive pairing expiry” are hard requirements | N2K node code is in tree; it sends network management only. The onboard TJA1051 is not isolated and the codes are not NMEA-issued (open items, [05](05-nmea-connectivity.md#hardware-compliance-open-items)). Until then it goes on a backbone only bus-powered with no other wired link. |
 
 Known constraints the next code must respect:
 
@@ -36,7 +36,7 @@ Known constraints the next code must respect:
 1. **Phone = powerhouse.** Charts, booking, photos, derived numbers, updates live on the phone.
 2. **Terminal = aggregator + cluster.** Local NMEA display works with the phone in a pocket or with pairing expired.
 3. **BLE = control plane. Wi-Fi = data plane.** Pairing, page select, inject enable, compact state on BLE. Sentence firehose and images on Wi-Fi.
-4. **Listen first, talk later.** v1 reads the boat bus. Writing onto a live backbone is an explicit, gated mode.
+4. **Read instruments, don't send them.** v1 reads instrument data from the boat bus and puts none back. On NMEA 2000 it is a standard node and sends only network-management messages. Writing instrument data onto a live bus is an explicit, gated mode (`BACKUP`, 0183 only).
 5. **Professional tools stay primary.** No autopilot commands. No interactive chartplotter on the 7″ or the E-Ink.
 6. **Club first.** Logbook, maintenance, handover, and a sentence recording tied to a booking matter more than a projector demo.
 7. **Open and small.** One volunteer must be able to flash and explain it. Prefer boring protocols (NMEA 0183 text, TCP 10110, JPEG).
@@ -229,7 +229,7 @@ Acceptance: kitchen-table demo. Walk around the block. 7″ SOG/COG tracks the p
 - Confirm Waveshare RS485 pins in `nmea_io.cpp` against the wiki; document in `firmware/README.md`.
 - SD ring: `/nmea/YYYYMMDD-HHMMSS.log`, rotate at 2 MB.
 - Diagnostics: last talkers seen, baud.
-- Still listen-only on the wire.
+- Still listen-only on the RS485 wire.
 
 ### Slice E — snapshots, not mirroring
 
@@ -239,11 +239,11 @@ Acceptance: kitchen-table demo. Walk around the block. 7″ SOG/COG tracks the p
 - Use cases: checklist card, open-defect photo, static chart excerpt.
 - Hard cap: ≤ 1 fps. No MediaProjection pipeline.
 
-### Slice F — N2K listen, bus-powered or isolated (pilot boat only)
+### Slice F — N2K node, bus-powered until isolated (pilot boat only)
 
-Out of band with Board / insurance. Separate hardware note. Use `NMEA2000` library family. Convert a useful PGN set to 0183 so Slices A–E stay unchanged. No TX.
+Out of band with Board / insurance. Separate hardware note. Use the ttlappalainen `NMEA2000` library in `N2km_ListenAndNode` mode: a standard node that sends network management only. Convert a useful PGN set to 0183 so Slices A–E stay unchanged. No instrument data goes onto NMEA 2000.
 
-Listen-only code is in `firmware/src/n2k.cpp`, `n2k_to_0183.cpp`, and `ais0183.cpp`. The data source is chosen on the glass and saved (simulator or NMEA 2000); `NMEA_SOURCE` in `secrets.h` is only the first-boot default. The phone path is still the 0183 sink (TCP 10110 and BLE notify). The onboard TJA1051 is not isolated. The primary connection is bus-powered with a single ground: NET-S / NET-C through a fuse and DC/DC, and no other wired link. See [05 – NMEA](05-nmea-connectivity.md) and [19 – Backbone install](19-n2k-backbone-install.md) before any backbone connection.
+The node and converter code is in `firmware/src/n2k.cpp`, `n2k_to_0183.cpp`, `n2k_diag.cpp`, and `ais0183.cpp`. The data source is chosen on the glass and saved (simulator or NMEA 2000); `NMEA_SOURCE` in `secrets.h` is only the first-boot default. The phone path is still the 0183 sink (TCP 10110 and BLE notify). The onboard TJA1051 is not isolated, an open compliance item. Until an isolated CAN transceiver is fitted, the connection is bus-powered with a single ground: NET-S / NET-C through a fuse and DC/DC, and no other wired link. See [05 – NMEA](05-nmea-connectivity.md) and [19 – Backbone install](19-n2k-backbone-install.md) before any backbone connection.
 
 ---
 
@@ -256,7 +256,7 @@ Listen-only code is in `firmware/src/n2k.cpp`, `n2k_to_0183.cpp`, and `ais0183.c
 | `firmware/src/nmea.*` | Parse / checksum / state. |
 | `firmware/src/nmea_io.*` | Bytes in/out of UART/RS485. |
 | `firmware/src/n2k_sim.*` | Simulator on a virtual NMEA 2000 bus. |
-| `firmware/src/n2k.*` | Listen-only TWAI port and the sim / N2K switch. No transmit. |
+| `firmware/src/n2k.*` | TWAI port, the NMEA 2000 node (network management only) and the sim / N2K switch. |
 | `firmware/src/n2k_to_0183.*` | PGN decode → NMEA 0183 sentences into the existing sink. |
 | `firmware/src/ais0183.*` | ITU-R M.1371 bit packer for `!AIVDM` / `!AIVDO`. |
 | `firmware/src/gateway.*` | TCP/UDP. |

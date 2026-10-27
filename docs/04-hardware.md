@@ -19,11 +19,16 @@ The project now uses two complementary displays plus the member’s phone:
 |---------|---------------|----------------|
 | Display | 7" capacitive touch, colour | Readable interaction for logbook, instruments, menus |
 | Processor | ESP32-S3 | Sufficient for LVGL UI + NMEA parsing |
-| Interfaces | CAN header + RS485 header | Base for NMEA 0183 and (with external isolation) NMEA 2000 |
+| Interfaces | CAN header + RS485 header | Base for NMEA 0183 and NMEA 2000. The terminal is a standard NMEA 2000 node; full compliance needs an isolated CAN transceiver |
 | Connectivity | Wi-Fi + Bluetooth 5 LE | Pairing and local network |
 | Power | 5 V (requires proper 12 V → 5 V conversion) | Boat power via buck converter + fuse |
 
-**Critical requirement:** Any connection to a live NMEA 2000 backbone must use a proper galvanically isolated transceiver and clean failure behaviour. See [05 – NMEA Connectivity](05-nmea-connectivity.md).
+**Critical requirement:** On NMEA 2000 the terminal is a standard node (address claim, NAME, request handling, heartbeat, standard CAN fault confinement, LEN 10). It sends only network-management messages, never instrument data. See [05 – NMEA Connectivity](05-nmea-connectivity.md#the-terminal-as-an-nmea-2000-node).
+
+**Open hardware items (not fixable in firmware):**
+
+1. **Isolation.** A compliant N2K device is electrically isolated from the network. The board's onboard TJA1051 is not isolated, and the planned Pololu 12 V to 5 V supply is not isolated. Fix: an isolated CAN transceiver (TI ISO1042 / ISO1050 class, or ADI ADM3053, which also isolates power) with isolated power for the bus side, in place of the onboard TJA1051. Until then, never connect anything else that shares ground (laptop on mains, phone charger, USB) while it is on the backbone.
+2. **NMEA codes and certification.** Manufacturer and product codes must be issued by NMEA (membership needed; about $1,200 and $450 at 2024 member prices, per the library author). Certification testing costs extra (his total estimate for a new member is about $4,000). Until then the terminal uses the open-source manufacturer code 2046 and is not certified.
 
 Cabin installation for the interactive terminal (not weatherproof).
 
@@ -71,16 +76,16 @@ The EE02 board already includes battery connector, charging support, and power s
 
 | Device | Power approach |
 |--------|----------------|
-| 7" interactive terminal | Boat 12 V → fused buck converter → 5 V |
+| 7" interactive terminal | Prototype: NMEA 2000 bus power → fused buck converter → 5 V (non-isolated, see [20](20-n2k-bus-power-supply.md)) |
 | 13.3" E-Ink + EE02 | Boat 12 V (via converter) **or** large Li battery for fully independent outdoor mounting |
-| Isolation | Required on any NMEA 2000 connection; recommended on NMEA 0183 for permanent installs |
+| Isolation | Required for a compliant NMEA 2000 connection (open item on the prototype); recommended on NMEA 0183 for permanent installs |
 
 ## Bill of Materials (Current Prototype Direction)
 
 | Item | Approx. Cost |
 |------|--------------|
 | Waveshare ESP32-S3-Touch-LCD-7 | Already ordered |
-| Isolated NMEA interface components | 40–90 CAD |
+| Isolated CAN transceiver and isolated bus-side power | 40–90 CAD |
 | 13.3" Spectra 6 E-Ink panel | $149 USD |
 | XIAO EE02 driver board | $14.90 USD |
 | Enclosure + battery for E-Ink (optional outdoor) | TBD |

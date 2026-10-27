@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'bus_check.dart';
 import 'counter_help.dart';
 import 'terminal_stats.dart';
 import 'ui_kit.dart';
@@ -187,6 +188,36 @@ class NmeaDataView extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         _IntegrityLine(stats: s),
+        if (s.hintText != null) ...[
+          const SizedBox(height: 10),
+          Text(
+            s.hintText!,
+            key: const ValueKey('bus-hint'),
+            style: TextStyle(
+              color: toneColor(
+                s.hint == 'two_sources' ? Tone.neutral : Tone.caution,
+              ),
+              fontWeight: FontWeight.w600,
+              height: 1.35,
+            ),
+          ),
+        ],
+        if (!s.simulated)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const ValueKey('open-bus-check'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const BusCheckPage()),
+              ),
+              icon: const Icon(Icons.troubleshoot),
+              label: Text(
+                s.address == null
+                    ? 'Bus check'
+                    : 'Bus check · address ${s.address}',
+              ),
+            ),
+          ),
         _Section(
           title: 'Traffic',
           metrics: [

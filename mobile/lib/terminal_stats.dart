@@ -45,6 +45,8 @@ class TerminalStats {
     required this.notDelivered,
     required this.appBufferPeak,
     required this.appBufferCapacity,
+    this.address,
+    this.hint = 'ok',
   });
 
   final DataMode mode;
@@ -76,6 +78,18 @@ class TerminalStats {
   final int notDelivered;
   final int appBufferPeak;
   final int appBufferCapacity;
+
+  /// The terminal's own NMEA 2000 source address while it holds one.
+  /// Null on the simulator, while claiming, or with no free address.
+  final int? address;
+
+  /// The terminal's bus hint code (n2k_hint_code in firmware/src/n2k_diag.cpp),
+  /// "ok" when there is nothing to do.
+  final String hint;
+
+  /// The firmware's hint sentence, word for word, so phone and terminal say
+  /// the same thing. Null for "ok" or a code this app does not know.
+  String? get hintText => busHintText(hint);
 
   static const _states = {
     'sim': BusState.simulated,
@@ -134,6 +148,10 @@ class TerminalStats {
       notDelivered: n('out_lost') + n('udp_lost'),
       appBufferPeak: n('out_peak'),
       appBufferCapacity: n('out_cap'),
+      address: decoded['addr'] is int && (decoded['addr'] as int) >= 0
+          ? decoded['addr'] as int
+          : null,
+      hint: decoded['hint'] is String ? decoded['hint'] as String : 'ok',
     );
   }
 
@@ -175,8 +193,8 @@ class TerminalStats {
       'The NMEA 2000 network has gone quiet. Values on the terminal are '
           'blank rather than out of date.',
     BusState.busOff =>
-      'The terminal dropped off the bus after a fault and is retrying. '
-          'It never transmits.',
+      'The terminal went bus-off after transmit errors and is rejoining the '
+          'bus the standard way.',
     BusState.failed => 'The terminal\'s CAN interface did not start.',
   };
 
@@ -216,3 +234,35 @@ String formatAge(int? ms) {
   if (ms < 1000) return '$ms ms ago';
   return '${ms ~/ 1000} s ago';
 }
+
+/// n2k_hint_text() in firmware/src/n2k_diag.cpp. Keep the two word for word.
+String? busHintText(String code) => switch (code) {
+  'repeats' =>
+    'The same frame keeps repeating: a device is not getting '
+        'acknowledgements. Check CAN-H / CAN-L and both terminators.',
+  'errors_no_frames' =>
+    'Bus errors and no frames. Check CAN-H / CAN-L, both terminators, and '
+        '12 V on the backbone.',
+  'bus_off' =>
+    'The terminal went bus-off and is rejoining. Check CAN-H / CAN-L and '
+        'both terminators.',
+  'no_address' =>
+    'The terminal could not claim an address: every address is taken. '
+        'Remove a device or check for one that claims many addresses.',
+  'no_frames' =>
+    'No frames. Check the drop cable, 12 V on the backbone, and that the '
+        'plotter is on.',
+  'losing' =>
+    'Frames are being lost before decoding. Capture the bus from the phone '
+        'and report it.',
+  'fast_incomplete' =>
+    'Multi-frame messages (GNSS, AIS) are not arriving whole. Frames are '
+        'going missing.',
+  'bad_values' =>
+    'A device is sending error codes or impossible values. They are dropped, '
+        'not shown.',
+  'two_sources' =>
+    'Two devices send the same value. One is used; the other takes over if '
+        'it stops.',
+  _ => null,
+};

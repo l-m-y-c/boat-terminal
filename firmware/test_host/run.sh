@@ -36,3 +36,21 @@ $cxx -std=gnu++17 -O1 -Wall -Wno-unused-parameter -w \
     "$lib/N2kStream.cpp" "$lib/N2kGroupFunction.cpp" "$lib/N2kGroupFunctionDefaultHandlers.cpp" \
     -o "$out/test_n2k_sim"
 "$out/test_n2k_sim"
+# Bus diagnostics: hints, device names, fast-packet completion, /n2k.json.
+$cxx -std=gnu++17 -O1 -Wall -Wno-unused-parameter -w \
+    -include cstdlib -include cstring -I "$here/stub" -I "$fw/src" -I "$lib" \
+    "$here/test_n2k_diag.cpp" "$fw/src/n2k_diag.cpp" "$fw/src/n2k_sim.cpp" "$fw/src/n2k_to_0183.cpp" \
+    "$fw/src/ais0183.cpp" "$fw/src/nmea.cpp" "$lib/N2kMsg.cpp" "$lib/N2kMessages.cpp" "$lib/N2kTimer.cpp" \
+    "$lib/N2kStream.cpp" -o "$out/test_n2k_diag"
+"$out/test_n2k_diag"
+# The terminal as an NMEA 2000 node on a virtual bus with a plotter.
+# The library's timer is built without its Linux branch so it runs on
+# the test's simulated millis().
+$cxx -std=gnu++17 -O1 -w -U__linux__ -U__linux -Ulinux -I "$here/stub" -I "$lib" \
+    -c "$lib/N2kTimer.cpp" -o "$out/N2kTimer_sim.o"
+$cxx -std=gnu++17 -O1 -Wall -Wno-unused-parameter -w \
+    -include cstdlib -include cstring -include cstdio -I "$here/stub" -I "$fw/src" -I "$lib" \
+    "$here/test_n2k_node.cpp" "$fw/src/n2k_node.cpp" "$lib/NMEA2000.cpp" "$lib/N2kMsg.cpp" \
+    "$lib/N2kMessages.cpp" "$lib/N2kStream.cpp" "$lib/N2kGroupFunction.cpp" \
+    "$lib/N2kGroupFunctionDefaultHandlers.cpp" "$out/N2kTimer_sim.o" -o "$out/test_n2k_node"
+"$out/test_n2k_node"

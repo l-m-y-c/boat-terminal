@@ -2,6 +2,7 @@
 
 #include "gateway.h"
 #include "n2k.h"
+#include "n2k_diag.h"
 #include "pairing.h"
 
 #include <Arduino.h>
@@ -49,7 +50,8 @@ void terminal_stats_refresh(void)
     } else {
         snprintf(age, sizeof(age), "%lu", static_cast<unsigned long>(n.last_frame_ms));
     }
-    const unsigned long lost = static_cast<unsigned long>(n.lost_queue) + n.lost_driver + n.lost_controller;
+    const unsigned long lost =
+        static_cast<unsigned long>(n.lost_queue) + n.lost_driver + n.lost_controller + n.lost_messages;
 
     char json[kTerminalStatsMax];
     const int len = snprintf(
@@ -58,7 +60,7 @@ void terminal_stats_refresh(void)
         "\"frames\":%lu,\"msgs\":%lu,\"q_cap\":%lu,\"q_now\":%lu,\"q_peak\":%lu,"
         "\"lost\":%lu,\"lost_q\":%lu,\"lost_drv\":%lu,\"lost_hw\":%lu,\"ignored\":%lu,\"bus_err\":%lu,\"rec\":%lu,"
         "\"pgns\":%lu,\"devices\":%lu,\"age_ms\":%s,\"up_s\":%lu,"
-        "\"apps\":%lu,\"out\":%lu,\"out_lost\":%lu,\"udp_lost\":%lu,\"out_peak\":%lu,\"out_cap\":%lu}",
+        "\"apps\":%lu,\"out\":%lu,\"out_lost\":%lu,\"udp_lost\":%lu,\"out_peak\":%lu,\"out_cap\":%lu,\"addr\":%d,\"hint\":\"%s\"}",
         n.source == DataSource::Simulator ? "sim" : "n2k", state_code(n.state),
         static_cast<unsigned long>(n.frames_per_s), static_cast<unsigned long>(n.frames_per_s_peak),
         static_cast<unsigned long>(n.messages_per_s), static_cast<unsigned long>(n.frames),
@@ -71,7 +73,8 @@ void terminal_stats_refresh(void)
         static_cast<unsigned long>(n.devices), age, static_cast<unsigned long>(millis() / 1000UL),
         static_cast<unsigned long>(g.clients), static_cast<unsigned long>(g.sentences),
         static_cast<unsigned long>(g.lost_tcp), static_cast<unsigned long>(g.lost_udp),
-        static_cast<unsigned long>(g.queued_peak), static_cast<unsigned long>(g.queue_capacity));
+        static_cast<unsigned long>(g.queued_peak), static_cast<unsigned long>(g.queue_capacity), n.node == NodeState::Claimed ? static_cast<int>(n.address) : -1,
+        n2k_hint_code(n.hint));
     if (len <= 0 || static_cast<size_t>(len) >= sizeof(json)) {
         return;
     }

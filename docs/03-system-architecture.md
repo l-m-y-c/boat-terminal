@@ -93,7 +93,7 @@ The 13.3″ panel is a separate project. It displays pictures the phone sends. I
 3. **The 7″ is the boat's interactive terminal.** The large E-Ink is a separate project that shows pictures the phone sends.
 4. **Pairing is temporary** – tied to the booking window (QR is the preferred bootstrap)
 5. **Offline-first and pairing-independent for instruments** – live NMEA display continues even if the token expires
-6. **Bus safety first** – any NMEA 2000 connection uses a galvanically isolated interface with clean failure behaviour
+6. **Bus safety first** – on NMEA 2000 the terminal is a standard node (address claim, NAME, request handling, heartbeat, standard CAN fault confinement) that sends no instrument data, with clean failure behaviour. A compliant connection uses a galvanically isolated interface; on the prototype that is still an open item ([05](05-nmea-connectivity.md#hardware-compliance-open-items))
 7. **Professional tools remain primary for navigation** – neither display replaces a chartplotter or controls the autopilot
 8. **Open and inspectable** – more than one person must be able to maintain it
 
