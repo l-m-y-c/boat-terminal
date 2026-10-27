@@ -10,6 +10,7 @@
 #include <N2kMessages.h>
 
 #include <cmath>
+#include <initializer_list>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -455,6 +456,227 @@ static void test_ais_convert(void)
     }
 }
 
+static void raw_pgn(unsigned long pgn, unsigned char src, std::initializer_list<uint8_t> bytes)
+{
+    tN2kMsg m;
+    m.SetPGN(pgn);
+    m.Source = src;
+    for (uint8_t b : bytes) {
+        m.AddByte(b);
+    }
+    n2k_to_0183_handle(m);
+}
+
+static const N2kConvStats *conv(unsigned long pgn)
+{
+    static N2kConvStats all[32];
+    const size_t n = n2k_conv_stats(all, 32);
+    for (size_t i = 0; i < n; ++i) {
+        if (all[i].pgn == pgn) {
+            return &all[i];
+        }
+    }
+    return nullptr;
+}
+
+/* N2K "out of range / error" codes (0xFE..) decode to numbers the library
+ * does not flag. None of them may become a reading. */
+static void test_error_codes(void)
+{
+    n2k_conv_reset_sources();
+    g_out.clear();
+    g_now = 2000000;
+    const uint32_t bad_before = n2k_conv_bad_total();
+    raw_pgn(128267, 10, {1, 0xFE, 0xFF, 0xFF, 0xFF, 0, 0, 0xFF});
+    g_now += 1100;
+    raw_pgn(130306, 11, {1, 0xFE, 0xFF, 0xFE, 0xFF, 2, 0xFF, 0xFF});
+    g_now += 1100;
+    raw_pgn(127250, 12, {1, 0xFE, 0xFF, 0xFF, 0x7F, 0xFF, 0x7F, 0xFC});
+    g_now += 1100;
+    raw_pgn(128259, 13, {1, 0xFE, 0xFF, 0xFF, 0xFF, 0, 0xFF, 0xFF});
+    expect_true("error codes emit nothing", g_out.empty());
+    expect_true("error codes counted as bad", n2k_conv_bad_total() - bad_before == 4);
+    const N2kConvStats *d = conv(128267);
+    expect_true("depth stats: bad", d != nullptr && d->bad >= 1);
+
+    /* A wild offset loses the offset, not the depth. */
+    tN2kMsg m;
+    g_now += 1100;
+    SetN2kPGN128267(m, 1, 4.2, 32.0);
+    m.Source = 10;
+    feed(m);
+    expect_sentence("$SDDPT", "$SDDPT,4.2,0.0,");
+
+    /* AIS COG 0xFFFE is "not available" (3600), not 15.5 degrees. */
+    g_out.clear();
+    SetN2kPGN129038(m, 1, N2kaisr_Initial, 316001235, 49.3, -123.1, false, false, 10, 6.5534, 655.34,
+                    N2kaischannel_A_VDL_reception, N2kDoubleNA, N2kDoubleNA, N2kaisns_Under_Way_Motoring);
+    feed(m);
+    expect_true("AIS from error codes still sent", g_out.size() == 1);
+}
+
+static void test_sources(void)
+{
+    n2k_conv_reset_sources();
+    tN2kMsg m;
+    g_out.clear();
+    g_now = 3000000;
+    for (int i = 0; i < 4; ++i) {
+        SetN2kPGN128267(m, 1, (i & 1) ? 30.0 : 3.0, 0.0);
+        m.Source = (i & 1) ? 30 : 10;
+        feed(m);
+        g_now += 1100;
+    }
+    int threes = 0;
+    for (const auto &s : g_out) {
+        expect_true("only the first sounder", body(s) == "$SDDPT,3.0,0.0,");
+        threes += body(s) == "$SDDPT,3.0,0.0," ? 1 : 0;
+    }
+    expect_true("first sounder every second", threes == 2);
+    const N2kConvStats *d = conv(128267);
+    expect_true("other sounder counted", d != nullptr && d->other_src >= 2);
+
+    N2kSourceLock locks[16];
+    size_t n = n2k_conv_sources(locks, 16);
+    bool seen = false;
+    for (size_t i = 0; i < n; ++i) {
+        if (strcmp(locks[i].what, "depth") == 0) {
+            seen = locks[i].src == 10 && locks[i].other == 30;
+        }
+    }
+    expect_true("depth owned by 10, 30 also sending", seen);
+
+    /* Owner silent for 3 s: the other device takes over. */
+    g_out.clear();
+    g_now += 3500;
+    SetN2kPGN128267(m, 1, 30.0, 0.0);
+    m.Source = 30;
+    feed(m);
+    expect_sentence("$SDDPT", "$SDDPT,30.0,0.0,");
+    n = n2k_conv_sources(locks, 16);
+    seen = false;
+    for (size_t i = 0; i < n; ++i) {
+        if (strcmp(locks[i].what, "depth") == 0) {
+            seen = locks[i].src == 30 && locks[i].other == 10;
+        }
+    }
+    expect_true("failover to 30", seen);
+
+    /* Two GPS receivers: position never mixes. */
+    g_out.clear();
+    g_now += 5000;
+    SetN2kPGN129025(m, 49.30, -123.10);
+    m.Source = 1;
+    feed(m);
+    SetN2kPGN129025(m, 48.00, -122.00);
+    m.Source = 2;
+    feed(m);
+    n2k_to_0183_poll();
+    const std::string *rmc = find("$GPRMC");
+    expect_true("position from the first GPS", rmc && rmc->find(",4918.0000,N,") != std::string::npos);
+}
+
+static void test_motion(void)
+{
+    n2k_conv_reset_sources();
+    tN2kMsg m;
+    g_out.clear();
+    g_now = 4000000;
+    /* At rest: SOG 0.00, COG not available. */
+    SetN2kPGN129025(m, 49.3, -123.1);
+    m.Source = 20;
+    feed(m);
+    SetN2kPGN129026(m, 1, N2khr_true, N2kDoubleNA, 0.0);
+    m.Source = 20;
+    feed(m);
+    n2k_to_0183_poll();
+    expect_sentence("$GPRMC", "$GPRMC,,A,4918.0000,N,12306.0000,W,0.0,,,,,A");
+    expect_sentence("$GPVTG", "$GPVTG,,T,,M,0.0,N,0.0,K,A");
+
+    /* Magnetic COG with no variation: magnetic field only, never as true. */
+    g_out.clear();
+    g_now += 1000;
+    SetN2kPGN129026(m, 1, N2khr_magnetic, rad(100.0), 3.0);
+    m.Source = 20;
+    feed(m);
+    n2k_to_0183_poll();
+    expect_sentence("$GPVTG", "$GPVTG,,T,100.0,M,5.8,N,10.8,K,A");
+
+    /* With 127258 variation 16.5 E: true COG 116.5, and RMC carries it. */
+    g_out.clear();
+    g_now += 1000;
+    SetN2kPGN127258(m, 1, N2kmagvar_WMM2020, 20743, rad(16.5));
+    m.Source = 20;
+    feed(m);
+    SetN2kPGN129026(m, 1, N2khr_magnetic, rad(100.0), 3.0);
+    m.Source = 20;
+    feed(m);
+    n2k_to_0183_poll();
+    expect_sentence("$GPVTG", "$GPVTG,116.5,T,100.0,M,5.8,N,10.8,K,A");
+    expect_sentence("$GPRMC", "$GPRMC,,A,4918.0000,N,12306.0000,W,5.8,116.5,,16.5,E,A");
+
+    /* Apparent at 10 Hz must not starve true wind at 1 Hz. */
+    g_out.clear();
+    for (int i = 0; i < 30; ++i) {
+        SetN2kPGN130306(m, 1, 5.0, 0.5, (i % 10 == 5) ? N2kWind_True_water : N2kWind_Apparent);
+        m.Source = 11;
+        feed(m);
+        g_now += 100;
+    }
+    int r = 0, t = 0;
+    for (const auto &s : g_out) {
+        r += s.compare(0, 9, "$WIMWV,28") == 0 && s.find(",R,") != std::string::npos ? 1 : 0;
+        t += s.find(",T,") != std::string::npos ? 1 : 0;
+    }
+    expect_true("apparent wind about once a second", r == 3 || r == 4);
+    expect_true("true wind each second", t == 3);
+}
+
+static void test_clock(void)
+{
+    n2k_conv_reset_sources();
+    tN2kMsg m;
+    g_out.clear();
+    g_now = 5000000;
+    SetN2kPGN126992(m, 1, 20743, 86399.5, N2ktimes_GPS);
+    m.Source = 5;
+    feed(m);
+    g_now += 1250;
+    SetN2kPGN129025(m, 49.3, -123.1);
+    m.Source = 5;
+    feed(m);
+    n2k_to_0183_poll();
+    /* 23:59:59.50 + 1.25 s rolls into the next day. */
+    expect_sentence("$GPRMC", "$GPRMC,000000.75,A,4918.0000,N,12306.0000,W,,,181026,,,A");
+
+    /* DGNSS shows as mode D. */
+    g_out.clear();
+    g_now += 1000;
+    SetN2kPGN129029(m, 1, 20744, 10.0, 49.3, -123.1, 3.0, N2kGNSSt_GPS, N2kGNSSm_DGNSS, 10, 0.8, 1.2, -17.0);
+    m.Source = 5;
+    feed(m);
+    n2k_to_0183_poll();
+    expect_sentence("$GPGLL", "$GPGLL,4918.0000,N,12306.0000,W,000010.00,A,D");
+}
+
+static void test_sea_temp(void)
+{
+    n2k_conv_reset_sources();
+    tN2kMsg m;
+    g_out.clear();
+    g_now = 6000000;
+    SetN2kPGN130316(m, 1, 0, N2kts_SeaTemperature, 273.15 + 11.4);
+    m.Source = 9;
+    feed(m);
+    expect_sentence("$YXMTW", "$YXMTW,11.4,C");
+    g_out.clear();
+    g_now += 1100;
+    SetN2kPGN130316(m, 1, 0, N2kts_OutsideTemperature, 273.15 + 30.0);
+    m.Source = 9;
+    feed(m);
+    expect_absent("$YXMTW");
+}
+
 int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] : "n2k_0183_out.txt";
@@ -472,6 +694,11 @@ int main(int argc, char **argv)
         fclose(g_file);
         g_file = nullptr;
     }
+    test_error_codes();
+    test_sources();
+    test_motion();
+    test_clock();
+    test_sea_temp();
     test_pgn_list();
     test_play();
     printf("host test: %d passed, %d failed (sentences in %s)\n", g_pass, g_fail, path);

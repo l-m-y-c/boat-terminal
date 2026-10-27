@@ -102,7 +102,9 @@ void nmea_state_note(const char *sentence)
 
     const uint32_t now = millis();
 
-    if (strcmp(formatter, "RMC") == 0 && nfields > 8) {
+    /* RMC status V and VTG/RMC mode N mean "no fix": its numbers are not news. */
+    if (strcmp(formatter, "RMC") == 0 && nfields > 8 && fields[2][0] != 'V' &&
+        !(nfields > 12 && fields[12][0] == 'N')) {
         float sog = 0, cog = 0;
         if (parse_float(fields[7], &sog)) {
             g_inst.sog_kn = sog;
@@ -123,17 +125,27 @@ void nmea_state_note(const char *sentence)
             /* DBT: feet, metres, fathoms — field 3 is metres. */
             if (parse_float(fields[3], &d)) {
                 g_inst.depth_m = d;
+                g_inst.depth_ref = DepthRef::Transducer;
                 g_inst.have_depth = true;
                 g_inst.depth_ms = now;
                 g_inst.updated_ms = now;
             }
         } else if (parse_float(fields[1], &d)) {
+            /* DPT,depth,offset: the offset turns "below the transducer" into
+             * below the keel (negative) or the waterline (positive). */
+            float offset = 0;
+            DepthRef ref = DepthRef::Transducer;
+            if (nfields > 2 && parse_float(fields[2], &offset) && offset != 0.0f) {
+                ref = offset < 0.0f ? DepthRef::Keel : DepthRef::Surface;
+                d += offset;
+            }
             g_inst.depth_m = d;
+            g_inst.depth_ref = ref;
             g_inst.have_depth = true;
             g_inst.depth_ms = now;
             g_inst.updated_ms = now;
         }
-    } else if (strcmp(formatter, "VTG") == 0 && nfields > 5) {
+    } else if (strcmp(formatter, "VTG") == 0 && nfields > 5 && !(nfields > 9 && fields[9][0] == 'N')) {
         /* $GPVTG,cog,T,,M,sog,N,kmh,K,mode. 129026 with no position emits
          * VTG and not RMC, so course and speed have to come from here. */
         float sog = 0, cog = 0;
@@ -177,6 +189,19 @@ void nmea_state_note(const char *sentence)
 }
 
 const NmeaInstruments *nmea_state_instruments(void) { return &g_inst; }
+
+const char *nmea_depth_ref_name(DepthRef ref)
+{
+    switch (ref) {
+    case DepthRef::Keel:
+        return "below keel";
+    case DepthRef::Surface:
+        return "below surface";
+    case DepthRef::Transducer:
+        break;
+    }
+    return "below transducer";
+}
 
 bool nmea_state_fresh(uint32_t stamp_ms)
 {

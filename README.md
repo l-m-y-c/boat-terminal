@@ -39,7 +39,7 @@ The goal is a seamless experience that strengthens the co-operative — not a se
 | **Solves real co-op problems** | Clean handovers, consistent logging, visible maintenance, boat knowledge that stays with the vessel |
 | **Keeps costs reasonable** | Hardware target in the low-to-mid hundreds per boat |
 | **Stays open and maintainable** | Designed so more than one volunteer can understand and improve it |
-| **Safety-conscious** | Single-ground or isolated NMEA connections and clear failure modes are required |
+| **Safety-conscious** | A standard NMEA 2000 node that sends no instrument data, clear failure modes, and isolated NMEA connections (isolation and NMEA certification are open items on the prototype) |
 | **Respects professional tools** | Navigation and autopilot control remain with proper chartplotters |
 
 ---
@@ -78,6 +78,7 @@ The system may still listen to waypoint and autopilot data and can push high-qua
 | [18 – Maintenance handoff & login](docs/18-maintenance-handoff-and-auth.md) | Agreed member loop: phone, Waveshare, lmyc.ca, on-boat copy |
 | [19 – NMEA 2000 Backbone Install](docs/19-n2k-backbone-install.md) | Backbone layout, parts, LEN budget, bench test, commissioning |
 | [20 – N2K Bus Power Supply](docs/20-n2k-bus-power-supply.md) | Off-the-shelf 12 V to 5 V supply for boat-terminal: wiring diagram, parts, bench test |
+| [21 – First Boat Run](docs/21-first-boat-run.md) | Checklist for the first run on a real backbone (Garmin 740s): joining as an NMEA 2000 node, what the terminal says, captures to bring home |
 
 ---
 

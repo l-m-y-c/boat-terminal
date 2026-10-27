@@ -23,6 +23,8 @@
  *  128259 water speed             VHW
  *  130306 wind                    MWV (apparent / boat-true), MWD (ground)
  *  127250 heading                 HDG or HDT
+ *  127258 magnetic variation      RMC variation, magnetic COG -> true
+ *  130310/130312/130316 sea temp  MTW
  *  129038 AIS Class A position    !AIVDM/!AIVDO type 1
  *  129039 AIS Class B position    type 18
  *  129040 AIS Class B extended    type 19
@@ -34,6 +36,11 @@
  * GNSS, depth, wind, and heading are emitted at 1 Hz. AIS goes out as received.
  * GNSS older than 3 s is dropped rather than repeated.
  * v1 does not transmit on NMEA 2000.
+ *
+ * Each value comes from one device at a time (see Lock), so two GPS
+ * receivers or two sounders on one backbone never alternate. The library
+ * maps only 0xFF.. to "not available"; 0xFE.. (out of range / error) and
+ * anything a boat cannot do is rejected here, never shown as a reading.
  */
 
 static constexpr double kMsToKn = 1.9438444924406046;
@@ -43,10 +50,184 @@ static constexpr uint32_t kEmitMs = 1000;
  * window, so a dead GPS never keeps repeating its last fix. */
 static constexpr uint32_t kStaleMs = 3000;
 
+/* Physical limits. N2K's "out of range" codes decode just above the real
+ * range (0xFFFE x 1e-4 rad is 375.5 deg, wrapped to a plausible 15.5 deg),
+ * so angles are checked before wrap360, never after. */
+static constexpr double kTwoPi = 6.283185307179586;
+static constexpr double kMaxAngleRad = kTwoPi + 0.0005;
+static constexpr double kMaxSignedAngleRad = kTwoPi / 2.0 + 0.0005;
+static constexpr double kMaxDepthM = 1000.0;
+static constexpr double kMaxDepthOffsetM = 20.0;
+static constexpr double kMaxBoatSpeedMs = 100.0 / kMsToKn;
+static constexpr double kMaxWindMs = 75.0;
+static constexpr double kMaxHdop = 100.0;
+static constexpr double kMinSeaK = 263.15; /* -10 C */
+static constexpr double kMaxSeaK = 323.15; /* 50 C */
+
 static bool fresh(uint32_t stamp_ms, uint32_t now)
 {
     return stamp_ms != 0 && (now - stamp_ms) <= kStaleMs;
 }
+
+enum class Outcome : uint8_t { Used, Na, Bad, Throttled, Other, Ignored };
+
+/* ---- per-PGN counters ---------------------------------------------- */
+
+static constexpr unsigned long kHandled[] = {
+    126992UL, 127250UL, 127258UL, 128259UL, 128267UL, 129025UL, 129026UL, 129029UL, 129038UL, 129039UL,
+    129040UL, 129794UL, 129808UL, 129809UL, 129810UL, 130306UL, 130310UL, 130312UL, 130316UL,
+};
+static constexpr size_t kHandledN = sizeof(kHandled) / sizeof(kHandled[0]);
+static N2kConvStats g_conv[kHandledN];
+static uint32_t g_bad_total = 0;
+
+static void count(unsigned long pgn, Outcome what)
+{
+    for (size_t i = 0; i < kHandledN; ++i) {
+        if (kHandled[i] != pgn) {
+            continue;
+        }
+        N2kConvStats &c = g_conv[i];
+        c.pgn = pgn;
+        ++c.rx;
+        switch (what) {
+        case Outcome::Used:
+            ++c.used;
+            break;
+        case Outcome::Na:
+            ++c.na;
+            break;
+        case Outcome::Bad:
+            ++c.bad;
+            ++g_bad_total;
+            break;
+        case Outcome::Throttled:
+            ++c.throttled;
+            break;
+        case Outcome::Other:
+            ++c.other_src;
+            break;
+        case Outcome::Ignored:
+            break;
+        }
+        return;
+    }
+}
+
+size_t n2k_conv_stats(N2kConvStats *out, size_t max)
+{
+    size_t n = 0;
+    for (size_t i = 0; i < kHandledN && n < max && out != nullptr; ++i) {
+        if (g_conv[i].rx > 0) {
+            out[n++] = g_conv[i];
+        }
+    }
+    return n;
+}
+
+uint32_t n2k_conv_bad_total(void) { return g_bad_total; }
+
+/* ---- one device per value ------------------------------------------ */
+
+enum LockId : uint8_t {
+    kLockPosition,
+    kLockCogSog,
+    kLockTime,
+    kLockDepth,
+    kLockStw,
+    kLockHeading,
+    kLockVariation,
+    kLockWindApparent,
+    kLockWindTrue,
+    kLockWindGround,
+    kLockSeaTemp,
+    kLockCount,
+};
+
+static const char *const kLockNames[kLockCount] = {
+    "position", "cog_sog", "time", "depth", "water_speed", "heading",
+    "variation", "wind_apparent", "wind_true", "wind_ground", "sea_temp",
+};
+
+struct Lock {
+    int src;          /* -1 = nobody yet */
+    uint32_t used_ms; /* owner's last valid value */
+    int other;
+    uint32_t other_ms;
+};
+
+static Lock g_locks[kLockCount];
+static bool g_locks_ready = false;
+
+void n2k_conv_reset_sources(void)
+{
+    for (auto &l : g_locks) {
+        l.src = -1;
+        l.used_ms = 0;
+        l.other = -1;
+        l.other_ms = 0;
+    }
+    g_locks_ready = true;
+}
+
+static Lock &lock_of(LockId id)
+{
+    if (!g_locks_ready) {
+        n2k_conv_reset_sources();
+    }
+    return g_locks[id];
+}
+
+/* The owner, anyone while nobody owns it, or anyone once the owner has
+ * gone quiet for kStaleMs. */
+static bool may_use(LockId id, uint8_t src, uint32_t now)
+{
+    Lock &l = lock_of(id);
+    if (l.src < 0 || l.src == src || (now - l.used_ms) > kStaleMs) {
+        return true;
+    }
+    l.other = src;
+    l.other_ms = now;
+    return false;
+}
+
+/* A valid value arrived from src: it owns the value now. */
+static void take(LockId id, uint8_t src, uint32_t now)
+{
+    Lock &l = lock_of(id);
+    if (l.src >= 0 && l.src != src) {
+        l.other = l.src;
+        l.other_ms = l.used_ms;
+    }
+    l.src = src;
+    l.used_ms = now;
+}
+
+size_t n2k_conv_sources(N2kSourceLock *out, size_t max)
+{
+    if (out == nullptr) {
+        return 0;
+    }
+    const uint32_t now = millis();
+    size_t n = 0;
+    for (int i = 0; i < kLockCount && n < max; ++i) {
+        const Lock &l = lock_of(static_cast<LockId>(i));
+        if (l.src < 0) {
+            continue;
+        }
+        out[n].what = kLockNames[i];
+        out[n].src = l.src;
+        out[n].age_ms = now - l.used_ms;
+        out[n].other = l.other;
+        out[n].other_age_ms = l.other < 0 ? 0 : now - l.other_ms;
+        ++n;
+    }
+    return n;
+}
+
+static bool angle_ok(double rad) { return rad >= 0.0 && rad <= kMaxAngleRad; }
+
+static bool signed_angle_ok(double rad) { return rad >= -kMaxSignedAngleRad && rad <= kMaxSignedAngleRad; }
 
 static void emit_sentence(char *line, size_t cap)
 {
@@ -124,12 +305,15 @@ static void civil_from_days(long z, int *year, int *month, int *day)
 struct FixCache {
     bool have_ll;
     bool have_sog;
+    bool have_cog;     /* true COG known (sent true, or magnetic + variation) */
+    bool have_cog_mag; /* the GPS sent magnetic COG */
     bool have_time;
     bool have_alt;
     double lat;
     double lon;
     double sog_kn;
     double cog_deg;
+    double cog_mag_deg;
     double alt_m;
     double hdop;
     double geoid_m;
@@ -149,9 +333,33 @@ struct FixCache {
 
 static FixCache g_fix = {};
 static uint32_t g_depth_ms = 0;
-static uint32_t g_wind_ms = 0;
+/* One output window per wind reference: a 10 Hz apparent sensor must not
+ * starve the 1 Hz true wind a display computes. */
+static uint32_t g_wind_ms[3] = {};
 static uint32_t g_hdg_ms = 0;
 static uint32_t g_stw_ms = 0;
+static uint32_t g_temp_ms = 0;
+/* Magnetic variation, east positive, from 127258 or 127250. */
+static double g_var_rad = 0.0;
+static uint32_t g_var_ms = 0;
+
+/* Variation counts for a minute: it changes over miles, not seconds. */
+static constexpr uint32_t kVariationMs = 60000;
+
+static bool have_variation(uint32_t now) { return g_var_ms != 0 && (now - g_var_ms) <= kVariationMs; }
+
+/* 1 Hz output with slack: a 1 Hz sensor arrives every 990-1010 ms, and a
+ * strict 1000 ms window would drop every other jittered message. */
+static constexpr uint32_t kEmitWindowMs = kEmitMs - 100;
+
+static bool throttled(uint32_t &last_ms, uint32_t now)
+{
+    if (last_ms != 0 && (now - last_ms) < kEmitWindowMs) {
+        return true;
+    }
+    last_ms = now;
+    return false;
+}
 
 /* Eight newest (PGN, source) pairs for the cabin screen. A type this
  * file does not convert is still stored, named "other", so a quiet tile
@@ -193,6 +401,8 @@ static const char *pgn_name(unsigned long pgn)
         return "Rate";
     case 127257UL:
         return "Attitude";
+    case 127258UL:
+        return "Variation";
     case 127488UL:
         return "RPM";
     case 127489UL:
@@ -362,35 +572,51 @@ void n2k_pgn_names(char *out, size_t cap)
     }
 }
 
+/* N2K method and GGA quality share numbers 0..8 (6 dead reckoning,
+ * 7 manual, 8 simulator). 14 error and 15 unavailable are no fix. */
 static int gga_quality(tN2kGNSSmethod method)
 {
-    switch (method) {
-    case N2kGNSSm_GNSSfix:
-        return 1;
-    case N2kGNSSm_DGNSS:
-        return 2;
-    case N2kGNSSm_PreciseGNSS:
-        return 3;
-    case N2kGNSSm_RTKFixed:
-        return 4;
-    case N2kGNSSm_RTKFloat:
-        return 5;
+    const int q = static_cast<int>(method);
+    return (q >= 0 && q <= 8) ? q : 0;
+}
+
+/* RMC / GLL / VTG mode indicator for a GGA quality. */
+static char fix_mode(int quality)
+{
+    switch (quality) {
+    case 1:
+        return 'A';
+    case 2:
+        return 'D';
+    case 3:
+        return 'P';
+    case 4:
+        return 'R';
+    case 5:
+        return 'F';
+    case 6:
+        return 'E';
+    case 7:
+        return 'M';
+    case 8:
+        return 'S';
     default:
-        return 0;
+        return 'N';
     }
 }
 
-static void note_time(uint16_t days, double seconds)
+/* Days and seconds always together, so a date never pairs with another
+ * message's time of day. Returns false if neither is usable. */
+static bool note_time(uint16_t days, double seconds)
 {
-    if (!N2kIsNA(days)) {
-        g_fix.days = days;
-        g_fix.have_time = true;
+    if (missing(seconds) || seconds < 0.0 || seconds >= 86400.0) {
+        return false;
     }
-    if (!missing(seconds) && seconds >= 0.0 && seconds < 86400.0) {
-        g_fix.seconds = seconds;
-        g_fix.have_time = true;
-        g_fix.time_ms = millis();
-    }
+    g_fix.days = days;
+    g_fix.seconds = seconds;
+    g_fix.have_time = true;
+    g_fix.time_ms = millis();
+    return true;
 }
 
 static void emit_ais(const AisBits &bits, tN2kAISTransceiverInformation info)
@@ -411,7 +637,8 @@ static void emit_ais(const AisBits &bits, tN2kAISTransceiverInformation info)
 
 static int ais_sog(double ms)
 {
-    if (missing(ms) || ms < 0.0) {
+    /* 655.33 m/s and up are N2K's reserved and error codes. */
+    if (missing(ms) || ms < 0.0 || ms > 655.32) {
         return 1023;
     }
     int v = static_cast<int>(lround(ms * kMsToKn * 10.0));
@@ -423,7 +650,7 @@ static int ais_sog(double ms)
 
 static int ais_cog(double rad)
 {
-    if (missing(rad)) {
+    if (missing(rad) || !angle_ok(rad)) {
         return 3600;
     }
     /* 359.96 rounds to 3600, which is 0.0, not 359.9. */
@@ -509,7 +736,7 @@ static void dims_from_ref(double length_m, double beam_m, double stbd_m, double 
     *port = clamp_i(port_m, 0, 63);
 }
 
-static void handle_class_a_pos(const tN2kMsg &msg)
+static Outcome handle_class_a_pos(const tN2kMsg &msg)
 {
     uint8_t id = 1;
     tN2kAISRepeat repeat = N2kaisr_Initial;
@@ -522,7 +749,7 @@ static void handle_class_a_pos(const tN2kMsg &msg)
     uint8_t sid = 0;
     if (!ParseN2kPGN129038(msg, id, repeat, mmsi, lat, lon, acc, raim, sec, cog, sog, hdg, rot, nav,
                            info, sid)) {
-        return;
+        return Outcome::Bad;
     }
     if (id < 1 || id > 3) {
         id = 1;
@@ -546,9 +773,10 @@ static void handle_class_a_pos(const tN2kMsg &msg)
     bits.put(raim ? 1u : 0u, 1);
     bits.put(0, 19);
     emit_ais(bits, info);
+    return Outcome::Used;
 }
 
-static void handle_class_b_pos(const tN2kMsg &msg)
+static Outcome handle_class_b_pos(const tN2kMsg &msg)
 {
     uint8_t id = 18;
     tN2kAISRepeat repeat = N2kaisr_Initial;
@@ -562,7 +790,7 @@ static void handle_class_b_pos(const tN2kMsg &msg)
     tN2kAISMode mode = N2kaismode_Autonomous;
     if (!ParseN2kPGN129039(msg, id, repeat, mmsi, lat, lon, acc, raim, sec, cog, sog, info, hdg, unit,
                            display, dsc, band, msg22, mode, state, sid)) {
-        return;
+        return Outcome::Bad;
     }
     AisBits bits;
     bits.clear();
@@ -588,15 +816,16 @@ static void handle_class_b_pos(const tN2kMsg &msg)
     bits.put(state ? 1u : 0u, 1);
     bits.put(0, 19); /* radio status: 1 selector bit above + 19 = 168 bits */
     emit_ais(bits, info);
+    return Outcome::Used;
 }
 
 /* PGN 129040 is not in the NMEA2000 library. Layout follows canboat's
  * AIS Class B Extended Position Report (fast packet, LSB-first). */
-static void handle_class_b_ext(const tN2kMsg &msg)
+static Outcome handle_class_b_ext(const tN2kMsg &msg)
 {
     /* 20-byte name ends at byte 52. A shorter fast packet is not a report. */
     if (msg.PGN != 129040L || msg.DataLen < 52) {
-        return;
+        return Outcome::Bad;
     }
     int index = 0;
     const unsigned char head = msg.GetByte(index);
@@ -663,9 +892,10 @@ static void handle_class_b_ext(const tN2kMsg &msg)
     bits.put(0, 1);
     bits.put(0, 4);
     emit_ais(bits, info);
+    return Outcome::Used;
 }
 
-static void handle_class_a_static(const tN2kMsg &msg)
+static Outcome handle_class_a_static(const tN2kMsg &msg)
 {
     uint8_t id = 5, ship = 0, sid = 0;
     tN2kAISRepeat repeat = N2kaisr_Initial;
@@ -682,7 +912,7 @@ static void handle_class_a_static(const tN2kMsg &msg)
     if (!ParseN2kPGN129794(msg, id, repeat, mmsi, imo, callsign, sizeof(callsign), name, sizeof(name),
                            ship, length, beam, stbd_m, bow_m, eta_date, eta_time, draught, dest,
                            sizeof(dest), ver, gnss, dte, info, sid)) {
-        return;
+        return Outcome::Bad;
     }
     int bow = 0, stern = 0, port = 0, stbd = 0;
     dims_from_ref(length, beam, stbd_m, bow_m, &bow, &stern, &port, &stbd);
@@ -728,9 +958,10 @@ static void handle_class_a_static(const tN2kMsg &msg)
     bits.put(dte == N2kaisdte_Ready ? 0u : 1u, 1);
     bits.put(0, 1);
     emit_ais(bits, info);
+    return Outcome::Used;
 }
 
-static void handle_class_b_static_a(const tN2kMsg &msg)
+static Outcome handle_class_b_static_a(const tN2kMsg &msg)
 {
     uint8_t id = 24, sid = 0;
     tN2kAISRepeat repeat = N2kaisr_Initial;
@@ -738,7 +969,7 @@ static void handle_class_b_static_a(const tN2kMsg &msg)
     char name[21] = {};
     tN2kAISTransceiverInformation info = N2kaischannel_A_VDL_reception;
     if (!ParseN2kPGN129809(msg, id, repeat, mmsi, name, sizeof(name), info, sid)) {
-        return;
+        return Outcome::Bad;
     }
     AisBits bits;
     bits.clear();
@@ -748,9 +979,10 @@ static void handle_class_b_static_a(const tN2kMsg &msg)
     bits.put(0, 2);
     bits.put_text(name, 20);
     emit_ais(bits, info);
+    return Outcome::Used;
 }
 
-static void handle_class_b_static_b(const tN2kMsg &msg)
+static Outcome handle_class_b_static_b(const tN2kMsg &msg)
 {
     uint8_t id = 24, ship = 0, sid = 0;
     tN2kAISRepeat repeat = N2kaisr_Initial;
@@ -761,7 +993,7 @@ static void handle_class_b_static_b(const tN2kMsg &msg)
     tN2kAISTransceiverInformation info = N2kaischannel_A_VDL_reception;
     if (!ParseN2kPGN129810(msg, id, repeat, mmsi, ship, vendor, sizeof(vendor), callsign,
                            sizeof(callsign), length, beam, stbd_m, bow_m, mother, info, sid)) {
-        return;
+        return Outcome::Bad;
     }
     int bow = 0, stern = 0, port = 0, stbd = 0;
     dims_from_ref(length, beam, stbd_m, bow_m, &bow, &stern, &port, &stbd);
@@ -781,6 +1013,7 @@ static void handle_class_b_static_b(const tN2kMsg &msg)
     bits.put(static_cast<uint32_t>(stbd), 6);
     bits.put(0, 6);
     emit_ais(bits, info);
+    return Outcome::Used;
 }
 
 /* 129808 has no stable parser in the NMEA2000 library we ship, and a wrong
@@ -788,10 +1021,10 @@ static void handle_class_b_static_b(const tN2kMsg &msg)
  * with hex in its MMSI field would also be misread by chart plotters, so
  * the raw payload goes out as a proprietary $PLMYC,DSC sentence instead.
  * Third-party apps ignore it; the phone console can still show it. */
-static void handle_dsc(const tN2kMsg &msg)
+static Outcome handle_dsc(const tN2kMsg &msg)
 {
     if (msg.PGN != 129808L || msg.DataLen == 0) {
-        return;
+        return Outcome::Bad;
     }
     char hex[49];
     const int n = msg.DataLen < 16 ? msg.DataLen : 16;
@@ -801,86 +1034,157 @@ static void handle_dsc(const tN2kMsg &msg)
     char line[96];
     snprintf(line, sizeof(line), "$PLMYC,DSC,%s", hex);
     emit_sentence(line, sizeof(line));
+    return Outcome::Used;
 }
 
-static void handle_depth(const tN2kMsg &msg)
+static Outcome handle_depth(const tN2kMsg &msg)
 {
     const uint32_t now = millis();
-    if (g_depth_ms != 0 && (now - g_depth_ms) < kEmitMs) {
-        return;
+    if (!may_use(kLockDepth, msg.Source, now)) {
+        return Outcome::Other;
     }
     unsigned char sid = 0;
     double depth = 0, offset = 0, range = 0;
     if (!ParseN2kPGN128267(msg, sid, depth, offset, range)) {
-        return;
+        return Outcome::Bad;
     }
     (void)range;
     if (missing(depth)) {
-        return;
+        return Outcome::Na;
     }
-    if (missing(offset)) {
+    if (depth < 0.0 || depth > kMaxDepthM) {
+        return Outcome::Bad;
+    }
+    /* Offset is a setting on the sounder or plotter. A bad one is not
+     * worth losing the depth over; it goes out as 0, like "none set". */
+    if (missing(offset) || fabs(offset) > kMaxDepthOffsetM) {
         offset = 0.0;
     }
-    g_depth_ms = now;
+    take(kLockDepth, msg.Source, now);
+    if (throttled(g_depth_ms, now)) {
+        return Outcome::Throttled;
+    }
     char line[84];
     snprintf(line, sizeof(line), "$SDDPT,%.1f,%.1f,", depth, offset);
     emit_sentence(line, sizeof(line));
+    return Outcome::Used;
 }
 
-static void handle_wind(const tN2kMsg &msg)
+static Outcome handle_wind(const tN2kMsg &msg)
 {
     const uint32_t now = millis();
-    if (g_wind_ms != 0 && (now - g_wind_ms) < kEmitMs) {
-        return;
-    }
     unsigned char sid = 0;
     double speed = 0, angle = 0;
     tN2kWindReference ref = N2kWind_Apparent;
     if (!ParseN2kPGN130306(msg, sid, speed, angle, ref)) {
-        return;
+        return Outcome::Bad;
+    }
+    const bool ground = ref == N2kWind_True_North || ref == N2kWind_Magnetic;
+    const bool boat_true = ref == N2kWind_True_boat || ref == N2kWind_True_water;
+    if (!ground && !boat_true && ref != N2kWind_Apparent) {
+        return Outcome::Ignored;
+    }
+    const int slot = ground ? 2 : (boat_true ? 1 : 0);
+    const LockId lock = ground ? kLockWindGround : (boat_true ? kLockWindTrue : kLockWindApparent);
+    if (!may_use(lock, msg.Source, now)) {
+        return Outcome::Other;
     }
     if (missing(speed) || missing(angle)) {
-        return;
+        return Outcome::Na;
+    }
+    if (speed < 0.0 || speed > kMaxWindMs || !angle_ok(angle)) {
+        return Outcome::Bad;
+    }
+    take(lock, msg.Source, now);
+    if (throttled(g_wind_ms[slot], now)) {
+        return Outcome::Throttled;
     }
     char line[84];
     const double deg = wrap360(angle * kRadToDeg);
-    if (ref == N2kWind_True_North || ref == N2kWind_Magnetic) {
+    if (ground) {
         /* Ground-referenced direction is a compass bearing, not an angle off
          * the bow. MWV would show it as relative wind, so send MWD. */
-        g_wind_ms = now;
         if (ref == N2kWind_True_North) {
             snprintf(line, sizeof(line), "$WIMWD,%.1f,T,,M,%.1f,N,%.1f,M", deg, speed * kMsToKn, speed);
         } else {
             snprintf(line, sizeof(line), "$WIMWD,,T,%.1f,M,%.1f,N,%.1f,M", deg, speed * kMsToKn, speed);
         }
-        emit_sentence(line, sizeof(line));
-        return;
+    } else {
+        snprintf(line, sizeof(line), "$WIMWV,%.1f,%c,%.1f,N,A", deg, boat_true ? 'T' : 'R',
+                 speed * kMsToKn);
     }
-    if (ref != N2kWind_Apparent && ref != N2kWind_True_boat && ref != N2kWind_True_water) {
-        return;
-    }
-    const char kind = (ref == N2kWind_Apparent) ? 'R' : 'T';
-    g_wind_ms = now;
-    snprintf(line, sizeof(line), "$WIMWV,%.1f,%c,%.1f,N,A", deg, kind, speed * kMsToKn);
     emit_sentence(line, sizeof(line));
+    return Outcome::Used;
 }
 
-static void handle_heading(const tN2kMsg &msg)
+static void note_variation(double var_rad, uint32_t now)
+{
+    g_var_rad = var_rad;
+    g_var_ms = now;
+}
+
+static Outcome handle_variation(const tN2kMsg &msg)
 {
     const uint32_t now = millis();
-    if (g_hdg_ms != 0 && (now - g_hdg_ms) < kEmitMs) {
-        return;
+    if (!may_use(kLockVariation, msg.Source, now)) {
+        return Outcome::Other;
+    }
+    unsigned char sid = 0;
+    tN2kMagneticVariation src = N2kmagvar_Manual;
+    uint16_t days = 0;
+    double var = 0;
+    if (!ParseN2kPGN127258(msg, sid, src, days, var)) {
+        return Outcome::Bad;
+    }
+    (void)src;
+    (void)days;
+    if (missing(var)) {
+        return Outcome::Na;
+    }
+    if (!signed_angle_ok(var)) {
+        return Outcome::Bad;
+    }
+    take(kLockVariation, msg.Source, now);
+    note_variation(var, now);
+    return Outcome::Used;
+}
+
+static Outcome handle_heading(const tN2kMsg &msg)
+{
+    const uint32_t now = millis();
+    if (!may_use(kLockHeading, msg.Source, now)) {
+        return Outcome::Other;
     }
     unsigned char sid = 0;
     double heading = 0, dev = 0, var = 0;
     tN2kHeadingReference ref = N2khr_true;
     if (!ParseN2kPGN127250(msg, sid, heading, dev, var, ref)) {
-        return;
+        return Outcome::Bad;
     }
     if (missing(heading) || ref == N2khr_Unavailable || ref == N2khr_error) {
-        return;
+        return Outcome::Na;
     }
-    g_hdg_ms = now;
+    if (!angle_ok(heading)) {
+        return Outcome::Bad;
+    }
+    /* Out-of-range deviation or variation is dropped, not the heading. */
+    if (!missing(dev) && !signed_angle_ok(dev)) {
+        dev = N2kDoubleNA;
+    }
+    if (!missing(var) && !signed_angle_ok(var)) {
+        var = N2kDoubleNA;
+    }
+    if (!missing(var) && may_use(kLockVariation, msg.Source, now)) {
+        take(kLockVariation, msg.Source, now);
+        note_variation(var, now);
+    }
+    if (missing(var) && have_variation(now)) {
+        var = g_var_rad;
+    }
+    take(kLockHeading, msg.Source, now);
+    if (throttled(g_hdg_ms, now)) {
+        return Outcome::Throttled;
+    }
     const double deg = wrap360(heading * kRadToDeg);
     char line[84];
     if (ref == N2khr_magnetic) {
@@ -898,65 +1202,165 @@ static void handle_heading(const tN2kMsg &msg)
         snprintf(line, sizeof(line), "$HEHDT,%.1f,T", deg);
     }
     emit_sentence(line, sizeof(line));
+    return Outcome::Used;
 }
 
-static void handle_stw(const tN2kMsg &msg)
+static Outcome handle_stw(const tN2kMsg &msg)
 {
     const uint32_t now = millis();
-    if (g_stw_ms != 0 && (now - g_stw_ms) < kEmitMs) {
-        return;
+    if (!may_use(kLockStw, msg.Source, now)) {
+        return Outcome::Other;
     }
     unsigned char sid = 0;
     double water = 0, ground = 0;
     tN2kSpeedWaterReferenceType kind = N2kSWRT_Paddle_wheel;
     if (!ParseN2kPGN128259(msg, sid, water, ground, kind)) {
-        return;
+        return Outcome::Bad;
     }
     (void)ground;
     (void)kind;
     if (missing(water)) {
-        return;
+        return Outcome::Na;
     }
-    g_stw_ms = now;
+    if (water < 0.0 || water > kMaxBoatSpeedMs) {
+        return Outcome::Bad;
+    }
+    take(kLockStw, msg.Source, now);
+    if (throttled(g_stw_ms, now)) {
+        return Outcome::Throttled;
+    }
     const double kn = water * kMsToKn;
     const double kmh = water * 3.6;
     char line[84];
     snprintf(line, sizeof(line), "$VWVHW,,T,,M,%.1f,N,%.1f,K", kn, kmh);
     emit_sentence(line, sizeof(line));
+    return Outcome::Used;
 }
 
-static void handle_position(const tN2kMsg &msg)
+/* Sea temperature from whichever of 130310 / 130312 / 130316 the sounder sends. */
+static Outcome emit_sea_temp(uint8_t src, double kelvin)
 {
-    double lat = 0, lon = 0;
-    if (!ParseN2kPGN129025(msg, lat, lon) || missing(lat) || missing(lon)) {
-        return;
+    const uint32_t now = millis();
+    if (!may_use(kLockSeaTemp, src, now)) {
+        return Outcome::Other;
     }
+    if (missing(kelvin)) {
+        return Outcome::Na;
+    }
+    if (kelvin < kMinSeaK || kelvin > kMaxSeaK) {
+        return Outcome::Bad;
+    }
+    take(kLockSeaTemp, src, now);
+    if (throttled(g_temp_ms, now)) {
+        return Outcome::Throttled;
+    }
+    char line[84];
+    snprintf(line, sizeof(line), "$YXMTW,%.1f,C", kelvin - 273.15);
+    emit_sentence(line, sizeof(line));
+    return Outcome::Used;
+}
+
+static Outcome handle_temp(const tN2kMsg &msg)
+{
+    unsigned char sid = 0, instance = 0;
+    tN2kTempSource kind = N2kts_SeaTemperature;
+    double actual = 0, set = 0, air = 0, pressure = 0;
+    bool ok = false;
+    if (msg.PGN == 130310L) {
+        ok = ParseN2kPGN130310(msg, sid, actual, air, pressure);
+    } else if (msg.PGN == 130312L) {
+        ok = ParseN2kPGN130312(msg, sid, instance, kind, actual, set);
+    } else {
+        ok = ParseN2kPGN130316(msg, sid, instance, kind, actual, set);
+    }
+    if (!ok) {
+        return Outcome::Bad;
+    }
+    if (kind != N2kts_SeaTemperature) {
+        return Outcome::Ignored;
+    }
+    return emit_sea_temp(msg.Source, actual);
+}
+
+static Outcome handle_position(const tN2kMsg &msg)
+{
+    const uint32_t now = millis();
+    if (!may_use(kLockPosition, msg.Source, now)) {
+        return Outcome::Other;
+    }
+    double lat = 0, lon = 0;
+    if (!ParseN2kPGN129025(msg, lat, lon)) {
+        return Outcome::Bad;
+    }
+    if (missing(lat) || missing(lon)) {
+        return Outcome::Na;
+    }
+    if (fabs(lat) > 90.0 || fabs(lon) > 180.0) {
+        return Outcome::Bad;
+    }
+    take(kLockPosition, msg.Source, now);
     g_fix.lat = lat;
     g_fix.lon = lon;
     g_fix.have_ll = true;
-    g_fix.ll_ms = millis();
+    g_fix.ll_ms = now;
+    return Outcome::Used;
 }
 
-static void handle_cogsog(const tN2kMsg &msg)
+/* SOG and COG stand alone: a GPS at rest often sends COG "not available"
+ * with SOG 0.00, and the phone must show 0.0, not "—". */
+static Outcome handle_cogsog(const tN2kMsg &msg)
 {
+    const uint32_t now = millis();
+    if (!may_use(kLockCogSog, msg.Source, now)) {
+        return Outcome::Other;
+    }
     unsigned char sid = 0;
     tN2kHeadingReference ref = N2khr_true;
     double cog = 0, sog = 0;
     if (!ParseN2kPGN129026(msg, sid, ref, cog, sog)) {
-        return;
+        return Outcome::Bad;
     }
-    (void)ref;
-    if (missing(sog) || missing(cog)) {
-        return;
+    const bool sog_in = !missing(sog);
+    const bool cog_in = !missing(cog) && (ref == N2khr_true || ref == N2khr_magnetic);
+    if (!sog_in && !cog_in) {
+        return Outcome::Na;
     }
-    g_fix.sog_kn = sog * kMsToKn;
-    g_fix.cog_deg = wrap360(cog * kRadToDeg);
-    g_fix.have_sog = true;
-    g_fix.sog_ms = millis();
+    if ((sog_in && (sog < 0.0 || sog > kMaxBoatSpeedMs)) || (cog_in && !angle_ok(cog))) {
+        return Outcome::Bad;
+    }
+    take(kLockCogSog, msg.Source, now);
+    g_fix.have_sog = sog_in;
+    if (sog_in) {
+        g_fix.sog_kn = sog * kMsToKn;
+    }
+    g_fix.have_cog = false;
+    g_fix.have_cog_mag = false;
+    if (cog_in) {
+        const double deg = wrap360(cog * kRadToDeg);
+        if (ref == N2khr_true) {
+            g_fix.cog_deg = deg;
+            g_fix.have_cog = true;
+        } else {
+            /* Magnetic COG is never sent as true. It becomes true only with
+             * a known variation. */
+            g_fix.cog_mag_deg = deg;
+            g_fix.have_cog_mag = true;
+            if (have_variation(now)) {
+                g_fix.cog_deg = wrap360(deg + g_var_rad * kRadToDeg);
+                g_fix.have_cog = true;
+            }
+        }
+    }
+    g_fix.sog_ms = now;
+    return Outcome::Used;
 }
 
-static void handle_gnss(const tN2kMsg &msg)
+static Outcome handle_gnss(const tN2kMsg &msg)
 {
+    const uint32_t now = millis();
+    if (!may_use(kLockPosition, msg.Source, now)) {
+        return Outcome::Other;
+    }
     unsigned char sid = 0, sats = 0, nref = 0;
     uint16_t days = 0, station = 0;
     double seconds = 0, lat = 0, lon = 0, alt = 0, hdop = 0, pdop = 0, geoid = 0, age = 0;
@@ -964,7 +1368,7 @@ static void handle_gnss(const tN2kMsg &msg)
     tN2kGNSSmethod method = N2kGNSSm_Unavailable;
     if (!ParseN2kPGN129029(msg, sid, days, seconds, lat, lon, alt, kind, method, sats, hdop, pdop, geoid,
                            nref, ref_kind, station, age)) {
-        return;
+        return Outcome::Bad;
     }
     (void)kind;
     (void)pdop;
@@ -972,20 +1376,22 @@ static void handle_gnss(const tN2kMsg &msg)
     (void)ref_kind;
     (void)station;
     (void)age;
-    const uint32_t now = millis();
-    if (!missing(lat) && !missing(lon)) {
+    const bool ll = !missing(lat) && !missing(lon) && fabs(lat) <= 90.0 && fabs(lon) <= 180.0;
+    if (ll) {
         g_fix.lat = lat;
         g_fix.lon = lon;
         g_fix.have_ll = true;
         g_fix.ll_ms = now;
     }
-    note_time(days, seconds);
+    if (may_use(kLockTime, msg.Source, now) && note_time(days, seconds)) {
+        take(kLockTime, msg.Source, now);
+    }
     /* Per message: a field that goes not-available must not keep its old value. */
     g_fix.have_alt = !missing(alt);
     if (g_fix.have_alt) {
         g_fix.alt_m = alt;
     }
-    g_fix.have_hdop = !missing(hdop);
+    g_fix.have_hdop = !missing(hdop) && hdop >= 0.0 && hdop <= kMaxHdop;
     if (g_fix.have_hdop) {
         g_fix.hdop = hdop;
     }
@@ -997,19 +1403,30 @@ static void handle_gnss(const tN2kMsg &msg)
     g_fix.quality = gga_quality(method);
     g_fix.have_gnss = true;
     g_fix.gnss_ms = now;
+    /* A receiver with no fix still owns position: its "no fix" is news. */
+    take(kLockPosition, msg.Source, now);
+    return Outcome::Used;
 }
 
-static void handle_time(const tN2kMsg &msg)
+static Outcome handle_time(const tN2kMsg &msg)
 {
+    const uint32_t now = millis();
+    if (!may_use(kLockTime, msg.Source, now)) {
+        return Outcome::Other;
+    }
     unsigned char sid = 0;
     uint16_t days = 0;
     double seconds = 0;
     tN2kTimeSource src = N2ktimes_GPS;
     if (!ParseN2kPGN126992(msg, sid, days, seconds, src)) {
-        return;
+        return Outcome::Bad;
     }
     (void)src;
-    note_time(days, seconds);
+    if (!note_time(days, seconds)) {
+        return missing(seconds) ? Outcome::Na : Outcome::Bad;
+    }
+    take(kLockTime, msg.Source, now);
+    return Outcome::Used;
 }
 
 bool n2k_play_pgn(unsigned long pgn, uint8_t src, const uint8_t *data, size_t len)
@@ -1023,6 +1440,8 @@ bool n2k_play_pgn(unsigned long pgn, uint8_t src, const uint8_t *data, size_t le
     for (size_t i = 0; i < len; ++i) {
         msg.AddByte(data[i]);
     }
+    /* Bench injection: the typed address takes over every value. */
+    n2k_conv_reset_sources();
     n2k_to_0183_handle(msg);
     return true;
 }
@@ -1097,6 +1516,7 @@ bool n2k_play_line(const char *args)
 
 void n2k_play_demo(void)
 {
+    n2k_conv_reset_sources();
     tN2kMsg msg;
     SetN2kPGN128267(msg, 1, 42.0, 0.0);
     msg.Source = 12;
@@ -1122,54 +1542,90 @@ void n2k_play_demo(void)
 void n2k_to_0183_handle(const tN2kMsg &msg)
 {
     note_seen(msg);
+    Outcome what = Outcome::Ignored;
     switch (msg.PGN) {
     case 126992L:
-        handle_time(msg);
+        what = handle_time(msg);
         break;
     case 127250L:
-        handle_heading(msg);
+        what = handle_heading(msg);
+        break;
+    case 127258L:
+        what = handle_variation(msg);
         break;
     case 128259L:
-        handle_stw(msg);
+        what = handle_stw(msg);
         break;
     case 128267L:
-        handle_depth(msg);
+        what = handle_depth(msg);
         break;
     case 129025L:
-        handle_position(msg);
+        what = handle_position(msg);
         break;
     case 129026L:
-        handle_cogsog(msg);
+        what = handle_cogsog(msg);
         break;
     case 129029L:
-        handle_gnss(msg);
+        what = handle_gnss(msg);
         break;
     case 129038L:
-        handle_class_a_pos(msg);
+        what = handle_class_a_pos(msg);
         break;
     case 129039L:
-        handle_class_b_pos(msg);
+        what = handle_class_b_pos(msg);
         break;
     case 129040L:
-        handle_class_b_ext(msg);
+        what = handle_class_b_ext(msg);
         break;
     case 129794L:
-        handle_class_a_static(msg);
+        what = handle_class_a_static(msg);
         break;
     case 129808L:
-        handle_dsc(msg);
+        what = handle_dsc(msg);
         break;
     case 129809L:
-        handle_class_b_static_a(msg);
+        what = handle_class_b_static_a(msg);
         break;
     case 129810L:
-        handle_class_b_static_b(msg);
+        what = handle_class_b_static_b(msg);
         break;
     case 130306L:
-        handle_wind(msg);
+        what = handle_wind(msg);
+        break;
+    case 130310L:
+    case 130312L:
+    case 130316L:
+        what = handle_temp(msg);
         break;
     default:
-        break;
+        return;
+    }
+    count(static_cast<unsigned long>(msg.PGN), what);
+}
+
+/* "hhmmss.ss" and "ddmmyy" for now: the last time PGN advanced by the
+ * time since it arrived, so RMC time moves with the position. */
+static void fix_clock(uint32_t now, char *hhmmss, size_t hcap, char *date, size_t dcap)
+{
+    hhmmss[0] = '\0';
+    date[0] = '\0';
+    if (!g_fix.have_time || !fresh(g_fix.time_ms, now)) {
+        return;
+    }
+    long cs = static_cast<long>(floor(g_fix.seconds * 100.0)) + static_cast<long>((now - g_fix.time_ms) / 10UL);
+    uint16_t days = g_fix.days;
+    if (cs >= 8640000L) {
+        cs -= 8640000L;
+        if (!N2kIsNA(days)) {
+            ++days;
+        }
+    }
+    const long sec = cs / 100;
+    snprintf(hhmmss, hcap, "%02ld%02ld%02ld.%02ld", sec / 3600, (sec / 60) % 60, sec % 60, cs % 100);
+    if (!N2kIsNA(days)) {
+        int year = 0, month = 0, day = 0;
+        civil_from_days(days, &year, &month, &day);
+        snprintf(date, dcap, "%02d%02d%02d", day, month, year % 100);
     }
 }
 
@@ -1177,8 +1633,9 @@ void n2k_to_0183_poll(void)
 {
     const uint32_t now = millis();
     const bool ll_ok = g_fix.have_ll && fresh(g_fix.ll_ms, now);
-    const bool sog_ok = g_fix.have_sog && fresh(g_fix.sog_ms, now);
-    if (!ll_ok && !sog_ok) {
+    const bool motion_ok =
+        (g_fix.have_sog || g_fix.have_cog || g_fix.have_cog_mag) && fresh(g_fix.sog_ms, now);
+    if (!ll_ok && !motion_ok) {
         return;
     }
     if (g_fix.last_ms != 0 && (now - g_fix.last_ms) < kEmitMs) {
@@ -1186,19 +1643,9 @@ void n2k_to_0183_poll(void)
     }
     g_fix.last_ms = now;
 
-    char hhmmss[16] = "";
-    char date[8] = "";
-    if (g_fix.have_time && fresh(g_fix.time_ms, now)) {
-        const int sec = static_cast<int>(g_fix.seconds);
-        if (sec >= 0 && sec < 86400) {
-            snprintf(hhmmss, sizeof(hhmmss), "%02d%02d%02d.00", sec / 3600, (sec / 60) % 60, sec % 60);
-        }
-        if (!N2kIsNA(g_fix.days)) {
-            int year = 0, month = 0, day = 0;
-            civil_from_days(g_fix.days, &year, &month, &day);
-            snprintf(date, sizeof(date), "%02d%02d%02d", day, month, year % 100);
-        }
-    }
+    char hhmmss[16];
+    char date[8];
+    fix_clock(now, hhmmss, sizeof(hhmmss), date, sizeof(date));
 
     char lat[16] = "", lon[16] = "";
     char ns = 'N', ew = 'E';
@@ -1211,17 +1658,26 @@ void n2k_to_0183_poll(void)
     const bool gnss_ok = g_fix.have_gnss && fresh(g_fix.gnss_ms, now);
     const bool valid = pos && (!gnss_ok || g_fix.quality != 0);
     const char status = valid ? 'A' : 'V';
-    const char mode = valid ? 'A' : 'N';
+    const char mode = valid ? (gnss_ok ? fix_mode(g_fix.quality) : 'A') : 'N';
 
     char line[96];
-    char sog_s[12] = "", cog_s[12] = "";
-    if (sog_ok) {
+    char sog_s[12] = "", cog_s[12] = "", mag_s[12] = "";
+    if (motion_ok && g_fix.have_sog) {
         snprintf(sog_s, sizeof(sog_s), "%.1f", g_fix.sog_kn);
+    }
+    if (motion_ok && g_fix.have_cog) {
         snprintf(cog_s, sizeof(cog_s), "%.1f", g_fix.cog_deg);
     }
+    if (motion_ok && g_fix.have_cog_mag) {
+        snprintf(mag_s, sizeof(mag_s), "%.1f", g_fix.cog_mag_deg);
+    }
+    char var_s[16] = ",";
+    if (have_variation(now)) {
+        snprintf(var_s, sizeof(var_s), "%.1f,%c", fabs(g_var_rad * kRadToDeg), g_var_rad < 0.0 ? 'W' : 'E');
+    }
     if (pos) {
-        snprintf(line, sizeof(line), "$GPRMC,%s,%c,%s,%c,%s,%c,%s,%s,%s,,,%c", hhmmss, status, lat, ns,
-                 lon, ew, sog_s, cog_s, date, mode);
+        snprintf(line, sizeof(line), "$GPRMC,%s,%c,%s,%c,%s,%c,%s,%s,%s,%s,%c", hhmmss, status, lat, ns, lon,
+                 ew, sog_s, cog_s, date, var_s, mode);
         emit_sentence(line, sizeof(line));
 
         /* GGA only with a live 129029: quality, satellites, and altitude come from it. */
@@ -1246,9 +1702,13 @@ void n2k_to_0183_poll(void)
         snprintf(line, sizeof(line), "$GPGLL,%s,%c,%s,%c,%s,%c,%c", lat, ns, lon, ew, hhmmss, status, mode);
         emit_sentence(line, sizeof(line));
     }
-    if (sog_ok) {
-        snprintf(line, sizeof(line), "$GPVTG,%.1f,T,,M,%.1f,N,%.1f,K,%c", g_fix.cog_deg, g_fix.sog_kn,
-                 g_fix.sog_kn * 1.852, valid || !ll_ok ? 'A' : 'N');
+    if (motion_ok) {
+        char kmh_s[12] = "";
+        if (g_fix.have_sog) {
+            snprintf(kmh_s, sizeof(kmh_s), "%.1f", g_fix.sog_kn * 1.852);
+        }
+        snprintf(line, sizeof(line), "$GPVTG,%s,T,%s,M,%s,N,%s,K,%c", cog_s, mag_s, sog_s, kmh_s,
+                 valid ? mode : (!ll_ok ? 'A' : 'N'));
         emit_sentence(line, sizeof(line));
     }
 }

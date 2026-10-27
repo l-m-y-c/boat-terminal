@@ -42,7 +42,7 @@ U1 is the [Pololu APM81815 Step-Down Voltage Regulator Carrier, 5V Out](https://
 | Quiescent | About 0.05–0.06 mA no load at 9–16 V (graph) | Negligible |
 | Output | 5 V ±2 % over temperature (4.9–5.1 V, datasheet), under the Waveshare's own 5 V TVS | OK |
 | Continuous current | About 1.9 A at 9 V and 12 V, about 1.8 A at 16 V (room temperature, still air, no heatsink; graph) | 2.5× headroom over 0.7 A |
-| Topology | Synchronous buck, non-isolated. Input GND and output GND are the same pin | Gives the single common ground we need |
+| Topology | Synchronous buck, non-isolated. Input GND and output GND are the same pin | Gives the single common ground the prototype relies on. Not isolated: see the open points below |
 | Size | 10.2 × 19.1 × 3.2 mm, 1 g. **No mounting holes.** Four 0.1″ pins along one edge: EN, VIN, GND, VOUT. Headers not included | Different pinout from the D36V28F5 (which has six pins and PG). Solder wires on directly |
 | Availability | "Active and Preferred", listed in stock, backorders allowed (Pololu page, 2026-10-19) | OK |
 
@@ -127,7 +127,7 @@ Full details, specs and links are in [bom.csv](assets/n2k-power/bom.csv).
 3. Pololu VOUT → pigtail red. Pololu GND → pigtail black. The APM81815 has one GND pin, shared by input and output, so NET-C and pigtail black both go to it. Leave EN open (it is pulled up to VIN on the board). There is no PG pin.
 4. CAN-H (white) / CAN-L (blue) → Waveshare CAN header H / L, kept twisted. Remove jumper 13 (120 Ω).
 5. Shield/drain: cut back and insulate. It isn't connected; N2K grounds it only at the power tap.
-6. **Single ground:** NET-C = Pololu GND = USB-C GND = board GND = the TJA1051's reference. While the board is on the bus, nothing else is wired to it: no laptop USB, no RS485, no second 12 V.
+6. **Single ground:** NET-C = Pololu GND = USB-C GND = board GND = the TJA1051's reference. While the board is on the bus, nothing else is wired to it: no laptop USB, no phone charger, no RS485, no second 12 V. This is the interim rule while the prototype is not isolated (see Risks and open points).
 7. Enclosure:
    - **Box:** a small IP66/67 box with two cable glands. The APM81815 has no mounting holes, so solder the wires straight to its pins, sleeve D1/D2 in heat-shrink, and hold the module down with double-sided foam tape or a dab of sealant. Strain-relieve the wires so the pins carry no load.
    - **Fuse holder:** put it outside the box, or inside if there's room, so the fuse stays reachable.
@@ -163,4 +163,5 @@ Use a bench supply with a current limit, and a scope. Do this before the board g
 - **Drop resistance:** it was assumed (22 AWG, 6 m). A shorter drop helps.
 - **Fast fuse:** the ATOF fuse is fast-acting, not slow-blow. That's fine for this inrush, but don't swap in a lower rating.
 - **Third-party pigtail:** the USB-C pigtail is a generic third-party part. Inspect the polarity (red = VBUS) with a meter before first plug-in.
-- **Not certified:** this is a home-made bus-powered node. It's not N2K-certified, so club acceptance rests on the bench results.
+- **Not isolated (open compliance item):** the library author's certification checklist requires an N2K device to be electrically isolated from the network. This supply is non-isolated, and so is the board's onboard TJA1051. It can't be fixed in firmware. The fix is an isolated CAN transceiver (TI ISO1042 / ISO1050 class, or ADI ADM3053, which also isolates power) with isolated power for the bus side, in place of the onboard TJA1051 ([19](19-n2k-backbone-install.md#43-compliance-open-items)). Until then, never connect anything else that shares ground (laptop on mains, phone charger, USB) while the board is on the backbone.
+- **Not certified:** the firmware is a standard N2K node, but it uses the open-source manufacturer code 2046, not NMEA-issued manufacturer and product codes, and it has not been through NMEA certification. Club acceptance rests on the bench results until then.

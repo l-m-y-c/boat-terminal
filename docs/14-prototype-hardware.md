@@ -20,7 +20,7 @@ This is the first physical prototype unit for the LMYC Boat Terminal project.
 | Wi-Fi + BLE 5 | Yes | QR pairing + phone companion |
 | Official enclosure | No | Community 3D-print: [wall-mount case on Printables](https://www.printables.com/model/1558735-waveshare-esp32-s3-touch-lcd-7-case). See [19](19-n2k-backbone-install.md#2-parts-list). |
 | Wide 7–36 V input | No | Needs external DC-DC from 12 V. See [20](20-n2k-bus-power-supply.md). |
-| Galvanic isolation on CAN/RS485 | No | External isolation still required for real boat install |
+| Galvanic isolation on CAN/RS485 | No | Open compliance item: an isolated CAN transceiver is needed for a fully compliant NMEA 2000 node |
 
 This board gives us a large usable screen and the native interfaces needed to start real NMEA work quickly.
 
@@ -48,7 +48,7 @@ From the board labeling:
 
 | Label | Function | Use in LMYC Terminal |
 |-------|----------|----------------------|
-| 9 | **CAN header** | NMEA 2000 (listen / later isolated) |
+| 9 | **CAN header** | NMEA 2000 node (isolated transceiver still to fit) |
 | 11 | **RS485 header** | NMEA 0183 |
 | 13 | CAN terminal resistor selection | Enable/disable 120 Ω |
 | 14 | RS485 terminal resistor selection | Enable/disable 120 Ω |
@@ -67,8 +67,9 @@ On that same day the picture walked off the glass and the chip rebooted while LV
 
 **Important safety note**  
 The onboard CAN and RS485 transceivers are **not galvanically isolated**.  
-They are fine for bench testing and early software development.  
-For any connection to a real boat NMEA 2000 backbone we will still use a proper isolated interface, as already specified in the proposal documents.
+The firmware makes the terminal a standard NMEA 2000 node, but the library author's certification checklist requires the device to be electrically isolated from the network. That can't be fixed in firmware. The fix is an isolated CAN transceiver (TI ISO1042 / ISO1050 class, or ADI ADM3053, which also isolates power) with isolated power for the bus side, in place of the onboard TJA1051. The planned Pololu 12 V to 5 V supply is not isolated either.  
+Until then the board goes on a backbone only bus-powered with a single ground ([19](19-n2k-backbone-install.md#41-primary-powered-from-the-bus)). Never connect anything else that shares ground (laptop on mains, phone charger, USB) while it is on the backbone.  
+The manufacturer and product codes are also not NMEA-issued yet (open-source manufacturer code 2046), so the terminal is not certified. See [05](05-nmea-connectivity.md#hardware-compliance-open-items).
 
 ---
 
@@ -121,7 +122,8 @@ Recommended order of tests:
 This board is a **development prototype**, not the final production unit.
 
 We still plan to:
-- Add proper galvanic isolation for NMEA 2000
+- Add an isolated CAN transceiver with isolated bus-side power, so the NMEA 2000 node is fully compliant
+- Get NMEA-issued manufacturer and product codes, and decide on NMEA certification
 - Provide a clean 12 V power path
 - Fit the unit into a suitable cabin enclosure. A candidate is the one-piece, wall-mount [Printables case](https://www.printables.com/model/1558735-waveshare-esp32-s3-touch-lcd-7-case) for the original ESP32-S3-Touch-LCD-7 (not the 7B). It covers the display board only; openings for the N2K drop / CAN entry and the USB-C lead are drilled after printing and sealed with Sikaflex-291.
 - Keep the software architecture independent of the exact display size so we can move to other boards later if needed

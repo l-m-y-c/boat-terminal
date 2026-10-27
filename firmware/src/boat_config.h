@@ -49,3 +49,20 @@
 
 /* NMEA_SOURCE is the first-boot data source; the saved choice wins after
  * that. See n2k.h for the values. */
+
+/* NMEA 2000 identity. Both codes are issued by NMEA to members; a unit
+ * with NMEA-issued codes sets them in secrets.h. Until then 2046 is the
+ * open-source manufacturer code the NMEA2000 library uses and 666 is its
+ * placeholder product code. Neither is an NMEA registration, and a device
+ * using them must not be described as NMEA certified. */
+#ifndef LMYC_N2K_MANUFACTURER_CODE
+#define LMYC_N2K_MANUFACTURER_CODE 2046
+#endif
+#ifndef LMYC_N2K_PRODUCT_CODE
+#define LMYC_N2K_PRODUCT_CODE 666
+#endif
+
+/* Software version in Product Information (126996), at most 32 characters. */
+#ifndef LMYC_FW_VERSION
+#define LMYC_FW_VERSION "0.9 " __DATE__
+#endif

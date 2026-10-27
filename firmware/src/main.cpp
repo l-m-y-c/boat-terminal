@@ -25,6 +25,7 @@
 #include "nmea.h"
 #include "nmea_io.h"
 #include "n2k.h"
+#include "n2k_diag.h"
 #include "n2k_to_0183.h"
 #include "nmea_state.h"
 #include "gateway.h"
@@ -153,6 +154,7 @@ static lv_obj_t *g_tile_sog = nullptr;
 static lv_obj_t *g_tile_cog = nullptr;
 static lv_obj_t *g_tile_wind = nullptr;
 static lv_obj_t *g_tile_wind_sub = nullptr;
+static lv_obj_t *g_tile_depth_sub = nullptr;
 static lv_obj_t *g_talker_list = nullptr;
 static lv_obj_t *g_helm_n2k_status = nullptr;
 static lv_obj_t *g_helm_n2k = nullptr;
@@ -558,10 +560,13 @@ static void update_helm_labels(void)
 
     if (inst->have_depth && nmea_state_fresh(inst->depth_ms)) {
         snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(inst->depth_m));
+        set_label(g_tile_depth, buf);
+        snprintf(buf, sizeof(buf), "metres %s", nmea_depth_ref_name(inst->depth_ref));
+        set_label(g_tile_depth_sub, buf);
     } else {
-        snprintf(buf, sizeof(buf), "—");
+        set_label(g_tile_depth, "—");
+        set_label(g_tile_depth_sub, "metres");
     }
-    set_label(g_tile_depth, buf);
 
     if (inst->have_sog && nmea_state_fresh(inst->sog_ms)) {
         snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(inst->sog_kn));
@@ -1352,8 +1357,8 @@ static void ask_switch(DataSource next)
     if (next == DataSource::Nmea2000) {
         set_label(g_confirm_title, "Switch to NMEA 2000?");
         set_label(g_confirm_body,
-                  "The simulator stops and the terminal listens to the boat's backbone. "
-                  "It never transmits.\n\n"
+                  "The simulator stops and the terminal joins the boat's backbone as a "
+                  "standard NMEA 2000 node. It claims an address and sends no instrument data.\n\n"
                   "The terminal restarts. USB serial moves to the UART socket.");
     } else {
         set_label(g_confirm_title, "Switch to the simulator?");
@@ -1423,8 +1428,15 @@ static void update_data_views(void)
     }
     set_label(g_bus_state, n2k_state_name(s.state));
     lv_obj_set_style_text_color(g_bus_state, lv_color_hex(state_color), 0);
-    set_label(g_bus_sub, sim ? "Virtual bus. CAN closed. Not the boat's data."
-                             : "250 kbit/s, listen-only. Nothing is transmitted.");
+    char node[64];
+    if (sim) {
+        snprintf(node, sizeof(node), "Virtual bus. CAN closed. Not the boat's data.");
+    } else if (s.node == NodeState::Claimed) {
+        snprintf(node, sizeof(node), "NMEA 2000 node, address %u. 250 kbit/s.", static_cast<unsigned>(s.address));
+    } else {
+        snprintf(node, sizeof(node), "%s. 250 kbit/s.", n2k_node_state_name(s.node));
+    }
+    set_label(g_bus_sub, node);
 
     char v[32];
     snprintf(v, sizeof(v), "%lu", static_cast<unsigned long>(s.messages_per_s));
@@ -1466,10 +1478,17 @@ static void update_data_views(void)
     } else {
         snprintf(age, sizeof(age), "%lu s ago", static_cast<unsigned long>(s.last_frame_ms / 1000));
     }
-    char foot[200];
-    snprintf(foot, sizeof(foot),
-             "%s frames since boot, last %s.\n%s sentences to chart apps, %lu not delivered.",
-             frames, age, sent, static_cast<unsigned long>(g.lost_tcp + g.lost_udp));
+    char foot[280];
+    if (s.hint != N2kHint::None) {
+        /* The one thing to do next replaces the counters until it clears. */
+        snprintf(foot, sizeof(foot), "%s", n2k_hint_text(s.hint));
+        lv_obj_set_style_text_color(g_bus_foot, lv_color_hex(s.hint == N2kHint::TwoSources ? kMuted : kAmber), 0);
+    } else {
+        snprintf(foot, sizeof(foot),
+                 "%s frames since boot, last %s.\n%s sentences to chart apps, %lu not delivered.",
+                 frames, age, sent, static_cast<unsigned long>(g.lost_tcp + g.lost_udp));
+        lv_obj_set_style_text_color(g_bus_foot, lv_color_hex(kMuted), 0);
+    }
     set_label(g_bus_foot, foot);
 }
 
@@ -1575,7 +1594,7 @@ static void build_data_page(lv_obj_t *parent)
     lv_obj_t *source = make_card(parent, "DATA SOURCE", 300, kContentH);
     lv_obj_set_pos(source, 8, 0);
     make_source_option(source, 1, "NMEA 2000",
-                       "Live from the boat's backbone. Listen-only: this terminal never transmits.",
+                       "Live from the boat's backbone, as a standard NMEA 2000 node. Sends no instrument data.",
                        "Use NMEA 2000", on_use_n2k, kGreen, 30);
     make_source_option(source, 0, "Simulator",
                        "A boat sailing English Bay on a virtual bus. For the bench, never aboard.",
@@ -1758,7 +1777,7 @@ static void build_helm_page(lv_obj_t *parent)
     const lv_coord_t tile_h = (kContentH - margin * 2 - gap) / 2;
 
     make_tile(parent, "DEPTH", "metres", margin, margin, tile_w, tile_h, &g_tile_depth,
-              nullptr);
+              &g_tile_depth_sub);
     make_tile(parent, "SPEED", "knots SOG", margin + tile_w + gap, margin, tile_w, tile_h,
               &g_tile_sog, nullptr);
     make_tile(parent, "COURSE", "degrees COG", margin, margin + tile_h + gap, tile_w, tile_h,

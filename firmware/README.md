@@ -18,7 +18,7 @@ PlatformIO project for the **interactive cabin terminal**:
 - **MicroSD (TF slot)**, full build only — mount FAT32 card (exFAT will not work)
 - Credentials live in `src/secrets.h` (gitignored). Copy `src/secrets.h.example`.
 
-Bench pairing is Discover or QR + BLE OOB via the Flutter app in `../mobile`. Instrument data comes from one of two sources, chosen on the glass and saved: a **simulator** (a virtual NMEA 2000 bus) or the boat's **NMEA 2000** backbone, listen-only. The top bar says which on every screen. Data goes out on TCP **10110**, UDP 10110/2000, and BLE notify `…000030`. Real RS485 listen is TODO(slice-d).
+Bench pairing is Discover or QR + BLE OOB via the Flutter app in `../mobile`. Instrument data comes from one of two sources, chosen on the glass and saved: a **simulator** (a virtual NMEA 2000 bus) or the boat's **NMEA 2000** backbone, where the terminal is a standard NMEA 2000 node that sends only network-management messages. The top bar says which on every screen. Data goes out on TCP **10110**, UDP 10110/2000, and BLE notify `…000030`. Real RS485 listen is TODO(slice-d).
 
 ## Prerequisites (macOS)
 
@@ -101,7 +101,7 @@ firmware/
 │   ├── nmea.*              # Line assembler + checksum
 │   ├── nmea_state.*        # Latest fix / depth / wind for the helm
 │   ├── nmea_io.*           # USB + UART0 console, NMEA SIM|N2K|STATS|DEMO|PGN
-│   ├── n2k.*               # Data source, CAN receive task, frame queue, counters (no transmit)
+│   ├── n2k.*               # Data source, CAN receive task, NMEA 2000 node task, queues, counters
 │   ├── n2k_sim.*           # Simulator on a virtual bus, CAN framing (host-tested)
 │   ├── terminal_stats.*    # Counters as JSON for BLE …000050 and /status.json
 │   ├── n2k_to_0183.*       # PGN → 0183 into the existing sink
@@ -124,12 +124,13 @@ firmware/
 
 ### Which task runs what
 
-Seven FreeRTOS tasks touch this code. Shared state needs an owner or a lock.
+Eight FreeRTOS tasks touch this code. Shared state needs an owner or a lock.
 
 | Task | Runs | Owns |
 |------|------|------|
-| Arduino `loop()` | `nmea_io`, `n2k_poll` (drains the frame queue), `inject_poll`, `gateway`, `net_wifi_poll`, `terminal_stats_refresh`, book photo decodes | The NMEA 2000 stack, the NMEA parser and its sink (`nmea_state`, gateway sockets, BLE tap) |
-| `n2k_rx` (NMEA 2000 only) | TWAI receive, driver counters, bus-off handling | The CAN controller. Frames go to `loop()` through the frame queue |
+| Arduino `loop()` | `nmea_io`, `n2k_poll` (drains the message queue into the converter), `inject_poll`, `gateway`, `net_wifi_poll`, `terminal_stats_refresh`, book photo decodes | The NMEA parser and its sink (`nmea_state`, gateway sockets, BLE tap) |
+| `n2k_rx` (NMEA 2000 only) | TWAI receive, driver counters, bus-off handling | The CAN controller. Frames go to the node task through the frame queue |
+| `n2k_node` | The NMEA2000 library: fast-packet reassembly and network management (address claim, requests, heartbeat) | The NMEA 2000 stack. Reassembled messages go to `loop()` through the message queue |
 | `n2k_sim` (simulator only) | `n2k_sim_step` every 10 ms | The simulator's state. Frames go through the same queue |
 | LVGL (`lvgl_v8_port`) | Every `lv_*` call, the 1 s status timer, `maint_ui` | All LVGL objects. Other tasks take `lvgl_port_lock()` first |
 | HTTP (`esp_http_server`) | `hub_http` handlers | Nothing. It queues GNSS for `loop()` (`inject_submit`) |
@@ -175,15 +176,15 @@ Each value on the Instruments tiles goes blank (`—`) when it is more than 5 s 
 
 ### Data source
 
-The badge on the top bar reads **SIMULATION** (amber), **LIVE NMEA 2000** (green), or **NMEA 2000 NO DATA** / **BUS FAULT** (red), and the line under the bar matches. Tap it for **Data source** (also on the Diagnostics rail): the two sources, the active one marked, and the bus counters: messages and frames a second, peak, lost frames, buffer peak against 2048, bus errors, PGN types, devices, chart apps, and sentences delivered. Choose the other source and confirm; the choice is saved and the terminal restarts into it.
+The badge on the top bar reads **SIMULATION** (amber), **LIVE NMEA 2000** (green), or **NMEA 2000 NO DATA** / **BUS FAULT** (red), and the line under the bar matches. Tap it for **Data source** (also on the Diagnostics rail): the two sources, the active one marked, and the bus counters: messages and frames a second, peak, lost frames, buffer peak against 2048, bus errors, PGN types, devices, chart apps, and sentences delivered. On NMEA 2000 it also shows the node state ("NMEA 2000 node, address N", "claiming an address" or "no free address") and a hint line; the node and its hints are in [doc 05](../docs/05-nmea-connectivity.md#the-terminal-as-an-nmea-2000-node). Choose the other source and confirm; the choice is saved and the terminal restarts into it.
 
 `NMEA_SOURCE` in `secrets.h` is only the first-boot default (`0` simulator, `1` NMEA 2000; the old `2` AUTO now means `1`). A live bus never falls back to simulated data.
 
-On the serial console: `NMEA SIM` or `NMEA N2K` (save and restart), `NMEA STATS`, `NMEA DEMO`, or `NMEA PGN <number> [src=N] <hex>`. `DEMO` and `PGN` run only on the simulator: they pause it and feed reassembled PGNs through the converter. The badge reads **SIMULATION PAUSED** and the fix tag `PLAY`. `make n2k-demo` (or `python3 tools/n2k_play.py`) writes `NMEA DEMO` to the UART Type-C socket, the CH343 on GPIO43/44. Leave the cable in that socket. Opening the USB socket from the Mac resets the chip into download. The demo is depth 42.0 m, course 90°, speed 7.5 kn, wind 18 kn at 40° apparent, heading 45° true, and PGN 130816 so an unknown type is listed. `NMEA SIM` resumes the simulator. `python3 tools/n2k_play.py PGN 130816 src=4 dead` sends one hex payload.
+On the serial console: `NMEA SIM` or `NMEA N2K` (save and restart), `NMEA STATS`, `NMEA DIAG`, `NMEA DEMO`, or `NMEA PGN <number> [src=N] <hex>`. `DEMO` and `PGN` run only on the simulator: they pause it and feed reassembled PGNs through the converter. The badge reads **SIMULATION PAUSED** and the fix tag `PLAY`. `make n2k-demo` (or `python3 tools/n2k_play.py`) writes `NMEA DEMO` to the UART Type-C socket, the CH343 on GPIO43/44. Leave the cable in that socket. Opening the USB socket from the Mac resets the chip into download. The demo is depth 42.0 m, course 90°, speed 7.5 kn, wind 18 kn at 40° apparent, heading 45° true, and PGN 130816 so an unknown type is listed. `NMEA SIM` resumes the simulator. `python3 tools/n2k_play.py PGN 130816 src=4 dead` sends one hex payload.
 
 The receive path, and why it loses nothing, is in [doc 05](../docs/05-nmea-connectivity.md#receive-path-nothing-is-dropped-uncounted).
 
-The header is GPIO20 TX / GPIO19 RX through the onboard TJA1051. Those pins are also USB. CH422G EXIO5 high selects CAN, and the log moves to the UART Type-C socket (GPIO43/44). Remove the 120 Ω terminator jumper. The onboard transceiver is **not isolated**. On the boat, power the board from the NMEA 2000 drop (NET-S / NET-C through a fuse and a 12 V to 5 V DC/DC into the USB socket) and wire nothing else to it: no USB lead, RS485 or other 12 V while it's on the bus. Flash and read the log off the bus. If the board must keep its own power, it needs an isolated CAN interface instead. Wiring is in [doc 19](../docs/19-n2k-backbone-install.md#4-boat-terminal-connection). Details and the PGN → 0183 table are in [doc 05](../docs/05-nmea-connectivity.md).
+The header is GPIO20 TX / GPIO19 RX through the onboard TJA1051. Those pins are also USB. CH422G EXIO5 high selects CAN, and the log moves to the UART Type-C socket (GPIO43/44). Remove the 120 Ω terminator jumper. The onboard transceiver is **not isolated**, and neither is the Pololu supply. A compliant node needs an isolated CAN transceiver with isolated bus-side power; that is an open hardware item ([doc 05](../docs/05-nmea-connectivity.md#hardware-compliance-open-items)). Until then, power the board from the NMEA 2000 drop (NET-S / NET-C through a fuse and a 12 V to 5 V DC/DC into the USB socket) and wire nothing else to it: no USB lead, phone charger, RS485 or other 12 V while it's on the bus. Flash and read the log off the bus, or from a laptop on its own battery. If the board must keep its own power, it needs an isolated CAN interface. Wiring is in [doc 19](../docs/19-n2k-backbone-install.md#4-boat-terminal-connection). Details and the PGN → 0183 table are in [doc 05](../docs/05-nmea-connectivity.md).
 
 The FIX chip reads `SIM`, `PLAY` (simulator paused for canned PGNs), `N2K` (NMEA 2000 chosen, nothing arriving), `BOAT` (frames flowing), or `PHONE` (gated GNSS). Tap that icon and the line under the bar adds the source (`NMEA 2000 - Live - 312 frames/s - 0 lost`) and each PGN seen: number, name, source address, age, and how many. The same list is under the Instruments list icon. Phones keep using TCP 10110 and the BLE NMEA notify.
 
