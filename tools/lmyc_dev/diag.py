@@ -128,3 +128,54 @@ def summarise_status(d: dict[str, Any]) -> str:
         out.append(f"Sentences out {data.get('out', 0)}, not delivered {data.get('out_lost', 0)} TCP / "
                    f"{data.get('udp_lost', 0)} UDP, apps {data.get('apps', 0)}")
     return "\n".join(out)
+
+
+def summarise_network(d: dict[str, Any]) -> str:
+    """GET /n2k/network.json or NMEA NET: every device, one line each, then issues."""
+    devs = d.get("devices", [])
+    disc = d.get("discovery", {})
+    total = d.get("len_total", 0)
+    out = [f"{len(devs)} devices, bus load {total} LEN ({total * 0.05:.2f} A), "
+           f"discovery: {disc.get('requests', 0)} requests, {disc.get('answers', 0)} answers, "
+           f"still asking {disc.get('asking', 0)}", ""]
+
+    def order(x: dict[str, Any]) -> tuple[int, int, int]:
+        return (0 if x.get("self") else 1, x.get("class", 999), x.get("address", 0))
+
+    for x in sorted(devs, key=order):
+        flags = ", ".join(i.get("code", "?") for i in x.get("issues", []))
+        out.append(f"  {x.get('address', '?'):>3}  {x.get('title', ''):30s} {x.get('role', ''):22s} "
+                   f"LEN {x.get('len', '?'):>2}  {x.get('install1', '')[:28]:28s}"
+                   f"{'  complete' if x.get('complete') else '  incomplete'}{'  ISSUES: ' + flags if flags else ''}")
+    problems = [(x, i) for x in devs for i in x.get("issues", [])]
+    if problems:
+        out += ["", "Needs a look"]
+        for x, i in problems:
+            out.append(f"  {x.get('address')} {x.get('title')}: {i.get('text')}")
+    return "\n".join(out)
+
+
+def summarise_device(d: dict[str, Any]) -> str:
+    """GET /n2k/device.json?src=N or NMEA NET N."""
+    dev = d.get("device", {})
+    out = [f"{dev.get('title', '?')}, address {dev.get('address', '?')}, {dev.get('role', '')}"]
+    for key, label in (("maker", "Maker"), ("mfr", "Maker code"), ("instance", "Instance"), ("unique", "Unique"),
+                       ("model", "Model"), ("software", "Software"), ("model_version", "Model version"),
+                       ("serial", "Serial"), ("len", "LEN"), ("n2k_version", "NMEA 2000 version"),
+                       ("certification", "Certification"), ("install1", "Installed"), ("install2", ""),
+                       ("heartbeat_ms", "Heartbeat ms"), ("address_changes", "Address changes")):
+        if dev.get(key) not in (None, ""):
+            out.append(f"  {label:18s} {dev[key]}")
+    if dev.get("transmits"):
+        out.append(f"  {'Transmit list':18s} {', '.join(str(p) for p in dev['transmits'])}")
+    out.append(f"  {'Terminal uses it':18s} {', '.join(d.get('owns', [])) or 'nothing'}")
+    for i in dev.get("issues", []):
+        out.append(f"  ISSUE {i.get('code')}: {i.get('text')}")
+    out += ["", "What it sends"]
+    for p in d.get("pgns", []):
+        out.append(f"  {p.get('pgn', 0):6d} {p.get('name', ''):16s} {p.get('rate', 0):5.1f}/s  "
+                   f"{p.get('text') or p.get('hex', '')}")
+    out += ["", "Recent messages"]
+    for r in d.get("recent", [])[:20]:
+        out.append(f"  {r.get('age_ms', 0) / 1000:6.1f} s  {r.get('pgn', 0):6d}  {r.get('text') or r.get('hex', '')}")
+    return "\n".join(out)

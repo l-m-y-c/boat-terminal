@@ -15,7 +15,7 @@ out="${TMPDIR:-/tmp}/boat-terminal-replay"
 mkdir -p "$out"
 cxx=${CXX:-c++}
 bin="$out/replay"
-srcs="$here/replay.cpp $fw/src/n2k_diag.cpp $fw/src/n2k_sim.cpp $fw/src/n2k_to_0183.cpp $fw/src/ais0183.cpp $fw/src/nmea.cpp"
+srcs="$here/replay.cpp $fw/src/n2k_diag.cpp $fw/src/n2k_describe.cpp $fw/src/n2k_sim.cpp $fw/src/n2k_to_0183.cpp $fw/src/ais0183.cpp $fw/src/nmea.cpp"
 stale=0
 [ -x "$bin" ] || stale=1
 for s in $srcs "$fw"/src/*.h; do

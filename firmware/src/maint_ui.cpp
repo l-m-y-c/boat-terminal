@@ -24,7 +24,7 @@ static bool g_open_on_note = false;
 static char g_photo_line[80] = "";
 static char g_caption[48] = "";
 static char g_note_line[kMaintPhotoNoteMax + 1] = "";
-static char g_book_subtitle[72] = "Open maintenance  ·  tap a row";
+static char g_book_subtitle[72] = "Open maintenance  •  tap a row";
 
 static bool g_thumb_pending = false;
 static uint8_t g_thumb_at = 1;
@@ -133,7 +133,7 @@ static void pretty_token(const char *in, char *out, size_t cap)
         return;
     }
     if (in == nullptr || in[0] == '\0') {
-        snprintf(out, cap, "—");
+        snprintf(out, cap, "-");
         return;
     }
     size_t j = 0;
@@ -253,7 +253,7 @@ static void show_list(void)
         lv_obj_add_flag(g_detail_page, LV_OBJ_FLAG_HIDDEN);
     }
     hide_reader();
-    publish_book_subtitle("Open maintenance  ·  tap a row");
+    publish_book_subtitle("Open maintenance  •  tap a row");
     sync_debug_log();
 }
 
@@ -311,7 +311,7 @@ static uint8_t *read_jpeg(const MaintItem *item, uint8_t n, size_t *out_len)
 static void queue_photo(void)
 {
     g_photo_pending = true;
-    set_status("Opening photo…");
+    set_status("Opening photo...");
 }
 
 bool maint_ui_photo_pending(void) { return g_photo_pending; }
@@ -413,7 +413,7 @@ void maint_ui_publish_queued_thumb(void)
         ++g_thumb_at;
         g_thumb_pending = true;
         char line[40];
-        snprintf(line, sizeof(line), "Loading photo %u of %u…",
+        snprintf(line, sizeof(line), "Loading photo %u of %u...",
                  static_cast<unsigned>(g_thumb_at),
                  static_cast<unsigned>(item->photo_count));
         set_status(line);
@@ -455,11 +455,11 @@ static void show_reader(void)
     }
     const MaintItem *item = &g_items[g_selected];
     if (g_reader_title != nullptr) {
-        lv_label_set_text(g_reader_title, item->title[0] != '\0' ? item->title : "—");
+        lv_label_set_text(g_reader_title, item->title[0] != '\0' ? item->title : "-");
     }
     if (g_reader_body != nullptr) {
         lv_label_set_text(g_reader_body,
-                          item->description[0] != '\0' ? item->description : "—");
+                          item->description[0] != '\0' ? item->description : "-");
     }
     if (g_reader_scroll != nullptr) {
         lv_obj_scroll_to_y(g_reader_scroll, 0, LV_ANIM_OFF);
@@ -486,7 +486,7 @@ static void show_detail(int idx)
     hide_reader();
     const MaintItem *item = &g_items[idx];
 
-    lv_label_set_text(g_title, item->title[0] != '\0' ? item->title : "—");
+    lv_label_set_text(g_title, item->title[0] != '\0' ? item->title : "-");
     lv_point_t title_sz;
     lv_txt_get_size(&title_sz, item->title, &lv_font_montserrat_20, 0, 0, LV_COORD_MAX,
                     LV_TEXT_FLAG_NONE);
@@ -498,9 +498,9 @@ static void show_detail(int idx)
     paint_priority(g_pri_chip, g_pri_lbl, item->priority);
     pretty_token(item->status, token, sizeof(token));
     lv_label_set_text(g_val_status, token);
-    lv_label_set_text(g_val_reporter, item->reporter[0] != '\0' ? item->reporter : "—");
+    lv_label_set_text(g_val_reporter, item->reporter[0] != '\0' ? item->reporter : "-");
 
-    const char *desc = item->description[0] != '\0' ? item->description : "—";
+    const char *desc = item->description[0] != '\0' ? item->description : "-";
     lv_label_set_text(g_desc, desc);
     lv_point_t desc_sz;
     lv_txt_get_size(&desc_sz, item->description, &lv_font_montserrat_16, 0, 0, g_desc_text_w,
@@ -555,7 +555,7 @@ static void show_detail(int idx)
         g_thumb_at = 1;
         g_thumb_pending = true;
         char line[40];
-        snprintf(line, sizeof(line), "Loading photo 1 of %u…", static_cast<unsigned>(photos));
+        snprintf(line, sizeof(line), "Loading photo 1 of %u...", static_cast<unsigned>(photos));
         set_status(line);
     } else {
         set_status("");
@@ -638,7 +638,7 @@ void maint_ui_reload(void)
         }
         if (i < g_count) {
             lv_label_set_text(g_row_title[i],
-                              g_items[i].title[0] != '\0' ? g_items[i].title : "—");
+                              g_items[i].title[0] != '\0' ? g_items[i].title : "-");
             char cat[40];
             pretty_token(g_items[i].category, cat, sizeof(cat));
             lv_label_set_text(g_row_cat[i], cat);

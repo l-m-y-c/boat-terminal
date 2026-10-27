@@ -1,8 +1,10 @@
 #include "n2k_sim.h"
 
 #include <N2kMessages.h>
+#include <NMEA2000.h>
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 /* Device addresses on the virtual bus. A real backbone assigns these by
@@ -379,11 +381,16 @@ bool is_gnss(Slot slot)
     return slot == kPosition || slot == kCogSog || slot == kGnss || slot == kTime;
 }
 
+/* Network management of the virtual devices, further down. */
+void step_nodes(Emit &out, uint32_t now_ms);
+void reset_nodes(void);
+
 } // namespace
 
 void n2k_sim_reset(void)
 {
     g_sim = {};
+    reset_nodes();
     g_sim.gnss = g_gnss_wanted;
     waypoint(3, &g_sim.lat, &g_sim.lon);
     g_sim.leg = 0;
@@ -426,6 +433,7 @@ size_t n2k_sim_step(uint32_t now_ms, N2kFrameSink sink, void *ctx)
     }
 
     Emit out = {sink, ctx, 0};
+    step_nodes(out, now_ms);
     for (int i = 0; i < kSlots; ++i) {
         Schedule &d = s.due[i];
         if (static_cast<int32_t>(now_ms - d.next_ms) < 0) {
@@ -442,6 +450,204 @@ size_t n2k_sim_step(uint32_t now_ms, N2kFrameSink sink, void *ctx)
         }
         emit_slot(out, slot, t_s);
         s.sid = static_cast<uint8_t>((s.sid + 1) % 253);
+    }
+    return out.frames;
+}
+
+/* ---- the simulated devices as NMEA 2000 nodes ---------------------------- */
+
+namespace {
+
+/* Each virtual device claims its address, sends a heartbeat, and answers
+ * ISO requests for its address claim, product information, configuration
+ * information and PGN lists, like real equipment. Manufacturer code 2046
+ * (open source) so no real maker is impersonated. Class / function codes
+ * are NMEA's: navigation 60 (attitude 140, position 145, depth/speed/temp
+ * 136, AIS 195), external environment 85 (atmospheric 130), electrical
+ * generation 35 (battery 170). */
+struct SimDevice {
+    uint8_t src;
+    uint32_t unique;
+    uint8_t device_class;
+    uint8_t function;
+    uint8_t load_equivalency;
+    const char *model;
+    const char *install;
+    unsigned long transmit[12];
+};
+
+constexpr unsigned long kManagementTx[] = {59392UL, 60928UL, 126464UL, 126993UL, 126996UL, 126998UL};
+constexpr unsigned long kManagementRx[] = {59392UL, 59904UL, 60928UL, 126208UL, 126464UL, 0};
+
+constexpr SimDevice kDevices[] = {
+    {kSrcGps, 1001, 60, 145, 1, "Sim GPS", "Sim: pushpit rail", {129025UL, 129026UL, 129029UL, 126992UL}},
+    {kSrcCompass, 1002, 60, 140, 1, "Sim compass", "Sim: under the chart table", {127250UL}},
+    {kSrcWind, 1003, 85, 130, 2, "Sim wind sensor", "Sim: masthead", {130306UL}},
+    {kSrcTransducer, 1004, 60, 136, 1, "Sim depth / speed / temp", "Sim: forward of the keel",
+     {128267UL, 128259UL, 130316UL}},
+    {kSrcBattery, 1005, 35, 170, 1, "Sim battery monitor", "Sim: house bank", {127508UL}},
+    {kSrcAis, 1006, 60, 195, 3, "Sim AIS receiver", "Sim: nav station",
+     {129038UL, 129039UL, 129794UL, 129809UL, 129810UL}},
+};
+constexpr size_t kDeviceCount = sizeof(kDevices) / sizeof(kDevices[0]);
+constexpr uint32_t kSimHeartbeatMs = 60000;
+
+struct SimNode {
+    uint8_t fp_seq;
+    uint8_t heartbeat_seq;
+    uint32_t next_heartbeat_ms;
+    bool claimed;
+};
+
+SimNode g_nodes[kDeviceCount] = {};
+bool g_nodes_started = false;
+uint32_t g_nodes_start_ms = 0;
+
+void reset_nodes(void) { g_nodes_started = false; }
+
+void node_send(Emit &out, size_t dev, tN2kMsg &msg)
+{
+    msg.Source = kDevices[dev].src;
+    const uint8_t seq = g_nodes[dev].fp_seq;
+    g_nodes[dev].fp_seq = static_cast<uint8_t>((seq + 1) & 0x7u);
+    out.frames += n2k_frames_from_msg(msg, seq, out.sink, out.ctx);
+}
+
+void send_claim(Emit &out, size_t dev)
+{
+    tN2kMsg msg;
+    const SimDevice &d = kDevices[dev];
+    SetN2kPGN60928(msg, d.unique, 2046, d.function, d.device_class, 0, 0, 4);
+    msg.Destination = 0xff;
+    node_send(out, dev, msg);
+}
+
+void send_product(Emit &out, size_t dev)
+{
+    tN2kMsg msg;
+    const SimDevice &d = kDevices[dev];
+    char serial[16];
+    snprintf(serial, sizeof(serial), "SIM-%04lu", static_cast<unsigned long>(d.unique));
+    SetN2kPGN126996(msg, 2101, 1000 + static_cast<unsigned>(dev), d.model, "sim 1.0", "virtual bus", serial, 1,
+                    d.load_equivalency);
+    msg.Destination = 0xff;
+    node_send(out, dev, msg);
+}
+
+void send_config(Emit &out, size_t dev)
+{
+    tN2kMsg msg;
+    SetN2kPGN126998(msg, "LMYC boat-terminal simulator", kDevices[dev].install, "");
+    msg.Destination = 0xff;
+    node_send(out, dev, msg);
+}
+
+void send_lists(Emit &out, size_t dev, uint8_t to)
+{
+    unsigned long tx[20] = {};
+    size_t n = 0;
+    for (unsigned long p : kDevices[dev].transmit) {
+        if (p != 0 && n < 19) {
+            tx[n++] = p;
+        }
+    }
+    for (unsigned long p : kManagementTx) {
+        if (n < 19) {
+            tx[n++] = p;
+        }
+    }
+    tx[n] = 0;
+    tN2kMsg msg;
+    SetN2kPGN126464(msg, to, N2kpgnl_transmit, tx);
+    node_send(out, dev, msg);
+    tN2kMsg rx;
+    SetN2kPGN126464(rx, to, N2kpgnl_receive, kManagementRx);
+    node_send(out, dev, rx);
+}
+
+void send_heartbeat(Emit &out, size_t dev)
+{
+    tN2kMsg msg;
+    SetN2kPGN126993(msg, kSimHeartbeatMs, g_nodes[dev].heartbeat_seq);
+    g_nodes[dev].heartbeat_seq = static_cast<uint8_t>((g_nodes[dev].heartbeat_seq + 1) % 253);
+    msg.Destination = 0xff;
+    node_send(out, dev, msg);
+}
+
+void send_nak(Emit &out, size_t dev, uint8_t to, unsigned long pgn)
+{
+    tN2kMsg msg;
+    SetN2kPGN59392(msg, 1, 0xff, pgn);
+    msg.Destination = to;
+    node_send(out, dev, msg);
+}
+
+/* Claims at start-up, spaced like devices powering up, then heartbeats. */
+void step_nodes(Emit &out, uint32_t now_ms)
+{
+    if (!g_nodes_started) {
+        g_nodes_started = true;
+        g_nodes_start_ms = now_ms;
+        for (size_t i = 0; i < kDeviceCount; ++i) {
+            g_nodes[i] = {};
+            g_nodes[i].next_heartbeat_ms = now_ms + 5000 + static_cast<uint32_t>(i) * 1000;
+        }
+    }
+    for (size_t i = 0; i < kDeviceCount; ++i) {
+        SimNode &n = g_nodes[i];
+        if (!n.claimed && now_ms - g_nodes_start_ms >= static_cast<uint32_t>(i) * 40) {
+            n.claimed = true;
+            send_claim(out, i);
+        }
+        if (static_cast<int32_t>(now_ms - n.next_heartbeat_ms) >= 0) {
+            n.next_heartbeat_ms += kSimHeartbeatMs;
+            send_heartbeat(out, i);
+        }
+    }
+}
+
+} // namespace
+
+size_t n2k_sim_receive(const N2kFrame &frame, uint32_t /*now_ms*/, N2kFrameSink sink, void *ctx)
+{
+    const uint32_t pf = (frame.id >> 16) & 0xffu;
+    const uint32_t pgn = (frame.id >> 8) & 0x3ff00u;
+    if (pf >= 240u || pgn != 59904UL || frame.len < 3) {
+        return 0; /* only ISO requests are answered */
+    }
+    const uint8_t dst = static_cast<uint8_t>((frame.id >> 8) & 0xffu);
+    const uint8_t from = static_cast<uint8_t>(frame.id & 0xffu);
+    const unsigned long wanted = static_cast<unsigned long>(frame.data[0]) |
+                                 (static_cast<unsigned long>(frame.data[1]) << 8) |
+                                 (static_cast<unsigned long>(frame.data[2]) << 16);
+    Emit out = {sink, ctx, 0};
+    for (size_t i = 0; i < kDeviceCount; ++i) {
+        if (dst != 0xff && dst != kDevices[i].src) {
+            continue;
+        }
+        switch (wanted) {
+        case 60928UL:
+            send_claim(out, i);
+            break;
+        case 126996UL:
+            send_product(out, i);
+            break;
+        case 126998UL:
+            send_config(out, i);
+            break;
+        case 126464UL:
+            send_lists(out, i, from);
+            break;
+        case 126993UL:
+            send_heartbeat(out, i);
+            break;
+        default:
+            /* A global request for something not sent is not answered. */
+            if (dst != 0xff) {
+                send_nak(out, i, from, wanted);
+            }
+            break;
+        }
     }
     return out.frames;
 }

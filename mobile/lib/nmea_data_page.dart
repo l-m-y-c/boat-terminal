@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'bus_check.dart';
 import 'counter_help.dart';
+import 'network_page.dart';
 import 'terminal_stats.dart';
 import 'ui_kit.dart';
 
@@ -132,27 +133,28 @@ class NmeaDataView extends StatelessWidget {
     return s == null ? _waiting(context) : _body(context, s);
   }
 
+  /// The map works over Wi-Fi even before the Bluetooth stats arrive.
   Widget _waiting(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (supported) const CircularProgressIndicator(),
-            const SizedBox(height: 20),
-            Text(
-              supported
-                  ? 'Reading the terminal…'
-                  : 'NMEA data needs the Bluetooth link to the terminal. '
-                        'Reconnect on the Boat tab, or update the '
-                        'terminal\'s firmware if it is old.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 16, height: 1.4),
-            ),
-          ],
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(0, 12, 0, 32),
+      children: [
+        const NetworkView(),
+        const SizedBox(height: 28),
+        if (supported) const Center(child: CircularProgressIndicator()),
+        const SizedBox(height: 20),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Text(
+            supported
+                ? 'Reading the bus counters from the terminal…'
+                : 'The bus counters need the Bluetooth link to the terminal. '
+                      'Reconnect on the Boat tab, or update the '
+                      'terminal\'s firmware if it is old.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 16, height: 1.4),
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -161,129 +163,155 @@ class NmeaDataView extends StatelessWidget {
         ? ''
         : ' · updated ${DateTime.now().difference(updatedAt!).inSeconds} s ago';
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+      padding: const EdgeInsets.fromLTRB(0, 12, 0, 32),
       children: [
-        Row(
-          children: [
-            InkWell(
-              key: const ValueKey('data-source-pill'),
-              borderRadius: BorderRadius.circular(20),
-              onTap: () => showDataSourceSheet(context, s),
-              child: DataStatusPill(stats: s),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'Tap a panel for help',
-                textAlign: TextAlign.right,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: Palette.of(context).faint,
-                  fontSize: 12.5,
+        const NetworkView(),
+        const SizedBox(height: 24),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SectionLabel('Bus traffic'),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  InkWell(
+                    key: const ValueKey('data-source-pill'),
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: () => showDataSourceSheet(context, s),
+                    child: DataStatusPill(stats: s),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Tap a panel for help',
+                      textAlign: TextAlign.right,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Palette.of(context).faint,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _IntegrityLine(stats: s),
+              if (s.hintText != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  s.hintText!,
+                  key: const ValueKey('bus-hint'),
+                  style: TextStyle(
+                    color: toneColor(
+                      s.hint == 'two_sources' ? Tone.neutral : Tone.caution,
+                    ),
+                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+              Wrap(
+                spacing: 4,
+                children: [
+                  TextButton.icon(
+                    key: const ValueKey('open-bus-check'),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const BusCheckPage(),
+                      ),
+                    ),
+                    icon: const Icon(Icons.troubleshoot),
+                    label: Text(
+                      s.address == null
+                          ? 'Bus check'
+                          : 'Bus check · address ${s.address}',
+                    ),
+                  ),
+                ],
+              ),
+              _Section(
+                title: 'Traffic',
+                metrics: [
+                  _Metric(
+                    'mps',
+                    'Messages / s',
+                    formatCount(s.messagesPerSecond),
+                  ),
+                  _Metric('fps', 'Frames / s', formatCount(s.framesPerSecond)),
+                  _Metric(
+                    'fps_peak',
+                    'Peak frames / s',
+                    formatCount(s.framesPerSecondPeak),
+                  ),
+                  _Metric('frames', 'Frames received', formatCount(s.frames)),
+                  _Metric('pgns', 'PGN types', formatCount(s.pgnTypes)),
+                  _Metric('devices', 'Devices', formatCount(s.devices)),
+                ],
+              ),
+              _Section(
+                title: 'Integrity',
+                metrics: [
+                  _Metric(
+                    'lost',
+                    'Lost frames',
+                    formatCount(s.lost),
+                    tone: s.lost == 0 ? Tone.good : Tone.bad,
+                  ),
+                  _Metric(
+                    'bus_err',
+                    'Bus errors',
+                    formatCount(s.busErrors),
+                    tone: s.busErrors == 0 ? null : Tone.caution,
+                  ),
+                  _Metric(
+                    'rec',
+                    'Error counter',
+                    formatCount(s.receiveErrorCounter),
+                  ),
+                ],
+                footer: _BufferBar(
+                  helpKey: 'rx_buffer',
+                  label: 'Receive buffer',
+                  share: s.bufferPeakShare,
+                  detail:
+                      'Peak ${formatCount(s.bufferPeak)} of ${formatCount(s.bufferCapacity)} '
+                      'frames · now ${formatCount(s.bufferNow)}',
                 ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        _IntegrityLine(stats: s),
-        if (s.hintText != null) ...[
-          const SizedBox(height: 10),
-          Text(
-            s.hintText!,
-            key: const ValueKey('bus-hint'),
-            style: TextStyle(
-              color: toneColor(
-                s.hint == 'two_sources' ? Tone.neutral : Tone.caution,
+              _Section(
+                title: 'Chart apps',
+                metrics: [
+                  _Metric('apps', 'Connected', formatCount(s.chartApps)),
+                  _Metric('out', 'Sentences sent', formatCount(s.sentencesOut)),
+                  _Metric(
+                    'not_delivered',
+                    'Not delivered',
+                    formatCount(s.notDelivered),
+                    tone: s.notDelivered == 0 ? null : Tone.caution,
+                  ),
+                ],
+                footer: _BufferBar(
+                  helpKey: 'app_buffer',
+                  label: 'App buffer',
+                  share: s.appBufferPeakShare,
+                  detail:
+                      'Peak ${_kb(s.appBufferPeak)} of ${_kb(s.appBufferCapacity)} per app',
+                ),
               ),
-              fontWeight: FontWeight.w600,
-              height: 1.35,
-            ),
-          ),
-        ],
-        if (!s.simulated)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              key: const ValueKey('open-bus-check'),
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => const BusCheckPage()),
+              const SizedBox(height: 20),
+              Text(
+                'Terminal up ${formatUptime(s.uptimeSeconds)} · '
+                'last frame ${formatAge(s.lastFrameAgeMs)}$updated',
+                style: TextStyle(
+                  color: Palette.of(context).faint,
+                  fontSize: 13,
+                ),
               ),
-              icon: const Icon(Icons.troubleshoot),
-              label: Text(
-                s.address == null
-                    ? 'Bus check'
-                    : 'Bus check · address ${s.address}',
-              ),
-            ),
+            ],
           ),
-        _Section(
-          title: 'Traffic',
-          metrics: [
-            _Metric('mps', 'Messages / s', formatCount(s.messagesPerSecond)),
-            _Metric('fps', 'Frames / s', formatCount(s.framesPerSecond)),
-            _Metric(
-              'fps_peak',
-              'Peak frames / s',
-              formatCount(s.framesPerSecondPeak),
-            ),
-            _Metric('frames', 'Frames received', formatCount(s.frames)),
-            _Metric('pgns', 'PGN types', formatCount(s.pgnTypes)),
-            _Metric('devices', 'Devices', formatCount(s.devices)),
-          ],
-        ),
-        _Section(
-          title: 'Integrity',
-          metrics: [
-            _Metric(
-              'lost',
-              'Lost frames',
-              formatCount(s.lost),
-              tone: s.lost == 0 ? Tone.good : Tone.bad,
-            ),
-            _Metric(
-              'bus_err',
-              'Bus errors',
-              formatCount(s.busErrors),
-              tone: s.busErrors == 0 ? null : Tone.caution,
-            ),
-            _Metric('rec', 'Error counter', formatCount(s.receiveErrorCounter)),
-          ],
-          footer: _BufferBar(
-            helpKey: 'rx_buffer',
-            label: 'Receive buffer',
-            share: s.bufferPeakShare,
-            detail:
-                'Peak ${formatCount(s.bufferPeak)} of ${formatCount(s.bufferCapacity)} '
-                'frames · now ${formatCount(s.bufferNow)}',
-          ),
-        ),
-        _Section(
-          title: 'Chart apps',
-          metrics: [
-            _Metric('apps', 'Connected', formatCount(s.chartApps)),
-            _Metric('out', 'Sentences sent', formatCount(s.sentencesOut)),
-            _Metric(
-              'not_delivered',
-              'Not delivered',
-              formatCount(s.notDelivered),
-              tone: s.notDelivered == 0 ? null : Tone.caution,
-            ),
-          ],
-          footer: _BufferBar(
-            helpKey: 'app_buffer',
-            label: 'App buffer',
-            share: s.appBufferPeakShare,
-            detail:
-                'Peak ${_kb(s.appBufferPeak)} of ${_kb(s.appBufferCapacity)} per app',
-          ),
-        ),
-        const SizedBox(height: 20),
-        Text(
-          'Terminal up ${formatUptime(s.uptimeSeconds)} · '
-          'last frame ${formatAge(s.lastFrameAgeMs)}$updated',
-          style: TextStyle(color: Palette.of(context).faint, fontSize: 13),
         ),
       ],
     );

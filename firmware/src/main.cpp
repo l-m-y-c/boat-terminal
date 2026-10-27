@@ -26,6 +26,7 @@
 #include "nmea_io.h"
 #include "n2k.h"
 #include "n2k_diag.h"
+#include "n2k_network.h"
 #include "n2k_to_0183.h"
 #include "nmea_state.h"
 #include "gateway.h"
@@ -67,7 +68,7 @@ static lv_obj_t *g_pgn_value = nullptr;
 static lv_obj_t *g_hint_value = nullptr;
 static lv_obj_t *g_log_value = nullptr;
 
-enum class Screen : uint8_t { Home, Instruments, Reports, Charts, Diagnostics, Data };
+enum class Screen : uint8_t { Home, Instruments, Reports, Charts, Diagnostics, Data, Network };
 
 /* The rail parks off the right edge with a 44 px ear left on the glass.
  * Content stays full width under that ear. Opening the rail overlays it. */
@@ -96,6 +97,8 @@ static lv_obj_t *g_page_home = nullptr;
 static lv_obj_t *g_page_helm = nullptr;
 static lv_obj_t *g_page_diag = nullptr;
 static lv_obj_t *g_page_data = nullptr;
+static lv_obj_t *g_page_net = nullptr;
+static lv_obj_t *g_rail_net = nullptr;
 static lv_obj_t *g_topbar = nullptr;
 static lv_obj_t *g_top_rule = nullptr;
 static lv_obj_t *g_mode_badge = nullptr;
@@ -216,6 +219,7 @@ static void select_can(bool can_mode)
 
 static void refresh_chrome(void);
 static void update_data_views(void);
+static void update_network_view(void);
 static void hide_status_pop(void);
 static void apply_home_qr(void);
 static void set_rail_open(bool open);
@@ -258,6 +262,7 @@ static void apply_pages(void)
     hide_page(g_page_chart);
     hide_page(g_page_diag);
     hide_page(g_page_data);
+    hide_page(g_page_net);
 
     switch (g_screen) {
     case Screen::Home:
@@ -286,6 +291,9 @@ static void apply_pages(void)
         break;
     case Screen::Data:
         show_page(g_page_data);
+        break;
+    case Screen::Network:
+        show_page(g_page_net);
         break;
     }
     g_showing_helm = g_screen == Screen::Instruments;
@@ -336,6 +344,7 @@ static void on_show_book(lv_event_t * /*e*/) { go(Screen::Reports); }
 #endif
 static void on_show_diag(lv_event_t * /*e*/) { go(Screen::Diagnostics); }
 static void on_show_data(lv_event_t * /*e*/) { go(Screen::Data); }
+static void on_show_net(lv_event_t * /*e*/) { go(Screen::Network); }
 
 static void present_snapshot_image(void)
 {
@@ -472,6 +481,9 @@ static void refresh_chrome(void)
         case Screen::Data:
             leaf = "Data source";
             break;
+        case Screen::Network:
+            leaf = "Network";
+            break;
         case Screen::Charts:
             leaf = "Charts";
             break;
@@ -509,6 +521,7 @@ static void refresh_chrome(void)
     show_obj(g_rail_charts, g_screen == Screen::Charts);
     show_obj(g_rail_diag, g_screen == Screen::Diagnostics);
     show_obj(g_rail_data, g_screen == Screen::Data);
+    show_obj(g_rail_net, g_screen == Screen::Network);
 #if LMYC_WITH_REPORTS_CHARTS
     if (g_screen == Screen::Reports) {
         show_obj(g_rail_items, maint_ui_showing_detail());
@@ -602,7 +615,7 @@ static void update_helm_labels(void)
         const uint32_t age_s = (now - t->last_ms) / 1000UL;
         char row[80];
         snprintf(row, sizeof(row), "%s  %s  %lus  %lu\n",
-                 t->id, t->formatters[0] ? t->formatters : "—",
+                 t->id, t->formatters[0] ? t->formatters : "-",
                  static_cast<unsigned long>(age_s),
                  static_cast<unsigned long>(t->sentences));
         strncat(talkers, row, sizeof(talkers) - strlen(talkers) - 1);
@@ -795,6 +808,7 @@ static void update_status_labels(void)
 {
     apply_pages();
     update_data_views();
+    update_network_view();
 
     const bool phone = inject_local_armed();
     const char *tag = phone ? "PHONE" : n2k_fix_tag();
@@ -947,7 +961,7 @@ static lv_obj_t *add_kv_row(lv_obj_t *card, const char *key, lv_coord_t y, lv_ob
     lv_obj_align(k, LV_ALIGN_TOP_LEFT, 0, y);
 
     lv_obj_t *v = lv_label_create(card);
-    lv_label_set_text(v, "—");
+    lv_label_set_text(v, "-");
     lv_obj_set_style_text_color(v, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(v, &lv_font_montserrat_14, 0);
     lv_obj_align(v, LV_ALIGN_TOP_LEFT, 96, y);
@@ -1034,10 +1048,10 @@ static lv_obj_t *make_ghost_btn(lv_obj_t *parent, const char *text,
 }
 
 static lv_obj_t *make_rail_nav(lv_obj_t *parent, const char *title, const char *sub,
-                               uint32_t accent, lv_event_cb_t cb, lv_coord_t y)
+                               uint32_t accent, lv_event_cb_t cb, lv_coord_t y, lv_coord_t h = 96)
 {
     lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_size(btn, kRailBtnW, 96);
+    lv_obj_set_size(btn, kRailBtnW, h);
     lv_obj_set_pos(btn, kRailBtnX, y);
     lv_obj_set_style_bg_color(btn, lv_color_hex(0x12283F), 0);
     lv_obj_set_style_bg_color(btn, lv_color_hex(0x1B4064), LV_STATE_PRESSED);
@@ -1214,7 +1228,7 @@ static void build_diag_page(lv_obj_t *parent)
     add_kv_row(link, "ADV", 228, &g_adv_value);
 
     g_hint_value = lv_label_create(link);
-    lv_label_set_text(g_hint_value, "—");
+    lv_label_set_text(g_hint_value, "-");
     lv_obj_set_style_text_color(g_hint_value, lv_color_hex(0xF0C674), 0);
     lv_obj_set_style_text_font(g_hint_value, &lv_font_montserrat_12, 0);
     lv_label_set_long_mode(g_hint_value, LV_LABEL_LONG_WRAP);
@@ -1240,7 +1254,7 @@ static void build_diag_page(lv_obj_t *parent)
     add_kv_row(boat, "PGN", 256, &g_pgn_value, 230);
 
     g_log_value = lv_label_create(boat);
-    lv_label_set_text(g_log_value, "—");
+    lv_label_set_text(g_log_value, "-");
     lv_obj_set_style_text_color(g_log_value, lv_color_hex(0x8FA3B8), 0);
     lv_obj_set_style_text_font(g_log_value, &lv_font_montserrat_12, 0);
     lv_label_set_long_mode(g_log_value, LV_LABEL_LONG_DOT);
@@ -1513,7 +1527,7 @@ static lv_obj_t *make_metric(lv_obj_t *parent, const char *caption, lv_coord_t x
     lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 0);
 
     lv_obj_t *val = lv_label_create(box);
-    lv_label_set_text(val, "—");
+    lv_label_set_text(val, "-");
     lv_label_set_long_mode(val, LV_LABEL_LONG_DOT);
     lv_obj_set_width(val, w - 20);
     lv_obj_set_style_text_color(val, lv_color_hex(0xFFFFFF), 0);
@@ -1612,7 +1626,7 @@ static void build_data_page(lv_obj_t *parent)
     lv_obj_t *bus = make_card(parent, "BUS", bus_w, kContentH);
     lv_obj_set_pos(bus, bus_x, 0);
     g_bus_state = lv_label_create(bus);
-    lv_label_set_text(g_bus_state, "—");
+    lv_label_set_text(g_bus_state, "-");
     lv_obj_set_style_text_font(g_bus_state, &lv_font_montserrat_28, 0);
     lv_obj_align(g_bus_state, LV_ALIGN_TOP_LEFT, 0, 26);
     g_bus_sub = lv_label_create(bus);
@@ -1680,6 +1694,446 @@ static void build_data_page(lv_obj_t *parent)
     lv_obj_set_style_text_color(g_restarting_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(g_restarting_lbl, &lv_font_montserrat_28, 0);
     lv_obj_center(g_restarting_lbl);
+}
+
+/* ---- Network: the NMEA 2000 topology ----------------------------------------
+ * The backbone as a line with a terminator at each end and every device on a
+ * drop. CAN carries no position, so devices are in class order (the terminal
+ * first) and each card shows the installer's location text when the device
+ * has one. Tap a card for its identity, health, PGNs decoded and recent
+ * messages. Same data as the phone's Bus check -> Network. */
+
+static constexpr size_t kNetCards = 24;
+static constexpr lv_coord_t kNetCardW = 168;
+static constexpr lv_coord_t kNetCardH = 108;
+/* Cards alternate above and below the line, so neighbours in one row are
+ * two steps apart: 2 x 92 leaves 16 px between them. */
+static constexpr lv_coord_t kNetStep = 92;
+static constexpr lv_coord_t kNetLineY = 168;
+
+static lv_obj_t *g_net_summary = nullptr;
+static lv_obj_t *g_net_map = nullptr;
+static lv_obj_t *g_net_backbone = nullptr;
+static lv_obj_t *g_net_term[2] = {};
+static lv_obj_t *g_net_card[kNetCards] = {};
+static lv_obj_t *g_net_drop[kNetCards] = {};
+static lv_obj_t *g_net_title[kNetCards] = {};
+static lv_obj_t *g_net_role[kNetCards] = {};
+static lv_obj_t *g_net_where[kNetCards] = {};
+static lv_obj_t *g_net_state[kNetCards] = {};
+static uint8_t g_net_addr[kNetCards] = {};
+static size_t g_net_shown = 0;
+static uint32_t g_net_ms = 0;
+
+static lv_obj_t *g_net_detail = nullptr;
+static lv_obj_t *g_net_d_title = nullptr;
+static lv_obj_t *g_net_d_sub = nullptr;
+static lv_obj_t *g_net_d_ident = nullptr;
+static lv_obj_t *g_net_d_issues = nullptr;
+static lv_obj_t *g_net_d_pgns = nullptr;
+static int g_net_open = -1; /* address on the detail page, -1 closed */
+
+static uint32_t net_border(const N2kNetView &v)
+{
+    if (v.self) {
+        return 0x00B4A6;
+    }
+    if (v.issues & kNetSilent) {
+        return 0x5C7080;
+    }
+    return v.issues != 0 ? kAmber : 0x1E3A5F;
+}
+
+static int issue_count(uint16_t issues)
+{
+    int n = 0;
+    for (uint16_t b = issues; b != 0; b = static_cast<uint16_t>(b & (b - 1))) {
+        ++n;
+    }
+    return n;
+}
+
+static void update_net_detail(void);
+
+static void on_net_card(lv_event_t *e)
+{
+    const size_t i = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
+    if (i >= g_net_shown || g_net_detail == nullptr) {
+        return;
+    }
+    g_net_open = g_net_addr[i];
+    update_net_detail();
+    lv_obj_clear_flag(g_net_detail, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(g_net_detail);
+}
+
+static void on_net_back(lv_event_t * /*e*/)
+{
+    g_net_open = -1;
+    if (g_net_detail != nullptr) {
+        lv_obj_add_flag(g_net_detail, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void on_net_refresh(lv_event_t * /*e*/)
+{
+    n2k_network_refresh();
+    set_label(g_net_summary, "Asking every device again...");
+}
+
+static lv_obj_t *net_label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, lv_coord_t w)
+{
+    lv_obj_t *l = lv_label_create(parent);
+    lv_label_set_text(l, "");
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    if (w > 0) {
+        /* One line, cut with dots. LVGL 8 only cuts a label whose height is
+         * fixed; left to grow it wraps instead. */
+        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(l, w);
+        lv_obj_set_height(l, lv_font_get_line_height(font));
+    }
+    return l;
+}
+
+static void make_net_card(size_t i)
+{
+    lv_obj_t *drop = lv_obj_create(g_net_map);
+    lv_obj_set_style_bg_color(drop, lv_color_hex(0x3A5A7C), 0);
+    lv_obj_set_style_bg_opa(drop, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(drop, 0, 0);
+    lv_obj_set_style_radius(drop, 0, 0);
+    lv_obj_clear_flag(drop, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(drop, LV_OBJ_FLAG_CLICKABLE);
+    g_net_drop[i] = drop;
+
+    lv_obj_t *card = lv_obj_create(g_net_map);
+    lv_obj_set_size(card, kNetCardW, kNetCardH);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x12243A), 0);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x1B4064), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(card, 2, 0);
+    lv_obj_set_style_radius(card, 12, 0);
+    lv_obj_set_style_pad_all(card, 10, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
+    lv_obj_add_event_cb(card, on_net_card, LV_EVENT_CLICKED, reinterpret_cast<void *>(static_cast<uintptr_t>(i)));
+    g_net_card[i] = card;
+
+    const lv_coord_t inner = kNetCardW - 24;
+    g_net_title[i] = net_label(card, &lv_font_montserrat_16, 0xFFFFFF, inner);
+    lv_obj_align(g_net_title[i], LV_ALIGN_TOP_LEFT, 0, 0);
+    g_net_role[i] = net_label(card, &lv_font_montserrat_12, kMuted, inner);
+    lv_obj_align(g_net_role[i], LV_ALIGN_TOP_LEFT, 0, 26);
+    g_net_where[i] = net_label(card, &lv_font_montserrat_12, 0xD5DEE8, inner);
+    lv_obj_align(g_net_where[i], LV_ALIGN_TOP_LEFT, 0, 46);
+    g_net_state[i] = net_label(card, &lv_font_montserrat_14, kGreen, inner);
+    lv_obj_align(g_net_state[i], LV_ALIGN_BOTTOM_LEFT, 0, 0);
+}
+
+static void update_network_view(void)
+{
+    if (g_screen != Screen::Network || g_net_map == nullptr) {
+        return;
+    }
+    const uint32_t now = millis();
+    if (g_net_ms != 0 && now - g_net_ms < 1000) {
+        return;
+    }
+    g_net_ms = now;
+    static N2kNetView v[kNetCards];
+    const size_t n = n2k_network_view(v, kNetCards);
+
+    uint32_t len = 0;
+    int problems = 0;
+    for (size_t i = 0; i < n; ++i) {
+        len += v[i].load_equivalency != 0xff ? v[i].load_equivalency : 0;
+        problems += v[i].issues != 0 ? 1 : 0;
+    }
+    char line[160];
+    if (n == 0) {
+        snprintf(line, sizeof(line), "No devices yet.");
+    } else {
+        snprintf(line, sizeof(line), "%u devices   " LV_SYMBOL_BULLET "   bus load %lu LEN (%.2f A)   " LV_SYMBOL_BULLET "   %s",
+                 static_cast<unsigned>(n), static_cast<unsigned long>(len), len * 0.05,
+                 problems == 0 ? "no problems" : (problems == 1 ? "1 device needs a look" : "devices need a look"));
+    }
+    set_label(g_net_summary, line);
+
+    const lv_coord_t width = 16 + static_cast<lv_coord_t>(n > 0 ? n - 1 : 0) * kNetStep + kNetCardW + 16;
+    const lv_coord_t span = width > kContentW ? width : kContentW;
+    lv_obj_set_size(g_net_backbone, span - 40, 6);
+    lv_obj_set_pos(g_net_backbone, 20, kNetLineY);
+    lv_obj_set_pos(g_net_term[0], 8, kNetLineY - 9);
+    lv_obj_set_pos(g_net_term[1], span - 32, kNetLineY - 9);
+
+    for (size_t i = 0; i < kNetCards; ++i) {
+        if (i >= n) {
+            if (g_net_card[i] != nullptr) {
+                lv_obj_add_flag(g_net_card[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(g_net_drop[i], LV_OBJ_FLAG_HIDDEN);
+            }
+            continue;
+        }
+        if (g_net_card[i] == nullptr) {
+            make_net_card(i);
+        }
+        const N2kNetView &d = v[i];
+        g_net_addr[i] = d.address;
+        const bool above = (i % 2) == 0;
+        const lv_coord_t x = 16 + static_cast<lv_coord_t>(i) * kNetStep;
+        const lv_coord_t y = above ? kNetLineY - 24 - kNetCardH : kNetLineY + 30;
+        lv_obj_set_pos(g_net_card[i], x, y);
+        lv_obj_set_size(g_net_drop[i], 3, 24);
+        lv_obj_set_pos(g_net_drop[i], x + kNetCardW / 2, above ? kNetLineY - 24 : kNetLineY + 6);
+        lv_obj_set_style_border_color(g_net_card[i], lv_color_hex(net_border(d)), 0);
+        set_label(g_net_title[i], d.title);
+        set_label(g_net_role[i], d.role[0] != '\0' ? d.role : "Unknown role");
+        set_label(g_net_where[i], d.install[0] != '\0' ? d.install : "");
+        char state[64];
+        char addr[16];
+        if (d.address < 252) {
+            snprintf(addr, sizeof(addr), "addr %u", static_cast<unsigned>(d.address));
+        } else {
+            snprintf(addr, sizeof(addr), "no addr");
+        }
+        const int k = issue_count(d.issues);
+        const char *len_s = d.load_equivalency == 0xff ? "LEN ?" : "";
+        char len_b[16];
+        if (d.load_equivalency != 0xff) {
+            snprintf(len_b, sizeof(len_b), "%u LEN", static_cast<unsigned>(d.load_equivalency));
+            len_s = len_b;
+        }
+        if (d.issues & kNetSilent) {
+            snprintf(state, sizeof(state), "Silent " LV_SYMBOL_BULLET " %s " LV_SYMBOL_BULLET " %s", len_s, addr);
+        } else if (k > 0) {
+            snprintf(state, sizeof(state), "%d %s " LV_SYMBOL_BULLET " %s " LV_SYMBOL_BULLET " %s", k,
+                     k == 1 ? "issue" : "issues", len_s, addr);
+        } else {
+            snprintf(state, sizeof(state), "OK " LV_SYMBOL_BULLET " %s " LV_SYMBOL_BULLET " %s", len_s, addr);
+        }
+        set_label(g_net_state[i], state);
+        lv_obj_set_style_text_color(g_net_state[i],
+                                    lv_color_hex((d.issues & kNetSilent) ? kMuted : (k > 0 ? kAmber : kGreen)), 0);
+        lv_obj_clear_flag(g_net_card[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(g_net_drop[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    g_net_shown = n;
+    if (g_net_open >= 0) {
+        update_net_detail();
+    }
+}
+
+static void update_net_detail(void)
+{
+    if (g_net_detail == nullptr || g_net_open < 0) {
+        return;
+    }
+    static N2kNetInfo info;
+    static N2kPgnLine pgns[24];
+    static N2kPgnLine recent[10];
+    size_t np = 0, nr = 0;
+    if (!n2k_device_details(static_cast<uint8_t>(g_net_open), &info, pgns, 24, &np, recent, 10, &nr)) {
+        set_label(g_net_d_title, "Gone");
+        set_label(g_net_d_sub, "This device is no longer on the bus.");
+        return;
+    }
+    const N2kNetView &d = info.view;
+    set_label(g_net_d_title, d.title);
+    char sub[96];
+    snprintf(sub, sizeof(sub), "%s   " LV_SYMBOL_BULLET "   address %u%s%s", d.role[0] ? d.role : "Unknown",
+             static_cast<unsigned>(d.address), info.maker[0] ? "   " LV_SYMBOL_BULLET "   " : "", info.maker);
+    set_label(g_net_d_sub, sub);
+
+    /* What the terminal takes from it: owners live in loop(), so read here. */
+    N2kSourceLock locks[16];
+    const size_t nl = n2k_conv_sources(locks, 16);
+    char owns[96] = "";
+    for (size_t i = 0; i < nl; ++i) {
+        if (locks[i].src == d.address) {
+            const size_t used = strlen(owns);
+            snprintf(owns + used, sizeof(owns) - used, "%s%s", used ? ", " : "", locks[i].what);
+        }
+    }
+
+    static char id[900];
+    size_t u = 0;
+    auto add = [&](const char *fmt, auto... args) {
+        if (u < sizeof(id)) {
+            u += static_cast<size_t>(snprintf(id + u, sizeof(id) - u, fmt, args...));
+        }
+    };
+    if (d.install[0]) {
+        add("Installed: %s\n", d.install);
+    }
+    if (info.install2[0]) {
+        add("           %s\n", info.install2);
+    }
+    if (info.named) {
+        add("Maker code %u, class %u, function %u\n", static_cast<unsigned>(info.manufacturer),
+            static_cast<unsigned>(d.device_class), static_cast<unsigned>(d.function));
+        add("Instance %u, system %u, unique %lu\n", static_cast<unsigned>(info.instance),
+            static_cast<unsigned>(info.system_instance), static_cast<unsigned long>(info.unique));
+    } else {
+        add("No address claim heard yet\n");
+    }
+    if (info.have_product) {
+        add("Model %s\n", info.model);
+        add("Software %s\n", info.software);
+        if (info.model_version[0]) {
+            add("Version %s\n", info.model_version);
+        }
+        if (info.serial[0]) {
+            add("Serial %s\n", info.serial);
+        }
+        if (d.load_equivalency != 0xff) {
+            add("Load %u LEN (%u mA)\n", static_cast<unsigned>(d.load_equivalency),
+                static_cast<unsigned>(d.load_equivalency) * 50u);
+        }
+        if (!d.self) {
+            add("NMEA 2000 version %u.%03u, certification level %u\n", static_cast<unsigned>(info.n2k_version / 1000),
+                static_cast<unsigned>(info.n2k_version % 1000), static_cast<unsigned>(info.certification));
+        }
+    } else if (!d.self) {
+        add("Product information not received\n");
+    }
+    if (info.heartbeat_ms != 0) {
+        add("Heartbeat every %lu s, last %lu s ago\n", static_cast<unsigned long>(info.heartbeat_ms / 1000),
+            static_cast<unsigned long>(info.heartbeat_age_ms / 1000));
+    }
+    if (info.transmits != 0xff) {
+        add("Transmit list: %u PGNs\n", static_cast<unsigned>(info.transmits));
+    }
+    if (info.address_changes > 0) {
+        add("Moved address %u times, last from %u\n", static_cast<unsigned>(info.address_changes),
+            static_cast<unsigned>(info.previous_address));
+    }
+    add("Terminal uses it for: %s", owns[0] ? owns : "nothing");
+    set_label(g_net_d_ident, id);
+    lv_obj_update_layout(g_net_d_ident);
+    lv_obj_align_to(g_net_d_issues, g_net_d_ident, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 10);
+
+    static char is[600];
+    size_t iu = 0;
+    is[0] = '\0';
+    for (uint16_t bit = 1; bit != 0 && bit <= kNetSilent; bit = static_cast<uint16_t>(bit << 1)) {
+        if (d.issues & bit) {
+            iu += static_cast<size_t>(snprintf(is + iu, sizeof(is) - iu, "%s%s", iu ? "\n" : "",
+                                               n2k_net_issue_text(static_cast<N2kNetIssue>(bit))));
+        }
+    }
+    set_label(g_net_d_issues, is);
+
+    static char list[2600];
+    size_t lu = 0;
+    auto addl = [&](const char *fmt, auto... args) {
+        if (lu < sizeof(list)) {
+            lu += static_cast<size_t>(snprintf(list + lu, sizeof(list) - lu, fmt, args...));
+        }
+    };
+    addl("PGNS IT SENDS\n");
+    for (size_t i = 0; i < np; ++i) {
+        addl("%6lu  %-15s %3u.%u/s   %s\n", static_cast<unsigned long>(pgns[i].pgn), pgns[i].name,
+             static_cast<unsigned>(pgns[i].rate_x10 / 10), static_cast<unsigned>(pgns[i].rate_x10 % 10), pgns[i].text);
+    }
+    if (np == 0) {
+        addl(d.self ? "This terminal sends network management only.\n" : "Nothing heard from it yet.\n");
+    }
+    addl("\nRECENT MESSAGES\n");
+    for (size_t i = 0; i < nr; ++i) {
+        addl("%5.1f s  %6lu  %s\n", recent[i].age_ms / 1000.0, static_cast<unsigned long>(recent[i].pgn), recent[i].text);
+    }
+    set_label(g_net_d_pgns, list);
+}
+
+static void build_network_page(lv_obj_t *parent)
+{
+    lv_obj_t *head = make_card(parent, "NETWORK", kContentW - 16, 64);
+    lv_obj_set_pos(head, 8, 0);
+    g_net_summary = net_label(head, &lv_font_montserrat_16, 0xFFFFFF, kContentW - 200);
+    lv_obj_align(g_net_summary, LV_ALIGN_TOP_LEFT, 0, 22);
+    lv_obj_t *refresh = make_ghost_btn(head, "Refresh", on_net_refresh, 120);
+    lv_obj_align(refresh, LV_ALIGN_TOP_RIGHT, 0, 4);
+
+    g_net_map = lv_obj_create(parent);
+    lv_obj_set_size(g_net_map, kContentW, kContentH - 72);
+    lv_obj_set_pos(g_net_map, 0, 72);
+    lv_obj_set_style_bg_opa(g_net_map, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(g_net_map, 0, 0);
+    lv_obj_set_style_pad_all(g_net_map, 0, 0);
+    lv_obj_set_scroll_dir(g_net_map, LV_DIR_HOR);
+    lv_obj_set_scrollbar_mode(g_net_map, LV_SCROLLBAR_MODE_ACTIVE);
+
+    g_net_backbone = lv_obj_create(g_net_map);
+    lv_obj_set_style_bg_color(g_net_backbone, lv_color_hex(0x3A5A7C), 0);
+    lv_obj_set_style_bg_opa(g_net_backbone, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_net_backbone, 0, 0);
+    lv_obj_set_style_radius(g_net_backbone, 3, 0);
+    lv_obj_clear_flag(g_net_backbone, LV_OBJ_FLAG_CLICKABLE);
+    for (int i = 0; i < 2; ++i) {
+        lv_obj_t *t = lv_obj_create(g_net_map);
+        lv_obj_set_size(t, 24, 24);
+        lv_obj_set_style_bg_color(t, lv_color_hex(0x5C7080), 0);
+        lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(t, 0, 0);
+        lv_obj_set_style_radius(t, 4, 0);
+        lv_obj_set_style_pad_all(t, 0, 0);
+        lv_obj_clear_flag(t, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *l = lv_label_create(t);
+        lv_label_set_text(l, "T");
+        lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_center(l);
+        g_net_term[i] = t;
+    }
+
+    /* Node detail, over the map. */
+    g_net_detail = lv_obj_create(parent);
+    lv_obj_set_size(g_net_detail, kContentW, kContentH);
+    lv_obj_set_pos(g_net_detail, 0, 0);
+    lv_obj_set_style_bg_color(g_net_detail, lv_color_hex(0x071422), 0);
+    lv_obj_set_style_bg_opa(g_net_detail, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_net_detail, 0, 0);
+    lv_obj_set_style_radius(g_net_detail, 0, 0);
+    lv_obj_set_style_pad_all(g_net_detail, 12, 0);
+    lv_obj_clear_flag(g_net_detail, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_net_detail, LV_OBJ_FLAG_HIDDEN);
+    g_net_d_title = net_label(g_net_detail, &lv_font_montserrat_24, 0xFFFFFF, kContentW - 180);
+    lv_obj_align(g_net_d_title, LV_ALIGN_TOP_LEFT, 0, 0);
+    g_net_d_sub = net_label(g_net_detail, &lv_font_montserrat_14, kMuted, kContentW - 180);
+    lv_obj_align(g_net_d_sub, LV_ALIGN_TOP_LEFT, 0, 32);
+    lv_obj_t *back = make_ghost_btn(g_net_detail, "Back to map", on_net_back, 150);
+    lv_obj_set_height(back, 40);
+    lv_obj_align(back, LV_ALIGN_TOP_RIGHT, 0, 0);
+
+    lv_obj_t *left = make_card(g_net_detail, "IDENTITY AND HEALTH", 300, kContentH - 84);
+    lv_obj_set_pos(left, 0, 60);
+    lv_obj_add_flag(left, LV_OBJ_FLAG_SCROLLABLE);
+    g_net_d_ident = lv_label_create(left);
+    lv_label_set_long_mode(g_net_d_ident, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_net_d_ident, 268);
+    lv_obj_set_style_text_font(g_net_d_ident, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(g_net_d_ident, lv_color_hex(0xD5DEE8), 0);
+    lv_obj_align(g_net_d_ident, LV_ALIGN_TOP_LEFT, 0, 24);
+    g_net_d_issues = lv_label_create(left);
+    lv_label_set_long_mode(g_net_d_issues, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_net_d_issues, 268);
+    lv_obj_set_style_text_font(g_net_d_issues, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(g_net_d_issues, lv_color_hex(kAmber), 0);
+    lv_label_set_text(g_net_d_issues, "");
+
+    lv_obj_t *right = make_card(g_net_detail, "TRAFFIC", kContentW - 24 - 308, kContentH - 84);
+    lv_obj_set_pos(right, 308, 60);
+    lv_obj_add_flag(right, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(right, LV_DIR_VER);
+    g_net_d_pgns = lv_label_create(right);
+    lv_label_set_long_mode(g_net_d_pgns, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(g_net_d_pgns, kContentW - 24 - 308 - 32);
+    lv_obj_set_style_text_font(g_net_d_pgns, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(g_net_d_pgns, lv_color_hex(0xD5DEE8), 0);
+    lv_obj_align(g_net_d_pgns, LV_ALIGN_TOP_LEFT, 0, 24);
 }
 
 static void build_mode_badge(lv_obj_t *bar)
@@ -1809,7 +2263,7 @@ static void build_helm_page(lv_obj_t *parent)
                               &lv_font_montserrat_16);
 
     g_helm_link = make_helm_sub(parent, "Link");
-    g_helm_nmea = helm_line(g_helm_link, "Bluetooth  —", 0xFFFFFF, 64, &lv_font_montserrat_20);
+    g_helm_nmea = helm_line(g_helm_link, "Bluetooth  -", 0xFFFFFF, 64, &lv_font_montserrat_20);
     g_helm_tcp = helm_line(g_helm_link, "Hotspot  starting", 0xFFFFFF, 112, &lv_font_montserrat_20);
     g_helm_ip = helm_line(g_helm_link, "Phones on it  0", 0xE6C35C, 160, &lv_font_montserrat_20);
     g_helm_ap = helm_line(g_helm_link, "NMEA listeners  0", 0xFFFFFF, 208, &lv_font_montserrat_20);
@@ -2364,6 +2818,13 @@ static void create_ui(void)
     lv_obj_add_event_cb(g_page_data, on_dismiss_rail, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_flag(g_page_data, LV_OBJ_FLAG_HIDDEN);
 
+    g_page_net = lv_obj_create(scr);
+    place_content(g_page_net);
+    lv_obj_set_style_bg_opa(g_page_net, LV_OPA_TRANSP, 0);
+    build_network_page(g_page_net);
+    lv_obj_add_event_cb(g_page_net, on_dismiss_rail, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_flag(g_page_net, LV_OBJ_FLAG_HIDDEN);
+
     g_page_home = lv_obj_create(scr);
     place_content(g_page_home);
     lv_obj_set_style_bg_color(g_page_home, lv_color_hex(0x071422), 0);
@@ -2439,13 +2900,16 @@ static void create_ui(void)
 
     g_rail_home = rail_group(g_rail);
 #if LMYC_WITH_REPORTS_CHARTS
-    make_rail_nav(g_rail_home, "Charts", "Last picture", 0x00B4A6, on_show_chart, 8);
-    make_rail_nav(g_rail_home, "Reports", "Open items", 0x00B4A6, on_show_book, 112);
-    make_rail_nav(g_rail_home, "Instruments", "Depth and wind", 0x00B4A6, on_show_helm, 216);
-    make_rail_nav(g_rail_home, "Diagnostics", "Radio and card", 0x5C7080, on_show_diag, 320);
+    /* Five on the full build: shorter buttons so all fit in 424 px. */
+    make_rail_nav(g_rail_home, "Charts", "Last picture", 0x00B4A6, on_show_chart, 8, 76);
+    make_rail_nav(g_rail_home, "Reports", "Open items", 0x00B4A6, on_show_book, 90, 76);
+    make_rail_nav(g_rail_home, "Instruments", "Depth and wind", 0x00B4A6, on_show_helm, 172, 76);
+    make_rail_nav(g_rail_home, "Network", "Devices on the bus", 0x00B4A6, on_show_net, 254, 76);
+    make_rail_nav(g_rail_home, "Diagnostics", "Radio and card", 0x5C7080, on_show_diag, 336, 76);
 #else
     make_rail_nav(g_rail_home, "Instruments", "Depth and wind", 0x00B4A6, on_show_helm, 8);
-    make_rail_nav(g_rail_home, "Diagnostics", "Radio and Wi-Fi", 0x5C7080, on_show_diag, 112);
+    make_rail_nav(g_rail_home, "Network", "Devices on the bus", 0x00B4A6, on_show_net, 112);
+    make_rail_nav(g_rail_home, "Diagnostics", "Radio and Wi-Fi", 0x5C7080, on_show_diag, 216);
 #endif
 
     g_rail_instr = rail_group(g_rail);
@@ -2474,7 +2938,14 @@ static void create_ui(void)
 
     g_rail_data = rail_group(g_rail);
     rail_action(g_rail_data, "Diagnostics", on_show_diag, 8);
+    rail_action(g_rail_data, "Network", on_show_net, 60);
     lv_obj_add_flag(g_rail_data, LV_OBJ_FLAG_HIDDEN);
+
+    g_rail_net = rail_group(g_rail);
+    rail_action(g_rail_net, "Refresh", on_net_refresh, 8);
+    rail_action(g_rail_net, "Data source", on_show_data, 60);
+    rail_action(g_rail_net, "Diagnostics", on_show_diag, 112);
+    lv_obj_add_flag(g_rail_net, LV_OBJ_FLAG_HIDDEN);
 
     g_rail_ear = lv_obj_create(g_rail);
     lv_obj_set_size(g_rail_ear, kEarW, kContentH);

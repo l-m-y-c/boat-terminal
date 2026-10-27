@@ -4,6 +4,8 @@
     python3 tools/terminal.py status                 # GET /status.json
     python3 tools/terminal.py bus                    # GET /n2k.json, summarised
     python3 tools/terminal.py bus --out bus.json
+    python3 tools/terminal.py network [--refresh]   # every device on the bus
+    python3 tools/terminal.py device 35              # one device in detail
     python3 tools/terminal.py record --seconds 120 --out dock.log
     python3 tools/terminal.py nmea --seconds 30      # TCP 10110: what chart apps get
 
@@ -23,7 +25,7 @@ import urllib.error
 import urllib.request
 from collections import Counter
 
-from lmyc_dev.diag import summarise_n2k, summarise_status
+from lmyc_dev.diag import summarise_device, summarise_n2k, summarise_network, summarise_status
 
 
 def _get(host: str, path: str, timeout: float = 4.0) -> str:
@@ -51,6 +53,25 @@ def cmd_bus(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_network(args: argparse.Namespace) -> int:
+    body = _get(args.host, "/n2k/network.json" + ("?refresh=1" if args.refresh else ""))
+    if args.refresh:
+        time.sleep(3)
+        body = _get(args.host, "/n2k/network.json")
+    d = json.loads(body)
+    print(json.dumps(d, indent=2) if args.raw else summarise_network(d))
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(body)
+    return 0
+
+
+def cmd_device(args: argparse.Namespace) -> int:
+    d = json.loads(_get(args.host, f"/n2k/device.json?src={args.src}"))
+    print(json.dumps(d, indent=2) if args.raw else summarise_device(d))
+    return 0
+
+
 def cmd_record(args: argparse.Namespace) -> int:
     """Poll /n2k/frames like the phone's Record bus, into a candump log."""
     after, frames, lost = 0, 0, 0
@@ -62,7 +83,8 @@ def cmd_record(args: argparse.Namespace) -> int:
         try:
             while deadline is None or time.monotonic() < deadline:
                 try:
-                    body = _get(args.host, f"/n2k/frames?after={after}")
+                    src = f"&src={args.src}" if args.src is not None else ""
+                    body = _get(args.host, f"/n2k/frames?after={after}{src}")
                 except (urllib.error.URLError, OSError) as exc:
                     print(f"\r{exc}", file=sys.stderr)
                     time.sleep(1)
@@ -166,8 +188,18 @@ def main() -> int:
     p.add_argument("--raw", action="store_true")
     p.add_argument("--out")
     p.set_defaults(fn=cmd_bus)
+    p = sub.add_parser("network")
+    p.add_argument("--refresh", action="store_true")
+    p.add_argument("--raw", action="store_true")
+    p.add_argument("--out")
+    p.set_defaults(fn=cmd_network)
+    p = sub.add_parser("device")
+    p.add_argument("src", type=int)
+    p.add_argument("--raw", action="store_true")
+    p.set_defaults(fn=cmd_device)
     p = sub.add_parser("record")
     p.add_argument("--seconds", type=float)
+    p.add_argument("--src", type=int, help="only this device's frames")
     p.add_argument("--out", required=True)
     p.set_defaults(fn=cmd_record)
     p = sub.add_parser("nmea")

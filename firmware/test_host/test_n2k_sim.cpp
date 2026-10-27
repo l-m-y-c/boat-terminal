@@ -231,7 +231,9 @@ static void test_run(void)
     expect_true("AIS class B position", g_sent[129039UL] >= 3);
     expect_true("AIS class B static A and B", g_sent[129809UL] >= 1 && g_sent[129810UL] >= 1);
     expect_true("battery and sea temperature", g_sent[127508UL] >= 50 && g_sent[130316UL] >= 50);
-    expect_true("15 PGN types", g_sent.size() == 15);
+    expect_true("15 data PGN types + address claim + heartbeat", g_sent.size() == 17);
+    expect_true("every virtual device claims its address", g_sent[60928UL] == 6);
+    expect_true("every virtual device sends a heartbeat each minute", g_sent[126993UL] >= 6 * 2);
 
     bool sums = true;
     for (const auto &s : g_sentences) {

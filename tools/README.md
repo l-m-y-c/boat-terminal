@@ -4,6 +4,7 @@ Tools for building, flashing and debugging the boat terminal, at the bench and o
 
 | Tool | For |
 |------|-----|
+| `tools/boat.py` | Which boat a terminal is built for: ID (hotspot and Bluetooth name), display name, maintenance-book post, from the club fleet list |
 | `tools/board.py` | Find the board, see what it is running, get it out of the bootloader, flash it and check it booted |
 | `tools/console.py` | The serial console: log, commands, `NMEA DIAG` snapshots, and the boat session |
 | `tools/terminal.py` | The terminal over its hotspot: status, bus check, recording the bus, the 0183 stream chart apps get |
@@ -26,6 +27,10 @@ The serial tools pick the UART socket when it is there and never toggle DTR/RTS,
 ## Make targets
 
 ```text
+make boat-list          the club fleet
+make boat BOAT=baca-lele   build this terminal as that boat (secrets.h), then make flash
+make boat-show          what this machine will build
+
 make board-ports        serial ports, and which socket is which
 make board-status       app / bootloader / silent / absent
 make board-attach       WSL: attach the board with usbipd --auto-attach
@@ -47,6 +52,10 @@ make nmea-tcp           30 s of TCP 10110: sentence rates, bad checksums
 make capture-summary CAP=dock.log [TERMINAL=23]
 make replay CAP=dock.log      -> dock.log.0183.txt and dock.log.n2k.json
 make sim-capture              a 60 s capture from the simulator
+
+make network            the NMEA 2000 network over the UART (NMEA NET)
+make device SRC=35      one device: identity, health, PGNs decoded, recent messages
+make network-wifi       the same over the boat Wi-Fi (GET /n2k/network.json)
 
 make tools-test         the tools' own tests (also part of make test)
 ```

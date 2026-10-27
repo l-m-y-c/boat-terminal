@@ -461,7 +461,7 @@ const diagnosticsHelp = <String, (String, List<String>)>{
       'On the terminal counts TCP connections to the terminal itself, at '
           'most 4. This phone\'s relay is one of them.',
       'Sentences out and Not delivered are the terminal\'s counters; tap them '
-          'on NMEA data for the details.',
+          'on the Network tab for the details.',
     ],
   ),
   'bus': (

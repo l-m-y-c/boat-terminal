@@ -1,6 +1,7 @@
 #include "n2k.h"
 
 #include "n2k_diag.h"
+#include "n2k_network.h"
 #include "n2k_node.h"
 #include "n2k_sim.h"
 #include "n2k_to_0183.h"
@@ -106,6 +107,10 @@ static uint32_t g_restart_at = 0;
 
 static QueueHandle_t g_queue = nullptr;
 static QueueHandle_t g_msgs = nullptr;
+/* Frames the terminal sends on the simulator's virtual bus. */
+static QueueHandle_t g_to_sim = nullptr;
+/* Set by the web server, done by the node task. */
+static volatile bool g_net_refresh = false;
 static TaskHandle_t g_rx_task = nullptr;
 static TaskHandle_t g_node_task = nullptr;
 static TaskHandle_t g_sim_task = nullptr;
@@ -298,7 +303,7 @@ static void capture_frame(const N2kFrame &f)
     portEXIT_CRITICAL(&g_capture_lock);
 }
 
-size_t n2k_capture_read(uint32_t after, char *out, size_t cap, uint32_t *next, uint32_t *lost)
+size_t n2k_capture_read(uint32_t after, char *out, size_t cap, uint32_t *next, uint32_t *lost, int src)
 {
     if (next != nullptr) {
         *next = after;
@@ -350,6 +355,9 @@ size_t n2k_capture_read(uint32_t after, char *out, size_t cap, uint32_t *next, u
                 if (lost != nullptr) {
                     ++*lost;
                 }
+                continue;
+            }
+            if (src >= 0 && static_cast<int>(c.id & 0xffu) != src) {
                 continue;
             }
             char hex[17];
@@ -404,6 +412,22 @@ size_t n2k_diag_copy(char *out, size_t cap)
 bool N2kStack::CANSendFrame(unsigned long id, unsigned char len, const unsigned char *buf,
                             bool /*wait_sent*/)
 {
+    if (g_source == DataSource::Simulator) {
+        /* The virtual bus: the simulated devices answer the terminal's requests. */
+        if (g_to_sim == nullptr || buf == nullptr) {
+            return false;
+        }
+        N2kFrame f = {};
+        f.id = id & 0x1fffffffu;
+        f.len = len > 8 ? 8 : len;
+        memcpy(f.data, buf, f.len);
+        if (xQueueSend(g_to_sim, &f, 0) != pdTRUE) {
+            g_tx_failed = g_tx_failed + 1;
+            return false;
+        }
+        g_tx_frames = g_tx_frames + 1;
+        return true;
+    }
     if (!g_driver_on || g_bus_off || buf == nullptr) {
         return false;
     }
@@ -438,6 +462,7 @@ bool N2kStack::CANGetFrame(unsigned long &id, unsigned char &len, unsigned char 
     const bool fast = fast_pgn(n2k_diag_pgn(frame.id));
     xSemaphoreTake(g_diag_tables, portMAX_DELAY);
     n2k_diag_frame(frame.id, frame.len, frame.data, fast, millis());
+    n2k_net_frame(static_cast<uint8_t>(frame.id & 0xffu), millis());
     xSemaphoreGive(g_diag_tables);
     return true;
 }
@@ -447,6 +472,7 @@ static void on_n2k_msg(const tN2kMsg &msg)
 {
     xSemaphoreTake(g_diag_tables, portMAX_DELAY);
     n2k_diag_message(msg, millis());
+    n2k_net_message(msg, millis());
     xSemaphoreGive(g_diag_tables);
     if (g_msgs == nullptr || xQueueSend(g_msgs, &msg, 0) != pdTRUE) {
         g_lost_messages = g_lost_messages + 1;
@@ -617,6 +643,48 @@ static void update_node_state(void)
     }
 }
 
+/* Network discovery: tell it who this terminal is once a second, then send
+ * the next ISO request it wants, if one is due. */
+static void discover(void)
+{
+    static uint32_t self_ms = 0;
+    const uint32_t now = millis();
+    const bool ready = g_stack.ready_to_send() && g_stack.GetN2kSource() < N2kNullCanBusAddress;
+    uint8_t dst = 0;
+    unsigned long pgn = 0;
+    bool ask = false;
+    xSemaphoreTake(g_diag_tables, portMAX_DELAY);
+    if (g_net_refresh) {
+        g_net_refresh = false;
+        n2k_net_refresh();
+    }
+    if (self_ms == 0 || now - self_ms >= 1000) {
+        self_ms = now;
+        static char install[72];
+        g_stack.GetInstallationDescription1(install, sizeof(install));
+        N2kNetSelf me = {};
+        me.address = g_stack.GetN2kSource();
+        me.unique = n2k_node_unique_number();
+        me.manufacturer = n2k_node_manufacturer_code();
+        me.device_class = 25;
+        me.function = 130;
+        me.load_equivalency = 10;
+        me.model = "LMYC Boat Terminal";
+        me.software = LMYC_FW_VERSION;
+        me.model_version = "Waveshare ESP32-S3-Touch-LCD-7";
+        me.serial = n2k_node_serial();
+        me.install1 = install;
+        n2k_net_set_self(me);
+    }
+    ask = n2k_net_next_request(now, ready, &dst, &pgn);
+    xSemaphoreGive(g_diag_tables);
+    if (ask) {
+        tN2kMsg req;
+        SetN2kPGN59904(req, dst, pgn);
+        g_stack.SendMsg(req);
+    }
+}
+
 static void node_task(void * /*arg*/)
 {
     /* The library waits 200 ms after Open() before it claims an address. */
@@ -645,6 +713,7 @@ static void node_task(void * /*arg*/)
         }
         n2k_node_save_changes(g_stack);
         update_node_state();
+        discover();
         if (g_source == DataSource::Nmea2000 && g_node == NodeState::Claimed && g_address != logged) {
             logged = g_address;
             char line[64];
@@ -690,6 +759,10 @@ static void sim_task(void * /*arg*/)
         if (g_sim_paused || !nmea_io_quiet()) {
             continue;
         }
+        N2kFrame asked;
+        while (g_to_sim != nullptr && xQueueReceive(g_to_sim, &asked, 0) == pdTRUE) {
+            n2k_sim_receive(asked, millis(), push_frame, nullptr);
+        }
         n2k_sim_step(millis(), push_frame, nullptr);
     }
 }
@@ -719,6 +792,7 @@ static void note_message(const tN2kMsg &msg)
 }
 
 static BusState bus_state(void);
+static void snapshot_owners(void);
 
 /* Per-second deltas the hint is chosen from. loop() only. */
 static uint32_t g_rate_repeats = 0;
@@ -844,6 +918,7 @@ static void roll_rates(void)
     g_rate_frames = frames;
     g_rate_messages = g_messages;
     pick_hint(now, span);
+    snapshot_owners();
     xSemaphoreTake(g_diag_tables, portMAX_DELAY);
     n2k_diag_tick(now);
     xSemaphoreGive(g_diag_tables);
@@ -897,9 +972,11 @@ void n2k_init(N2kCanSelectFn select_can)
     }
 
     const bool bus = g_source == DataSource::Nmea2000;
-    /* A full node on the backbone. On the simulator the library listens to
-     * a virtual bus and sends nothing anywhere. */
-    n2k_node_configure(g_stack, bus);
+    /* A full node: on the backbone, or on the simulator's virtual bus, where
+     * its frames go to the simulated devices and nowhere else. */
+    n2k_node_configure(g_stack, true);
+    g_to_sim = bus ? nullptr : xQueueCreate(64, sizeof(N2kFrame));
+    n2k_net_reset();
     g_stack.EnableForward(false);
     g_stack.SetN2kCANMsgBufSize(kReassemblySlots);
     g_stack.SetN2kCANSendFrameBufSize(kSendBufferFrames);
@@ -1151,6 +1228,38 @@ static void log_diag(void)
     heap_caps_free(json);
 }
 
+/* NMEA NET: the topology JSON. NMEA NET 35: one device. NMEA NET REFRESH:
+ * ask everyone again. */
+static void log_network(const char *arg)
+{
+    while (*arg == ' ') {
+        ++arg;
+    }
+    if (strcasecmp(arg, "REFRESH") == 0) {
+        n2k_network_refresh();
+        n2k_log("NMEA NET: asking every device again");
+        return;
+    }
+    constexpr size_t kCap = 49152;
+    char *json = static_cast<char *>(heap_caps_malloc(kCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (json == nullptr) {
+        return;
+    }
+    size_t n = 0;
+    if (*arg != '\0') {
+        n = n2k_device_copy(static_cast<uint8_t>(strtoul(arg, nullptr, 10)), json, kCap);
+        if (n == 0) {
+            n2k_log("NMEA NET: no device at that address");
+        }
+    } else {
+        n = n2k_network_copy(json, kCap);
+    }
+    if (n > 0) {
+        n2k_log(json);
+    }
+    heap_caps_free(json);
+}
+
 static void switch_from_console(DataSource next)
 {
     if (next == g_source) {
@@ -1219,6 +1328,8 @@ bool n2k_handle_command(const char *line)
         log_stats();
     } else if (strcasecmp(arg, "DIAG") == 0) {
         log_diag();
+    } else if (strncasecmp(arg, "NET", 3) == 0 && (arg[3] == '\0' || arg[3] == ' ')) {
+        log_network(arg + 3);
     } else if (strcasecmp(arg, "DEMO") == 0) {
         if (require_simulator("DEMO")) {
             pause_simulator();
@@ -1236,7 +1347,102 @@ bool n2k_handle_command(const char *line)
             }
         }
     } else {
-        n2k_log("NMEA command: SIM, N2K, STATS, DIAG, DEMO, or PGN <number> [src=N] <hex>");
+        n2k_log("NMEA command: SIM, N2K, STATS, DIAG, NET [address|REFRESH], DEMO, or PGN <number> [src=N] <hex>");
     }
     return true;
+}
+
+/* ---- network topology (web server and screen) ----------------------------- */
+
+/* Which values each device owns, copied by loop() once a second: the
+ * converter's owners belong to loop(), the topology to the node task. */
+static N2kSourceLock g_owners[16];
+static size_t g_owner_n = 0;
+
+static void snapshot_owners(void)
+{
+    N2kSourceLock now[16];
+    const size_t n = n2k_conv_sources(now, 16);
+    xSemaphoreTake(g_diag_tables, portMAX_DELAY);
+    memcpy(g_owners, now, sizeof(N2kSourceLock) * n);
+    g_owner_n = n;
+    xSemaphoreGive(g_diag_tables);
+}
+
+void n2k_network_refresh(void) { g_net_refresh = true; }
+
+size_t n2k_network_copy(char *out, size_t cap)
+{
+    if (out == nullptr || cap == 0 || g_diag_tables == nullptr) {
+        return 0;
+    }
+    xSemaphoreTake(g_diag_tables, portMAX_DELAY);
+    const size_t n = n2k_net_json(out, cap, millis());
+    xSemaphoreGive(g_diag_tables);
+    return n;
+}
+
+size_t n2k_device_copy(uint8_t address, char *out, size_t cap)
+{
+    if (out == nullptr || cap < 64 || g_diag_tables == nullptr) {
+        return 0;
+    }
+    const uint32_t now = millis();
+    size_t used = static_cast<size_t>(snprintf(out, cap, "{\"v\":1,\"device\":"));
+    xSemaphoreTake(g_diag_tables, portMAX_DELAY);
+    size_t n = n2k_net_device_json(out + used, cap - used, address, now);
+    if (n == 0) {
+        xSemaphoreGive(g_diag_tables);
+        return 0;
+    }
+    used += n;
+    used += static_cast<size_t>(snprintf(out + used, cap - used, ",\"owns\":["));
+    bool first = true;
+    for (size_t i = 0; i < g_owner_n && used + 64 < cap; ++i) {
+        if (g_owners[i].src == address) {
+            used += static_cast<size_t>(snprintf(out + used, cap - used, "%s\"%s\"", first ? "" : ",", g_owners[i].what));
+            first = false;
+        }
+    }
+    used += static_cast<size_t>(snprintf(out + used, cap - used, "],"));
+    n = used < cap ? n2k_diag_device_json(out + used, cap - used, address, now) : 0;
+    xSemaphoreGive(g_diag_tables);
+    if (n == 0 || used + n + 3 >= cap) {
+        return 0;
+    }
+    used += n;
+    used += static_cast<size_t>(snprintf(out + used, cap - used, "}\n"));
+    return used;
+}
+
+size_t n2k_network_view(N2kNetView *out, size_t max)
+{
+    if (out == nullptr || g_diag_tables == nullptr) {
+        return 0;
+    }
+    xSemaphoreTake(g_diag_tables, portMAX_DELAY);
+    const size_t n = n2k_net_view(out, max, millis());
+    xSemaphoreGive(g_diag_tables);
+    return n;
+}
+
+bool n2k_device_details(uint8_t address, N2kNetInfo *info, N2kPgnLine *pgns, size_t max_pgns, size_t *n_pgns,
+                        N2kPgnLine *recent, size_t max_recent, size_t *n_recent)
+{
+    if (g_diag_tables == nullptr) {
+        return false;
+    }
+    const uint32_t now = millis();
+    xSemaphoreTake(g_diag_tables, portMAX_DELAY);
+    const bool ok = n2k_net_info(address, info, now);
+    const size_t np = n2k_diag_device_pgns(address, pgns, max_pgns, now);
+    const size_t nr = n2k_diag_device_recent(address, recent, max_recent, now);
+    xSemaphoreGive(g_diag_tables);
+    if (n_pgns != nullptr) {
+        *n_pgns = np;
+    }
+    if (n_recent != nullptr) {
+        *n_recent = nr;
+    }
+    return ok;
 }

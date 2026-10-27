@@ -26,4 +26,6 @@ bool n2k_node_save_changes(tNMEA2000 &stack);
 
 /* The NAME fields, for the screen, the phone and /n2k.json. */
 uint32_t n2k_node_unique_number(void);
+/* The serial code in Product Information: the MAC, as 12 hex digits. */
+const char *n2k_node_serial(void);
 uint16_t n2k_node_manufacturer_code(void);

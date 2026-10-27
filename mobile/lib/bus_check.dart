@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:share_plus/share_plus.dart';
 
 import 'boat_wifi.dart';
+import 'network_page.dart';
 import 'nmea_data_page.dart' show toneColor;
 import 'terminal_stats.dart';
 import 'ui_kit.dart';
@@ -331,7 +332,11 @@ class BusRecorder extends ChangeNotifier {
     this._client,
     this._folder,
     this.poll = const Duration(milliseconds: 500),
+    this.src,
   });
+
+  /// Only this device's frames, or every frame when null.
+  final int? src;
 
   final http.Client? _client;
   final Directory? _folder;
@@ -356,7 +361,7 @@ class BusRecorder extends ChangeNotifier {
     final now = DateTime.now();
     String two(int n) => n.toString().padLeft(2, '0');
     final name =
-        'lmyc-bus-${now.year}${two(now.month)}${two(now.day)}-'
+        'lmyc-bus${src == null ? '' : '-dev$src'}-${now.year}${two(now.month)}${two(now.day)}-'
         '${two(now.hour)}${two(now.minute)}${two(now.second)}.log';
     final f = File('${dir.path}/$name');
     _sink = f.openWrite();
@@ -407,7 +412,12 @@ class BusRecorder extends ChangeNotifier {
   Future<bool> _once(http.Client c) async {
     try {
       final res = await c
-          .get(Uri.parse('http://$kTerminalHttpHost/n2k/frames?after=$_next'))
+          .get(
+            Uri.parse(
+              'http://$kTerminalHttpHost/n2k/frames?after=$_next'
+              '${src == null ? '' : '&src=$src'}',
+            ),
+          )
           .timeout(const Duration(seconds: 3));
       final chunk = res.statusCode == 200 ? FramesChunk.parse(res.body) : null;
       if (chunk == null) {
@@ -565,6 +575,15 @@ class _BusCheckPageState extends State<BusCheckPage> {
         Text(
           d.source == 'sim' ? 'Simulator. Not the boat\'s data.' : _selfLine(d),
           style: TextStyle(color: p.muted, fontSize: 13.5, height: 1.35),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          key: const ValueKey('bus-open-network'),
+          onPressed: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute<void>(builder: (_) => const NetworkPage())),
+          icon: const Icon(Icons.hub_outlined),
+          label: const Text('Network map'),
         ),
         const SizedBox(height: 20),
         SectionLabel('Recording'),

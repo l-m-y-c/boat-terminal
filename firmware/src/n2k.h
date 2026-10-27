@@ -146,9 +146,24 @@ const char *n2k_node_state_name(NodeState state);
  * "(seconds.micros) can0 1DEFFF23#0102030405060708\n", seconds from boot.
  * after: the last sequence number already read, 0 to start from now.
  * *next: pass it back as after. *lost: frames overwritten before they
- * were read. Safe from any task. */
-size_t n2k_capture_read(uint32_t after, char *out, size_t cap, uint32_t *next, uint32_t *lost);
+ * were read. src >= 0 keeps only that device's frames. Safe from any task. */
+size_t n2k_capture_read(uint32_t after, char *out, size_t cap, uint32_t *next, uint32_t *lost, int src = -1);
 
 /* GET /n2k.json: devices, PGNs, converter counters and owners, rebuilt
  * once a second by loop(). Safe from any task. Returns the length. */
 size_t n2k_diag_copy(char *out, size_t cap);
+
+/* The network topology (n2k_network.h), safe from any task.
+ * GET /n2k/network.json, GET /n2k/device.json?src=N (identity, health,
+ * the values it supplies, its PGNs decoded, its recent messages). */
+size_t n2k_network_copy(char *out, size_t cap);
+size_t n2k_device_copy(uint8_t address, char *out, size_t cap);
+/* Ask every device again, from the address claims up. */
+void n2k_network_refresh(void);
+struct N2kNetView;
+size_t n2k_network_view(N2kNetView *out, size_t max);
+struct N2kNetInfo;
+struct N2kPgnLine;
+/* One device for the terminal's node detail page, safe from any task. */
+bool n2k_device_details(uint8_t address, N2kNetInfo *info, N2kPgnLine *pgns, size_t max_pgns, size_t *n_pgns,
+                        N2kPgnLine *recent, size_t max_recent, size_t *n_recent);

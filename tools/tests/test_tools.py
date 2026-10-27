@@ -261,3 +261,59 @@ class FakeTerminal(unittest.TestCase):
             snaps = Path(tmp, "diag.jsonl").read_text().splitlines()
             self.assertGreaterEqual(len(snaps), 2)
             self.assertIn("NMEA ok", Path(tmp, "console.log").read_text())
+
+
+class Network(unittest.TestCase):
+    """The topology summaries, from JSON captured on the board (NMEA NET)."""
+
+    def test_network_summary(self) -> None:
+        from lmyc_dev.diag import summarise_network
+        d = json.loads((TOOLS / "tests" / "fixtures" / "n2k_network_sim.json").read_text())
+        text = summarise_network(d)
+        self.assertIn("7 devices, bus load 19 LEN (0.95 A)", text)
+        self.assertIn("Sim depth / speed / temp", text)
+        self.assertIn("Sim: masthead", text)
+        self.assertNotIn("ISSUES", text)
+        # The terminal first.
+        self.assertLess(text.index("LMYC Boat Terminal"), text.index("Sim GPS"))
+
+    def test_device_summary(self) -> None:
+        from lmyc_dev.diag import summarise_device
+        d = json.loads((TOOLS / "tests" / "fixtures" / "n2k_device_12_sim.json").read_text())
+        text = summarise_device(d)
+        self.assertIn("address 12", text)
+        self.assertIn("depth", text)
+        self.assertIn("Depth ", text)
+        self.assertIn("Recent messages", text)
+
+
+class BoatIdentity(unittest.TestCase):
+    def setUp(self) -> None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("boat_tool", TOOLS / "boat.py")
+        self.boat = importlib.util.module_from_spec(spec)
+        sys.modules["boat_tool"] = self.boat  # dataclasses look their module up
+        assert spec.loader is not None
+        spec.loader.exec_module(self.boat)
+
+    def test_fleet_ids_follow_the_rules(self) -> None:
+        for b in self.boat.FLEET:
+            self.assertIsNone(self.boat.check_id(b.boat_id), b.boat_id)
+        self.assertEqual(self.boat.find_boat("baca-lele").boat_id, "BACA-LELE")
+        self.assertEqual(self.boat.find_boat("Teachers Pet").sailboat_id, 506)
+        self.assertIsNone(self.boat.find_boat("titanic"))
+
+    def test_bad_ids_and_names(self) -> None:
+        self.assertIsNotNone(self.boat.check_id("baca lele"))
+        self.assertIsNotNone(self.boat.check_id("A" * 17))
+        self.assertIsNotNone(self.boat.check_name('Say "hi"'))
+
+    def test_apply_replaces_or_adds(self) -> None:
+        example = (TOOLS.parent / "firmware" / "src" / "secrets.h.example").read_text()
+        out = self.boat.apply(example, "BACA-LELE", "Baca Lele", 276)
+        s = self.boat.read_settings(out)
+        self.assertEqual(s, {"LMYC_BOAT_ID": "BACA-LELE", "LMYC_BOAT_NAME": "Baca Lele", "LMYC_SAILBOAT_ID": "276"})
+        self.assertIn('#define WIFI_SSID', out)  # nothing else touched
+        bare = "#pragma once\n#define WIFI_SSID \"x\"\n"
+        added = self.boat.read_settings(self.boat.apply(bare, "BENCH-01", "Bench", 0))
+        self.assertEqual(added["LMYC_BOAT_ID"], "BENCH-01")

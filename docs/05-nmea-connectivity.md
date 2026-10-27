@@ -164,7 +164,7 @@ On the NMEA 2000 data source the terminal is a full NMEA 2000 node. It is built 
 | PGN | What the terminal does |
 |-----|------------------------|
 | 60928 ISO Address Claim | Claims an address with its NAME and defends it. Arbitrary-address-capable: on contention it moves to a free address. |
-| 59904 ISO Request | Answers requests. |
+| 59904 ISO Request | Answers requests. Sends them too, to discover the network: one global request for address claims, then one addressed request at a time (150 ms apart, three tries each) for each device's product information, configuration information and PGN list. Nothing is asked twice once answered. |
 | 59392 ISO Acknowledgement | Sends ACK / NAK where the standard asks for it. |
 | 126208 Group Function | Answers group functions, including commanded changes of device instance, system instance and installation descriptions. |
 | 126464 PGN List | Lists the PGNs it sends and receives. |
@@ -227,6 +227,26 @@ On the NMEA 2000 data source the terminal is a full NMEA 2000 node. It is built 
 | `fast_incomplete` | Multi-frame messages (GNSS, AIS) are not arriving whole. | Capture the bus and report it. |
 | `bad_values` | A device sends error codes or impossible values. They are dropped, not shown. | Which PGN and device, in Bus check. |
 | `two_sources` | Two devices send the same value. One is used; the other takes over if it stops. | Note the addresses. |
+
+### Network topology
+
+The terminal lists every device on the backbone the way a chart plotter builds its device list, using only what the standard says every node must answer. CAN carries no position, so this is the **logical** network, not the order of the tees: devices are shown in class order with the terminal first, and each card carries the installer's location text (installation description 1) when the device has one.
+
+| What | From |
+|------|------|
+| Address, maker, class and function, device and system instance | ISO Address Claim (60928) |
+| Model, software, serial, LEN, NMEA 2000 version, certification level | Product Information (126996) |
+| Where it is installed | Configuration Information (126998) |
+| What it sends and receives | PGN List (126464) |
+| Alive, and how often it says so | Heartbeat (126993) |
+
+Health checks, per device: **no name** (never answered for its address claim), **no product** information, **heartbeat lost** (2.5 intervals), **address changed**, **instance conflict** (same class, function and instance as another device; plotters can mix them up), **silent** (nothing for 10 s). The network total of LEN is shown against the power budget.
+
+Tap a device (terminal **Network** screen, from the Diagnostics or Data source rail; phone **NMEA data → Network**) for its identity and health, which values the terminal takes from it, every PGN it sends with rate and the newest value decoded (or raw bytes), its recent messages, and on the phone **Record this device**: a candump capture of that device only.
+
+On the simulator the six virtual devices are NMEA 2000 nodes too: each claims an address, sends a heartbeat and answers the terminal's requests, so the whole discovery path runs on the bench. Their frames, and the terminal's, stay on the virtual bus.
+
+Also: `GET /n2k/network.json` (`?refresh=1` asks everyone again), `GET /n2k/device.json?src=N`, `GET /n2k/frames?after=N&src=N`, and on the console `NMEA NET`, `NMEA NET <address>`, `NMEA NET REFRESH` (`make network`, `make device SRC=N`).
 
 ### Hardware compliance (open items)
 
