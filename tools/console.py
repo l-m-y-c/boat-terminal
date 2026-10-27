@@ -209,7 +209,7 @@ def main() -> int:
     args = ap.parse_args()
     try:
         return args.fn(args)
-    except LookupError as exc:
+    except (LookupError, ConnectionError) as exc:
         print(exc, file=sys.stderr)
         return 1
 

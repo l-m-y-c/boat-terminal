@@ -14,6 +14,8 @@ Ports are found from the USB descriptors: sysfs on Linux, ioreg on macOS.
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import glob
 import os
 import re
@@ -176,7 +178,19 @@ class Console:
 
     def __init__(self, path: str):
         self.path = path
-        self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        try:
+            self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        except OSError as exc:
+            if exc.errno == errno.EBUSY:
+                raise ConnectionError(f"{path} is already in use by another program (a console, "
+                                      "monitor or second session). Close it first.") from exc
+            raise
+        # Exclusive: two readers on one port each get half the bytes, and
+        # look like a port that keeps vanishing.
+        try:
+            fcntl.ioctl(self.fd, termios.TIOCEXCL)
+        except OSError:
+            pass
         attrs = termios.tcgetattr(self.fd)
         attrs[0] = 0
         attrs[1] = 0

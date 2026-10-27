@@ -52,7 +52,7 @@ From the board labeling:
 | 11 | **RS485 header** | NMEA 0183 |
 | 13 | CAN terminal resistor selection | Enable/disable 120 Ω |
 | 14 | RS485 terminal resistor selection | Enable/disable 120 Ω |
-| 7 / 6 | UART2 / UART1 | CH343 Type-C (UART1) or the UART header (UART2). On a Mac the CH343 enumerates and does not deliver flash data |
+| 7 / 6 | UART2 / UART1 | One UART, to the CH343 Type-C (UART1) or the UART header (UART2), chosen by the UART select switch (item 15). **Keep it on UART1**: on UART2 the Type-C socket still enumerates but carries nothing (the likely cause of the old "does not deliver flash data" on the Mac). |
 | 10 | I2C header | Sensors / expansion |
 | 4 | TF card slot | Local logs, reference data |
 | 5 | USB Type-C | ESP32 native USB. Shared with CAN. Flash port on a Mac (see below) |
