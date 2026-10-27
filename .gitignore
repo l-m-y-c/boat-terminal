@@ -17,3 +17,6 @@ firmware/src/secrets.h
 # Stand-in server bytecode
 __pycache__/
 *.pyc
+
+# Boat / bench sessions from tools/console.py session
+sessions/

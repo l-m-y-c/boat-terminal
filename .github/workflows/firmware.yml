@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - firmware/**
+      - tools/**
       - .github/workflows/firmware.yml
   pull_request:
     paths:
       - firmware/**
+      - tools/**
       - .github/workflows/firmware.yml
 
 jobs:
@@ -48,5 +50,10 @@ jobs:
         run: pio run
 
       # Uses the NMEA2000 library pio run just fetched. No board needed.
-      - name: Host tests (JSON, N2K -> 0183, AIS)
+      - name: Host tests (JSON, N2K -> 0183, AIS, diagnostics, node)
         run: CXX=g++ sh test_host/run.sh
+
+      # Developer tools, including a capture replayed through the library.
+      - name: Tool tests
+        working-directory: .
+        run: CXX=g++ python3 -m unittest discover -s tools/tests -v
