@@ -45,6 +45,34 @@ def garmin_name() -> bytes:
     return raw.to_bytes(8, "little")
 
 
+_IOREG = """
++-o USB JTAG_serial debug unit@11332000  <class IOUSBHostDevice, id 0x1>
+  | |   "idProduct" = 4097
+  | |   "idVendor" = 12346
+  | |   "USB Serial Number" = "58:E6:C5:72:D6:48"
+  | +-o AppleUSBACMData  <class AppleUSBACMData, id 0x2>
+  |   |   "idProduct" = 4097
+  |   |   "idVendor" = 12346
+  |   +-o IOSerialBSDClient  <class IOSerialBSDClient, id 0x3>
+  |         "IOCalloutDevice" = "/dev/cu.usbmodem1133201"
++-o USB Single Serial@11340000  <class IOUSBHostDevice, id 0x4>
+  | |   "idProduct" = 21971
+  | |   "idVendor" = 6790
+  | |   "USB Serial Number" = "5C37249341"
+  |   +-o IOSerialBSDClient  <class IOSerialBSDClient, id 0x5>
+  |         "IOCalloutDevice" = "/dev/cu.usbmodem5C372493411"
+"""
+
+
+class MacPorts(unittest.TestCase):
+    def test_jtag_port_named_by_location(self) -> None:
+        from lmyc_dev.ports import JTAG_VENDOR, CH343_VENDOR, parse_mac_callouts
+
+        got = parse_mac_callouts(_IOREG)
+        self.assertEqual(got["/dev/cu.usbmodem1133201"][:2], (JTAG_VENDOR, 0x1001))
+        self.assertEqual(got["/dev/cu.usbmodem5C372493411"], (CH343_VENDOR, 0x55D3, "5C37249341"))
+
+
 class CanIds(unittest.TestCase):
     def test_pdu2_and_pdu1(self) -> None:
         cid = can_id(3, 128267, 12)

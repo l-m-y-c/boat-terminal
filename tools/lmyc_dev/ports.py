@@ -107,10 +107,56 @@ def _mac_usb_devices() -> list[dict[str, str]]:
     return devices
 
 
+def parse_mac_callouts(text: str) -> dict[str, tuple[int, int, str]]:
+    """Each /dev/cu.* in an IOService tree, with the USB IDs above it.
+
+    The ESP32-S3 USB Serial/JTAG port is named after its location
+    (cu.usbmodem1133201), not its serial number (the MAC, with colons), so
+    matching by serial alone misses it. In ioreg's tree the serial client
+    follows its USB device and interface, so the IDs seen last belong to it.
+    """
+    out: dict[str, tuple[int, int, str]] = {}
+    vendor = product = 0
+    serial = ""
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.split("|")[-1].strip().strip('"')
+        value = value.strip().rstrip(",").strip().strip('"')
+        try:
+            if key == "idVendor":
+                vendor = int(value)
+            elif key == "idProduct":
+                product = int(value)
+        except ValueError:
+            continue
+        if key == "USB Serial Number":
+            serial = value
+        elif key == "IOCalloutDevice" and value.startswith("/dev/cu."):
+            out[value] = (vendor, product, serial)
+    return out
+
+
+def _mac_callouts() -> dict[str, tuple[int, int, str]]:
+    try:
+        text = subprocess.check_output(["ioreg", "-p", "IOService", "-l", "-w", "0", "-r", "-c", "IOUSBHostDevice"],
+                                       text=True, errors="replace")
+    except (OSError, subprocess.CalledProcessError):
+        return {}
+    return parse_mac_callouts(text)
+
+
 def _mac_ports() -> list[Port]:
     found: list[Port] = []
     paths = sorted(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/cu.wchusbserial*"))
     claimed: set[str] = set()
+    callouts = _mac_callouts()
+    for p in paths:
+        ids = callouts.get(p)
+        if ids is not None and ids[0] in (CH343_VENDOR, JTAG_VENDOR):
+            claimed.add(p)
+            found.append(Port(p, ids[0], ids[1], ids[2], _kind(ids[0])))
     for dev in _mac_usb_devices():
         try:
             vendor = int(dev.get("idVendor", "0"))
