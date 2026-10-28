@@ -62,7 +62,16 @@
 #define LMYC_N2K_PRODUCT_CODE 666
 #endif
 
-/* Software version in Product Information (126996), at most 32 characters. */
+/* Software version in Product Information (126996), at most 32 characters:
+ * the version number, then the git short hash that scripts/fw_version.py
+ * passes at build time ("-dirty" if the tree had uncommitted changes).
+ * Raise the number with each release. */
+#ifndef LMYC_FW_VERSION_NUMBER
+#define LMYC_FW_VERSION_NUMBER "0.9"
+#endif
+#ifndef LMYC_FW_GIT
+#define LMYC_FW_GIT "nogit"
+#endif
 #ifndef LMYC_FW_VERSION
-#define LMYC_FW_VERSION "0.9 " __DATE__
+#define LMYC_FW_VERSION LMYC_FW_VERSION_NUMBER " " LMYC_FW_GIT
 #endif
