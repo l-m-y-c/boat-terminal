@@ -4,6 +4,20 @@
 
 class tNMEA2000;
 
+/* Who the terminal is on the bus: one definition, used for the NAME and
+ * Product Information here and read back by the network screen, the
+ * phone and the JSON. Class 25 (inter/intranetwork device), function 130
+ * (PC gateway): a gateway from NMEA 2000 to Wi-Fi and Bluetooth. Load
+ * equivalency is in 50 mA units: at most 0.5 A from the bus (doc 19). */
+inline constexpr uint8_t kN2kNodeIndustryGroup = 4;
+inline constexpr uint8_t kN2kNodeDeviceClass = 25;
+inline constexpr uint8_t kN2kNodeDeviceFunction = 130;
+inline constexpr uint8_t kN2kNodeLoadEquivalency = 10;
+inline constexpr uint16_t kN2kNodeN2kVersion = 2101;
+inline constexpr const char *kN2kNodeModelId = "LMYC Boat Terminal";
+inline constexpr const char *kN2kNodeModelVersion = "Waveshare ESP32-S3-Touch-LCD-7";
+inline constexpr const char *kN2kNodeManufacturerInfo = "LMYC boat-terminal";
+
 /* The terminal's identity on NMEA 2000, and what the standard says it must
  * remember across power cycles.
  *

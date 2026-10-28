@@ -11,20 +11,6 @@
 
 #include <esp_mac.h>
 
-/* NAME. Class 25 (inter/intranetwork device), function 130 (PC gateway):
- * the terminal is a gateway from NMEA 2000 to Wi-Fi and Bluetooth. */
-static constexpr unsigned char kDeviceClass = 25;
-static constexpr unsigned char kDeviceFunction = 130;
-static constexpr unsigned char kIndustryMarine = 4;
-
-/* Product information. Load equivalency is in 50 mA units: the board, its
- * 5 V converter and the drop draw at most 0.5 A from the bus (doc 19). */
-static constexpr unsigned char kLoadEquivalency = 10;
-static constexpr unsigned short kN2kVersion = 2101;
-static constexpr const char *kModelId = "LMYC Boat Terminal";
-static constexpr const char *kModelVersion = "Waveshare ESP32-S3-Touch-LCD-7";
-static constexpr const char *kManufacturerInfo = "LMYC boat-terminal";
-
 /* A first boot has no saved address. 22 is only where the search starts:
  * the library moves to a free address if another device holds it. */
 static constexpr uint8_t kFirstAddress = 22;
@@ -69,10 +55,10 @@ void n2k_node_configure(tNMEA2000 &stack, bool node)
     char *serial = g_serial;
     snprintf(serial, sizeof(g_serial), "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    stack.SetProductInformation(serial, LMYC_N2K_PRODUCT_CODE, kModelId, LMYC_FW_VERSION, kModelVersion,
-                                kLoadEquivalency, kN2kVersion);
-    stack.SetDeviceInformation(g_unique, kDeviceFunction, kDeviceClass, LMYC_N2K_MANUFACTURER_CODE,
-                               kIndustryMarine);
+    stack.SetProductInformation(serial, LMYC_N2K_PRODUCT_CODE, kN2kNodeModelId, LMYC_FW_VERSION, kN2kNodeModelVersion,
+                                kN2kNodeLoadEquivalency, kN2kNodeN2kVersion);
+    stack.SetDeviceInformation(g_unique, kN2kNodeDeviceFunction, kN2kNodeDeviceClass, LMYC_N2K_MANUFACTURER_CODE,
+                               kN2kNodeIndustryGroup);
 
     Preferences prefs;
     const bool open = prefs.begin(kPrefsSpace, true);
@@ -93,7 +79,7 @@ void n2k_node_configure(tNMEA2000 &stack, bool node)
     }
 
     stack.SetDeviceInformationInstances(lower, upper, system);
-    stack.SetConfigurationInformation(kManufacturerInfo, desc1, desc2);
+    stack.SetConfigurationInformation(kN2kNodeManufacturerInfo, desc1, desc2);
     stack.ExtendReceiveMessages(kReceivePgns);
     /* Heartbeat (126993): the library sets the standard 60 s itself at Open(). */
     stack.SetMode(node ? tNMEA2000::N2km_ListenAndNode : tNMEA2000::N2km_ListenOnly,

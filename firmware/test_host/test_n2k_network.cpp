@@ -93,10 +93,10 @@ static void self_update(void)
     me.address = g_terminal.GetN2kSource();
     me.unique = n2k_node_unique_number();
     me.manufacturer = n2k_node_manufacturer_code();
-    me.device_class = 25;
-    me.function = 130;
-    me.load_equivalency = 10;
-    me.model = "LMYC Boat Terminal";
+    me.device_class = kN2kNodeDeviceClass;
+    me.function = kN2kNodeDeviceFunction;
+    me.load_equivalency = kN2kNodeLoadEquivalency;
+    me.model = kN2kNodeModelId;
     me.software = "test";
     me.model_version = "host";
     me.serial = n2k_node_serial();

@@ -1,6 +1,7 @@
 #include "n2k_diag.h"
 
 #include "n2k_describe.h"
+#include "n2k_node.h"
 #include "n2k_to_0183.h"
 
 #include <N2kMsg.h>
@@ -626,10 +627,10 @@ size_t n2k_diag_json(char *out, size_t cap, const N2kStats &s, uint32_t now_ms)
 
     /* This terminal as a node: other devices list it under this NAME. */
     put(o,
-        "\"self\":{\"node\":\"%s\",\"address\":%u,\"unique\":%lu,\"mfr\":%u,\"model\":\"LMYC Boat Terminal\","
+        "\"self\":{\"node\":\"%s\",\"address\":%u,\"unique\":%lu,\"mfr\":%u,\"model\":\"%s\","
         "\"tx_frames\":%lu,\"tx_failed\":%lu,\"tx_pending\":%lu,\"bus_off\":%lu,\"lost_msgs\":%lu},",
         node_code(s.node), static_cast<unsigned>(s.address), static_cast<unsigned long>(s.unique_number),
-        static_cast<unsigned>(s.manufacturer_code), static_cast<unsigned long>(s.tx_frames),
+        static_cast<unsigned>(s.manufacturer_code), kN2kNodeModelId, static_cast<unsigned long>(s.tx_frames),
         static_cast<unsigned long>(s.tx_failed), static_cast<unsigned long>(s.tx_pending),
         static_cast<unsigned long>(s.bus_off_count),
         static_cast<unsigned long>(s.lost_messages));

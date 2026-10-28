@@ -666,12 +666,12 @@ static void discover(void)
         me.address = g_stack.GetN2kSource();
         me.unique = n2k_node_unique_number();
         me.manufacturer = n2k_node_manufacturer_code();
-        me.device_class = 25;
-        me.function = 130;
-        me.load_equivalency = 10;
-        me.model = "LMYC Boat Terminal";
+        me.device_class = kN2kNodeDeviceClass;
+        me.function = kN2kNodeDeviceFunction;
+        me.load_equivalency = kN2kNodeLoadEquivalency;
+        me.model = kN2kNodeModelId;
         me.software = LMYC_FW_VERSION;
-        me.model_version = "Waveshare ESP32-S3-Touch-LCD-7";
+        me.model_version = kN2kNodeModelVersion;
         me.serial = n2k_node_serial();
         me.install1 = install;
         n2k_net_set_self(me);
