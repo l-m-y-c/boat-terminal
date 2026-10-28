@@ -17,6 +17,7 @@ import 'home_flow.dart';
 import 'instruments.dart';
 import 'journey.dart';
 import 'last_boat.dart';
+import 'network_page.dart';
 import 'nmea_data_page.dart';
 import 'tab_pager.dart';
 import 'nmea_console.dart';
@@ -104,7 +105,50 @@ class _NearbyHit {
       result.advertisementData.serviceUuids.map((u) => u.toString()).toList();
 }
 
-enum OnBoardTab { boat, instruments, nmeaData, diagnostics }
+/// Five tab labels must fit a small phone at large text: the bar's labels
+/// stop growing at 1.15x (the pages themselves still scale fully).
+const kTabBarMaxTextScale = 1.15;
+
+Widget tabBarTextScale(BuildContext context, Widget bar) {
+  final mq = MediaQuery.of(context);
+  return MediaQuery(
+    data: mq.copyWith(
+      textScaler: mq.textScaler.clamp(maxScaleFactor: kTabBarMaxTextScale),
+    ),
+    child: bar,
+  );
+}
+
+/// The bottom bar, in OnBoardTab order.
+const kOnBoardDestinations = [
+  NavigationDestination(
+    icon: Icon(Icons.sailing_outlined),
+    selectedIcon: Icon(Icons.sailing),
+    label: 'Boat',
+  ),
+  NavigationDestination(
+    icon: Icon(Icons.explore_outlined),
+    selectedIcon: Icon(Icons.explore),
+    label: 'Instruments',
+  ),
+  NavigationDestination(
+    icon: Icon(Icons.analytics_outlined),
+    selectedIcon: Icon(Icons.analytics),
+    label: 'NMEA data',
+  ),
+  NavigationDestination(
+    icon: Icon(Icons.hub_outlined),
+    selectedIcon: Icon(Icons.hub),
+    label: 'Network',
+  ),
+  NavigationDestination(
+    icon: Icon(Icons.troubleshoot_outlined),
+    selectedIcon: Icon(Icons.troubleshoot),
+    label: 'Diagnostics',
+  ),
+];
+
+enum OnBoardTab { boat, instruments, nmeaData, network, diagnostics }
 
 /// How long "On board BOAT" shows after joining before the tabs appear.
 const kArrivalSplash = Duration(milliseconds: 2200);
@@ -1394,31 +1438,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         ),
       ),
       bottomNavigationBar: onBoard
-          ? NavigationBar(
-              selectedIndex: _tab.index,
-              onDestinationSelected: (i) => _openTab(OnBoardTab.values[i]),
-              destinations: const [
-                NavigationDestination(
-                  icon: Icon(Icons.sailing_outlined),
-                  selectedIcon: Icon(Icons.sailing),
-                  label: 'Boat',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.explore_outlined),
-                  selectedIcon: Icon(Icons.explore),
-                  label: 'Instruments',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.hub_outlined),
-                  selectedIcon: Icon(Icons.hub),
-                  label: 'Network',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.troubleshoot_outlined),
-                  selectedIcon: Icon(Icons.troubleshoot),
-                  label: 'Diagnostics',
-                ),
-              ],
+          ? tabBarTextScale(
+              context,
+              NavigationBar(
+                selectedIndex: _tab.index,
+                onDestinationSelected: (i) => _openTab(OnBoardTab.values[i]),
+                destinations: kOnBoardDestinations,
+              ),
             )
           : null,
     );
@@ -1437,6 +1463,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     OnBoardTab.diagnostics => ListenableBuilder(
       listenable: _ui,
       builder: (context, _) => _diagnosticsView(context),
+    ),
+    OnBoardTab.network => ListView(
+      padding: const EdgeInsets.fromLTRB(0, 12, 0, 32),
+      children: const [NetworkView()],
     ),
     OnBoardTab.nmeaData => NmeaDataView(
       stats: _stats,

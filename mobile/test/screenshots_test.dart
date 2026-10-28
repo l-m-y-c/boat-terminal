@@ -92,6 +92,7 @@ Widget _shell(
       destinations: const [
         NavigationDestination(icon: Icon(Icons.sailing), label: 'Boat'),
         NavigationDestination(icon: Icon(Icons.explore), label: 'Instruments'),
+        NavigationDestination(icon: Icon(Icons.analytics), label: 'NMEA data'),
         NavigationDestination(icon: Icon(Icons.hub), label: 'Network'),
         NavigationDestination(
           icon: Icon(Icons.troubleshoot),

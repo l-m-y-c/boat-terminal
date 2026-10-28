@@ -98,11 +98,15 @@ void main() {
       expect(s.countdownSeconds, 10);
       final feet = find.byKey(const ValueKey('settings-depth-Feet'));
       await tester.scrollUntilVisible(feet, 200);
+      await tester.ensureVisible(feet);
+      await tester.pumpAndSettle();
       await tester.tap(feet);
       await tester.pump();
       expect(s.depthUnit, DepthUnit.feet);
       final dark = find.byKey(const ValueKey('settings-theme-Dark'));
       await tester.scrollUntilVisible(dark, 200);
+      await tester.ensureVisible(dark);
+      await tester.pumpAndSettle();
       await tester.tap(dark);
       await tester.pump();
       expect(s.themeMode, ThemeMode.dark);

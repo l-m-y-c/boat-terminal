@@ -7,7 +7,7 @@ enum DepthUnit { metres, feet }
 
 /// Which on-board tab opens after arrival. Mirrors OnBoardTab by name so
 /// settings do not depend on main.dart.
-enum StartTab { boat, instruments, nmeaData, diagnostics }
+enum StartTab { boat, instruments, nmeaData, network, diagnostics }
 
 const kMsPerKnot = 0.514444;
 const kFeetPerMetre = 3.28084;

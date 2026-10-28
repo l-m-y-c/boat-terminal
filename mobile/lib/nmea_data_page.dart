@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import 'bus_check.dart';
 import 'counter_help.dart';
-import 'network_page.dart';
 import 'terminal_stats.dart';
 import 'ui_kit.dart';
 
@@ -133,13 +132,10 @@ class NmeaDataView extends StatelessWidget {
     return s == null ? _waiting(context) : _body(context, s);
   }
 
-  /// The map works over Wi-Fi even before the Bluetooth stats arrive.
   Widget _waiting(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.fromLTRB(0, 12, 0, 32),
       children: [
-        const NetworkView(),
-        const SizedBox(height: 28),
         if (supported) const Center(child: CircularProgressIndicator()),
         const SizedBox(height: 20),
         Padding(
@@ -165,8 +161,6 @@ class NmeaDataView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(0, 12, 0, 32),
       children: [
-        const NetworkView(),
-        const SizedBox(height: 24),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Column(

@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmyc_app/app_settings.dart';
 import 'package:lmyc_app/main.dart';
 import 'package:lmyc_app/tab_pager.dart';
 import 'package:lmyc_app/nmea_data_page.dart';
 import 'package:lmyc_app/terminal_stats.dart';
 
-const _names = ['Boat', 'Instruments', 'NMEA data'];
+const _names = ['Boat', 'Instruments', 'NMEA data', 'Network', 'Diagnostics'];
 
 class _Harness extends StatefulWidget {
   const _Harness();
@@ -19,7 +20,7 @@ class _HarnessState extends State<_Harness> {
   Widget build(BuildContext context) => MaterialApp(
     home: Scaffold(
       body: WrapTabPager(
-        count: 3,
+        count: _names.length,
         index: tab,
         onChanged: (i) => setState(() => tab = i),
         builder: (context, i) =>
@@ -50,23 +51,23 @@ int _selected(WidgetTester tester) =>
     tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex;
 
 void main() {
-  testWidgets('swipe left goes forward and wraps NMEA data -> Boat', (
+  testWidgets('swipe left goes forward and wraps Diagnostics -> Boat', (
     tester,
   ) async {
     await tester.pumpWidget(const _Harness());
     expect(find.text('page Boat'), findsOneWidget);
-    for (final expected in [1, 2, 0, 1]) {
+    for (final expected in [1, 2, 3, 4, 0, 1]) {
       await _swipe(tester, -300);
       expect(_selected(tester), expected);
       expect(find.text('page ${_names[expected]}'), findsOneWidget);
     }
   });
 
-  testWidgets('swipe right goes back and wraps Boat -> NMEA data', (
+  testWidgets('swipe right goes back and wraps Boat -> Diagnostics', (
     tester,
   ) async {
     await tester.pumpWidget(const _Harness());
-    for (final expected in [2, 1, 0, 2]) {
+    for (final expected in [4, 3, 2, 1, 0, 4]) {
       await _swipe(tester, 300);
       expect(_selected(tester), expected);
       expect(find.text('page ${_names[expected]}'), findsOneWidget);
@@ -77,14 +78,68 @@ void main() {
     'bottom bar tap moves the pager and swiping continues from there',
     (tester) async {
       await tester.pumpWidget(const _Harness());
-      await tester.tap(find.text('NMEA data'));
+      await tester.tap(find.text('Diagnostics'));
       await tester.pumpAndSettle();
-      expect(find.text('page NMEA data'), findsOneWidget);
+      expect(find.text('page Diagnostics'), findsOneWidget);
       await _swipe(tester, -300);
       expect(_selected(tester), 0);
       expect(find.text('page Boat'), findsOneWidget);
     },
   );
+
+  test('the bar has the five tabs in order', () {
+    expect(OnBoardTab.values.map((t) => t.name), [
+      'boat',
+      'instruments',
+      'nmeaData',
+      'network',
+      'diagnostics',
+    ]);
+    expect(kOnBoardDestinations.map((d) => d.label), _names);
+    expect(
+      StartTab.values.map((t) => t.name),
+      OnBoardTab.values.map((t) => t.name),
+    );
+  });
+
+  for (final scale in [1.0, 1.3, 2.0]) {
+    testWidgets('five labels fit a 320 dp phone at ${scale}x text', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: TextScaler.linear(scale)),
+            child: child!,
+          ),
+          home: Builder(
+            builder: (context) => Scaffold(
+              bottomNavigationBar: tabBarTextScale(
+                context,
+                NavigationBar(
+                  selectedIndex: 2,
+                  destinations: kOnBoardDestinations,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(tester.takeException(), isNull);
+      for (final n in _names) {
+        expect(find.text(n), findsOneWidget);
+        expect(
+          tester.getSize(find.text(n)).width,
+          lessThanOrEqualTo(320 / 5),
+          reason: n,
+        );
+      }
+    });
+  }
 
   testWidgets('vertical scrolling inside a tab does not change tabs', (
     tester,
