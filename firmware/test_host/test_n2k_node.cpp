@@ -206,7 +206,7 @@ int main()
         expect_true("model ID", strcmp(model, "LMYC Boat Terminal") == 0);
         expect_true("model version", strcmp(model_ver, "Waveshare ESP32-S3-Touch-LCD-7") == 0);
         expect_true("serial is the MAC", strcmp(serial, "58E6C572D648") == 0);
-        expect_true("LEN 10 (0.5 A)", len == 10);
+        expect_true("LEN 6 (0.3 A)", len == 6);
         expect_true("NMEA 2000 version 2.101", version == 2101);
         expect_true("product code from the build", code == 666);
     }

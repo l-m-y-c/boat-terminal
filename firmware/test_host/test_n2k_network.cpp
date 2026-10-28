@@ -173,7 +173,7 @@ int main()
         healthy = healthy && v[i].issues == 0;
     }
     expect_true("no issues on the simulated network", healthy);
-    expect_true("LEN total 10 + 1+1+2+1+1+3", n2k_net_len_total() == 19);
+    expect_true("LEN total 6 + 1+1+2+1+1+3", n2k_net_len_total() == 15);
     expect_true("sorted by class: navigation before environment", find(v, n, 7) > find(v, n, 35));
     const uint32_t settled = g_requests_sent;
     run(5000);

@@ -12,7 +12,7 @@ class tNMEA2000;
 inline constexpr uint8_t kN2kNodeIndustryGroup = 4;
 inline constexpr uint8_t kN2kNodeDeviceClass = 25;
 inline constexpr uint8_t kN2kNodeDeviceFunction = 130;
-inline constexpr uint8_t kN2kNodeLoadEquivalency = 10;
+inline constexpr uint8_t kN2kNodeLoadEquivalency = 6;  // measured 260 mA on NET-S with Wi-Fi, 2026-10-28
 inline constexpr uint16_t kN2kNodeN2kVersion = 2101;
 inline constexpr const char *kN2kNodeModelId = "LMYC Boat Terminal";
 inline constexpr const char *kN2kNodeModelVersion = "Waveshare ESP32-S3-Touch-LCD-7";
