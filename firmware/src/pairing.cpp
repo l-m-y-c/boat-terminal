@@ -12,6 +12,7 @@
 
 #include <ctype.h>
 #include "pairing.h"
+#include "log_tee.h"
 
 #include "protocol.h"
 
@@ -135,7 +136,7 @@ static void set_status(const char *s)
 {
     snprintf(g_status_buf, sizeof(g_status_buf), "%s", s);
     g_status = g_status_buf;
-    Serial.printf("BLE status: %s\n", g_status_buf);
+    g_log.printf("BLE status: %s\n", g_status_buf);
 }
 
 static void set_event(const char *s)
@@ -143,7 +144,7 @@ static void set_event(const char *s)
     snprintf(g_last_event, sizeof(g_last_event), "%s", s);
     push_event(s);
     refresh_hint();
-    Serial.printf("BLE event: %s\n", g_last_event);
+    g_log.printf("BLE event: %s\n", g_last_event);
 }
 
 static void format_addr(char *out, size_t out_len, const ble_addr_t *addr)
@@ -341,14 +342,14 @@ static void apply_pair_result(bool ok, const char *how)
         snprintf(ev, sizeof(ev), "OOB OK (%s)", how);
         set_event(ev);
         set_session_status("OK");
-        Serial.printf("BLE: OOB confirmed via %s - Paired\n", how);
+        g_log.printf("BLE: OOB confirmed via %s - Paired\n", how);
     } else {
         set_status("OOB mismatch");
         char ev[48];
         snprintf(ev, sizeof(ev), "OOB FAIL (%s)", how);
         set_event(ev);
         set_session_status("FAIL");
-        Serial.printf("BLE: OOB mismatch via %s\n", how);
+        g_log.printf("BLE: OOB mismatch via %s\n", how);
     }
 }
 
@@ -453,7 +454,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         set_status(buf);
         set_event(buf);
         publish_wifi_chr();
-        Serial.printf("BLE: peer %s  MTU %u\n", g_peer, static_cast<unsigned>(g_mtu));
+        g_log.printf("BLE: peer %s  MTU %u\n", g_peer, static_cast<unsigned>(g_mtu));
     }
 
     void handleDisconnect()
@@ -469,7 +470,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         } else {
             set_event("disconnect -> adv");
         }
-        Serial.println("BLE: disconnected - advertising again");
+        g_log.println("BLE: disconnected - advertising again");
         NimBLEDevice::startAdvertising();
     }
 
@@ -494,7 +495,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         snprintf(buf, sizeof(buf), "MTU %u", static_cast<unsigned>(mtu));
         set_event(buf);
         refresh_hint();
-        Serial.printf("BLE: MTU now %u\n", static_cast<unsigned>(mtu));
+        g_log.printf("BLE: MTU now %u\n", static_cast<unsigned>(mtu));
     }
 };
 
@@ -510,12 +511,12 @@ class SessionCallbacks : public NimBLECharacteristicCallbacks {
         g_got_session_write = true;
         describe_rx(bytes, n);
 
-        Serial.printf("BLE session write (%u bytes) MTU %u: ",
+        g_log.printf("BLE session write (%u bytes) MTU %u: ",
                       static_cast<unsigned>(n), static_cast<unsigned>(g_mtu));
         for (size_t i = 0; i < n && i < 24; ++i) {
-            Serial.printf("%02x", bytes[i]);
+            g_log.printf("%02x", bytes[i]);
         }
-        Serial.println();
+        g_log.println();
 
         if (g_rx_acc_len + n >= kRxAccMax) {
             g_rx_acc_len = 0;
@@ -542,7 +543,7 @@ class StatusCallbacks : public NimBLECharacteristicCallbacks {
     {
         g_read_count++;
         chr->setValue(g_session_status);
-        Serial.printf("BLE: status read -> %s\n", g_session_status);
+        g_log.printf("BLE: status read -> %s\n", g_session_status);
         char ev[40];
         snprintf(ev, sizeof(ev), "status read %s", g_session_status);
         set_event(ev);
@@ -558,7 +559,7 @@ class WifiCallbacks : public NimBLECharacteristicCallbacks {
             g_wifi_shared = true;
         }
         set_event(g_confirmed ? "wifi info read" : "wifi info withheld");
-        Serial.println(g_confirmed ? "BLE: wifi bootstrap read" : "BLE: wifi bootstrap withheld");
+        g_log.println(g_confirmed ? "BLE: wifi bootstrap read" : "BLE: wifi bootstrap withheld");
     }
 };
 
@@ -569,7 +570,7 @@ class PayloadCallbacks : public NimBLECharacteristicCallbacks {
         g_got_payload_read = true;
         const size_t n = strlen(g_payload);
         snprintf(g_last_rx, sizeof(g_last_rx), "payload %uB", static_cast<unsigned>(n));
-        Serial.printf("BLE: payload read (%u bytes)\n", static_cast<unsigned>(n));
+        g_log.printf("BLE: payload read (%u bytes)\n", static_cast<unsigned>(n));
         set_event("payload read");
     }
 };
@@ -599,14 +600,14 @@ static bool start_advertising(void)
     if (!adv->start()) {
         set_status("ADV failed");
         set_event("adv start failed");
-        Serial.println("BLE: advertising start FAILED");
+        g_log.println("BLE: advertising start FAILED");
         return false;
     }
 
     snprintf(g_adv_layout, sizeof(g_adv_layout), "ADV:%s SR:uuid", g_ble_name);
     set_status("Advertising");
     set_event("advertising");
-    Serial.printf("BLE(NimBLE): advertising as %s  mac %s\n", g_ble_name, g_mac_str);
+    g_log.printf("BLE(NimBLE): advertising as %s  mac %s\n", g_ble_name, g_mac_str);
     return true;
 }
 
@@ -680,8 +681,8 @@ void pairing_init(void)
     g_event_count = 0;
     g_event_log[0] = '\0';
     g_ble_ok = start_ble_peripheral();
-    Serial.printf("Pairing payload: %s\n", g_payload);
-    Serial.println("BLE: session …000020; status …000021; NMEA …000030; wifi …000040");
+    g_log.printf("Pairing payload: %s\n", g_payload);
+    g_log.println("BLE: session …000020; status …000021; NMEA …000030; wifi …000040");
 }
 
 void pairing_set_wifi_bootstrap(const char *ssid, const char *psk, const char *ip)

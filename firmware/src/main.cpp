@@ -20,6 +20,7 @@
 #include <lvgl.h>
 #include "lvgl_v8_port.h"
 #include "lmyc_logo.h"
+#include "log_tee.h"
 #include "montserrat_96.h"
 #include "pairing.h"
 #include "nmea.h"
@@ -210,7 +211,7 @@ static void select_can(bool can_mode)
     auto *expander_dev = (g_board != nullptr) ? g_board->getIO_Expander() : nullptr;
     auto *expander = (expander_dev != nullptr) ? expander_dev->getBase() : nullptr;
     if (expander == nullptr) {
-        Serial.println("N2K: no IO expander, CAN mux unchanged");
+        g_log.println("N2K: no IO expander, CAN mux unchanged");
         return;
     }
     expander->pinMode(kCanMuxExpander, OUTPUT);
@@ -553,9 +554,8 @@ static void note_link_uart(int phones)
         return;
     }
     snprintf(last, sizeof(last), "%s", line);
-    /* UART Type-C stays up in simulator mode. USB Serial is a different port. */
-    Serial0.println(line);
-    Serial.println(line);
+    /* Both sockets (log_tee.h). */
+    g_log.println(line);
 }
 
 static void paint_hotspot_chip(int phones)
@@ -3006,8 +3006,8 @@ void setup()
 {
     Serial.begin(115200);
     delay(200);
-    Serial.println();
-    Serial.println("=== LMYC Boat Terminal ===");
+    g_log.println();
+    g_log.println("=== LMYC Boat Terminal ===");
 
     g_board = new Board();
     g_board->init();
@@ -3024,7 +3024,7 @@ void setup()
 #endif
 
     if (!g_board->begin()) {
-        Serial.println("ERROR: board->begin() failed");
+        g_log.println("ERROR: board->begin() failed");
         while (true) {
             delay(1000);
         }
@@ -3068,7 +3068,7 @@ void setup()
         if (n2k_using_uart()) {
             Serial0.println(msg);
         } else {
-            Serial.println(msg);
+            g_log.println(msg);
         }
     };
     boot_log("UI ready. BLE name is in the primary ADV packet; scan in the LMYC app.");

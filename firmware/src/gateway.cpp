@@ -1,4 +1,5 @@
 #include "gateway.h"
+#include "log_tee.h"
 
 #include "nmea.h"
 #include "pairing.h"
@@ -79,7 +80,7 @@ void gateway_begin(void)
 
     g_listen_fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
     if (g_listen_fd < 0) {
-        Serial.printf("NMEA gateway: TCP socket failed errno=%d\n", errno);
+        g_log.printf("NMEA gateway: TCP socket failed errno=%d\n", errno);
         return;
     }
     int yes = 1;
@@ -91,7 +92,7 @@ void gateway_begin(void)
     addr.sin_port = htons(kGatewayTcpPort);
     if (bind(g_listen_fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0 ||
         listen(g_listen_fd, kGatewayMaxClients) != 0) {
-        Serial.printf("NMEA gateway: TCP bind/listen :%u failed errno=%d\n",
+        g_log.printf("NMEA gateway: TCP bind/listen :%u failed errno=%d\n",
                       static_cast<unsigned>(kGatewayTcpPort), errno);
         close_fd(&g_listen_fd);
         return;
@@ -107,13 +108,13 @@ void gateway_begin(void)
         uaddr.sin_addr.s_addr = ipaddr_addr(kHotspotIp);
         uaddr.sin_port = htons(0);
         if (bind(g_udp_fd, reinterpret_cast<sockaddr *>(&uaddr), sizeof(uaddr)) != 0) {
-            Serial.printf("NMEA gateway: UDP bind %s failed errno=%d\n", kHotspotIp, errno);
+            g_log.printf("NMEA gateway: UDP bind %s failed errno=%d\n", kHotspotIp, errno);
             close_fd(&g_udp_fd);
         }
     }
 
     g_started = true;
-    Serial.printf("NMEA gateway: TCP %u (%u clients) + UDP %u/%u\n",
+    g_log.printf("NMEA gateway: TCP %u (%u clients) + UDP %u/%u\n",
                   static_cast<unsigned>(kGatewayTcpPort),
                   static_cast<unsigned>(kGatewayMaxClients),
                   static_cast<unsigned>(kGatewayUdpPort),
@@ -127,7 +128,7 @@ static void drop_client(size_t i)
         close(c.fd);
         c.fd = -1;
         c.len = 0;
-        Serial.println("NMEA gateway: client disconnected");
+        g_log.println("NMEA gateway: client disconnected");
     }
 }
 
@@ -196,7 +197,7 @@ void gateway_poll(void)
             c.fd = fd;
             c.len = 0;
             c.progress_ms = millis();
-            Serial.printf("NMEA gateway: TCP client #%d\n", slot);
+            g_log.printf("NMEA gateway: TCP client #%d\n", slot);
             char hb[40];
             const size_t n = heartbeat_line(hb, sizeof(hb) - 2);
             memcpy(c.buf, hb, n);
@@ -271,7 +272,7 @@ void gateway_send_sentence(const char *sentence)
         if (c.len + len > kClientBuffer) {
             ++g_lost_tcp;
             if (now - c.progress_ms > kStalledMs) {
-                Serial.println("NMEA gateway: client stopped reading");
+                g_log.println("NMEA gateway: client stopped reading");
                 drop_client(i);
             }
             continue;

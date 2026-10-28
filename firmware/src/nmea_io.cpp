@@ -1,6 +1,7 @@
 #include "nmea_io.h"
 
 #include "n2k.h"
+#include "log_tee.h"
 #include "nmea.h"
 
 #include <Arduino.h>
@@ -93,7 +94,7 @@ void nmea_io_init(void)
      * begin(baud, config, rxPin, txPin). This socket does not reset the chip.
      * The socket marked USB is native CDC; opening it from the Mac resets
      * the chip into the ROM download bootloader. */
-    Serial0.begin(115200, SERIAL_8N1, 44, 43);
+    log_tee_uart_begin();
     command_log("UART console: NMEA SIM | NMEA N2K | NMEA STATS | NMEA DIAG | NMEA NET [addr] | NMEA DEMO | NMEA PGN <num> [src=N] <hex>");
     /*
      * TODO(slice-d): Wire Waveshare RS485 UART + DE/RE once pins are confirmed

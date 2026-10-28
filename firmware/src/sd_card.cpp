@@ -1,4 +1,5 @@
 #include "boat_config.h"
+#include "log_tee.h"
 #if LMYC_WITH_REPORTS_CHARTS
 
 #include "sd_card.h"
@@ -26,7 +27,7 @@ bool sd_card_init(esp_expander::Base *expander)
     g_ready = false;
     if (expander == nullptr) {
         snprintf(g_summary, sizeof(g_summary), "No IO expander");
-        Serial.println(g_summary);
+        g_log.println(g_summary);
         return false;
     }
 
@@ -38,7 +39,7 @@ bool sd_card_init(esp_expander::Base *expander)
     /* 4 MHz made a photo write or read feel stuck. 16 MHz is inside the SD SPI limit. */
     if (!SD.begin(-1, SPI, 16000000)) {
         snprintf(g_summary, sizeof(g_summary), "Need FAT32 (not exFAT)");
-        Serial.println("SD: mount failed (FAT32 card seated?)");
+        g_log.println("SD: mount failed (FAT32 card seated?)");
         expander->digitalWrite(kSdCsExpander, HIGH);
         return false;
     }
@@ -46,7 +47,7 @@ bool sd_card_init(esp_expander::Base *expander)
     const uint8_t type = SD.cardType();
     if (type == CARD_NONE) {
         snprintf(g_summary, sizeof(g_summary), "Slot empty");
-        Serial.println("SD: CARD_NONE");
+        g_log.println("SD: CARD_NONE");
         return false;
     }
 
@@ -63,7 +64,7 @@ bool sd_card_init(esp_expander::Base *expander)
     const unsigned long mb = static_cast<unsigned long>(bytes / (1024ULL * 1024ULL));
     snprintf(g_summary, sizeof(g_summary), "%s  %lu MB", type_name, mb);
     g_ready = true;
-    Serial.printf("SD: %s\n", g_summary);
+    g_log.printf("SD: %s\n", g_summary);
     maint_store_begin();
     return true;
 }

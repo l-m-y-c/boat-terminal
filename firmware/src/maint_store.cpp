@@ -1,4 +1,5 @@
 #include "boat_config.h"
+#include "log_tee.h"
 #if LMYC_WITH_REPORTS_CHARTS
 
 #include "maint_store.h"
@@ -102,11 +103,11 @@ bool maint_store_begin(void)
     StoreLock lock;
     g_ready = false;
     if (!SD.exists("/maint") && !SD.mkdir("/maint")) {
-        Serial.println("maint: mkdir /maint failed");
+        g_log.println("maint: mkdir /maint failed");
         return false;
     }
     g_ready = true;
-    Serial.printf("maint: /maint ready, sailboat_id=%u\n",
+    g_log.printf("maint: /maint ready, sailboat_id=%u\n",
                   static_cast<unsigned>(LMYC_SAILBOAT_ID));
     return true;
 }

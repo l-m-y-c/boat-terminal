@@ -1,4 +1,5 @@
 #include "net_wifi.h"
+#include "log_tee.h"
 
 #include "boat_config.h"
 #include "gateway.h"
@@ -58,7 +59,7 @@ static void wifi_event_handler(void * /*arg*/, esp_event_base_t event_base,
         if (++g_uplink_fails >= kUplinkTries) {
             g_want_reconnect = false;
             snprintf(g_line, sizeof(g_line), "AP only");
-            Serial.printf("Wi-Fi: uplink '%s' not found, hotspot only until restart\n",
+            g_log.printf("Wi-Fi: uplink '%s' not found, hotspot only until restart\n",
                           WIFI_SSID);
             return;
         }
@@ -71,7 +72,7 @@ static void wifi_event_handler(void * /*arg*/, esp_event_base_t event_base,
         }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
         snprintf(g_line, sizeof(g_line), "AP %s", g_ap_ssid);
-        Serial.printf("Wi-Fi AP %s  %s\n", g_ap_ssid, kSoftApIp);
+        g_log.printf("Wi-Fi AP %s  %s\n", g_ap_ssid, kSoftApIp);
         g_ap_up = true;
         g_services_wanted = true;
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
@@ -82,7 +83,7 @@ static void wifi_event_handler(void * /*arg*/, esp_event_base_t event_base,
         g_uplink_fails = 0;
         g_backoff_ms = 1000;
         snprintf(g_line, sizeof(g_line), "STA+AP");
-        Serial.printf("Wi-Fi STA IP %s  AP %s\n", g_sta_ip, kSoftApIp);
+        g_log.printf("Wi-Fi STA IP %s  AP %s\n", g_sta_ip, kSoftApIp);
         g_services_wanted = true;
     }
 }
@@ -92,9 +93,9 @@ void net_wifi_start(void)
     snprintf(g_ap_ssid, sizeof(g_ap_ssid), "LMYC-%s", LMYC_BOAT_ID);
     const bool uplink = WIFI_SSID[0] != '\0';
     if (uplink) {
-        Serial.printf("Wi-Fi: AP '%s' + STA '%s'\n", g_ap_ssid, WIFI_SSID);
+        g_log.printf("Wi-Fi: AP '%s' + STA '%s'\n", g_ap_ssid, WIFI_SSID);
     } else {
-        Serial.printf("Wi-Fi: AP '%s', no uplink\n", g_ap_ssid);
+        g_log.printf("Wi-Fi: AP '%s', no uplink\n", g_ap_ssid);
     }
 
     ESP_ERROR_CHECK(esp_netif_init());
@@ -149,7 +150,7 @@ void net_wifi_poll(void)
     if (g_want_reconnect && static_cast<int32_t>(millis() - g_next_try_ms) >= 0) {
         g_want_reconnect = false;
         snprintf(g_line, sizeof(g_line), "Retrying...");
-        Serial.println("Wi-Fi: reconnect (backoff)");
+        g_log.println("Wi-Fi: reconnect (backoff)");
         esp_wifi_connect();
     }
 }

@@ -1,4 +1,5 @@
 #include "hub_http.h"
+#include "log_tee.h"
 
 #include "boat_config.h"
 #include "inject.h"
@@ -75,7 +76,7 @@ static int http_push(httpd_req_t *req)
     }
     snprintf(g_http_log[slot], sizeof(g_http_log[0]), "%s", line);
     portEXIT_CRITICAL(&g_http_mux);
-    Serial.printf("HTTP %s\n", line);
+    g_log.printf("HTTP %s\n", line);
     return slot;
 }
 
@@ -794,7 +795,7 @@ void hub_http_start(void)
     cfg.stack_size = 8192;
     cfg.recv_wait_timeout = 15;
     if (httpd_start(&g_httpd, &cfg) != ESP_OK) {
-        Serial.println("hub_http: start failed");
+        g_log.println("hub_http: start failed");
         g_httpd = nullptr;
         return;
     }
@@ -855,9 +856,9 @@ void hub_http_start(void)
     httpd_register_uri_handler(g_httpd, &maint_photo_post);
     httpd_register_uri_handler(g_httpd, &maint_ack);
     httpd_register_uri_handler(g_httpd, &maint_reconcile);
-    Serial.println("hub_http: :80  GET /  GET /maintenance  POST /snapshot  POST /inject");
+    g_log.println("hub_http: :80  GET /  GET /maintenance  POST /snapshot  POST /inject");
 #else
-    Serial.println("hub_http: :80  GET /  GET /status.json  GET /n2k.json  GET /n2k/frames  POST /inject");
+    g_log.println("hub_http: :80  GET /  GET /status.json  GET /n2k.json  GET /n2k/frames  POST /inject");
 #endif
     httpd_register_err_handler(g_httpd, HTTPD_404_NOT_FOUND, on_not_found);
     httpd_register_err_handler(g_httpd, HTTPD_405_METHOD_NOT_ALLOWED, on_not_found);

@@ -3,6 +3,7 @@
 #include "n2k_diag.h"
 #include "n2k_network.h"
 #include "n2k_node.h"
+#include "log_tee.h"
 #include "n2k_sim.h"
 #include "n2k_to_0183.h"
 #include "nmea_io.h"
@@ -738,7 +739,7 @@ static bool open_can(void)
         g_select(true);
     }
     delay(20);
-    Serial0.begin(115200, SERIAL_8N1, 44, 43);
+    log_tee_uart_begin();
 
     g_released = xSemaphoreCreateBinary();
     return xTaskCreatePinnedToCore(rx_task, "n2k_rx", 4096, nullptr, kRxTaskPriority, &g_rx_task,

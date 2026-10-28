@@ -1,4 +1,5 @@
 #include "boat_config.h"
+#include "log_tee.h"
 #if LMYC_WITH_REPORTS_CHARTS
 
 #include "snapshot.h"
@@ -127,7 +128,7 @@ bool snapshot_load_jpeg_limited(const uint8_t *jpeg, size_t len, size_t limit)
                 malloc(kSnapshotWidth * kSnapshotHeight * sizeof(uint16_t)));
         }
         if (g_pixels == nullptr) {
-            Serial.println("snapshot: no canvas memory");
+            g_log.println("snapshot: no canvas memory");
             return false;
         }
         memset(g_pixels, 0, kSnapshotWidth * kSnapshotHeight * sizeof(uint16_t));
@@ -140,14 +141,14 @@ bool snapshot_load_jpeg_limited(const uint8_t *jpeg, size_t len, size_t limit)
             g_pool = static_cast<uint8_t *>(malloc(16384));
         }
         if (g_pool == nullptr) {
-            Serial.println("snapshot: no jpeg pool");
+            g_log.println("snapshot: no jpeg pool");
             return false;
         }
     }
     JDEC jd = {};
     JpegSrc src{jpeg, len, 0};
     if (jd_prepare(&jd, jpeg_in, g_pool, 16384, &src) != JDR_OK) {
-        Serial.println("snapshot: jd_prepare failed");
+        g_log.println("snapshot: jd_prepare failed");
         return false;
     }
 
@@ -170,7 +171,7 @@ bool snapshot_load_jpeg_limited(const uint8_t *jpeg, size_t len, size_t limit)
 
     memset(g_pixels, 0, kSnapshotWidth * kSnapshotHeight * sizeof(uint16_t));
     if (jd_decomp(&jd, jpeg_out, scale) != JDR_OK) {
-        Serial.println("snapshot: jd_decomp failed");
+        g_log.println("snapshot: jd_decomp failed");
         g_have = false;
         return false;
     }
@@ -184,7 +185,7 @@ bool snapshot_load_jpeg_limited(const uint8_t *jpeg, size_t len, size_t limit)
     g_have = true;
     g_loaded_ms = millis();
     ++g_generation;
-    Serial.printf("snapshot: ok %ux%u jpeg %uB\n",
+    g_log.printf("snapshot: ok %ux%u jpeg %uB\n",
                   static_cast<unsigned>(jd.width),
                   static_cast<unsigned>(jd.height),
                   static_cast<unsigned>(len));
