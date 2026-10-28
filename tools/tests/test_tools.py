@@ -211,6 +211,85 @@ class Replay(unittest.TestCase):
             self.assertEqual(d["bus"]["bad_values"], 0)
 
 
+
+from lmyc_dev import board as _board  # noqa: E402
+from lmyc_dev.diag import changes, status_line  # noqa: E402
+from lmyc_dev.ports import Port  # noqa: E402
+
+
+def _sock(kind: str, answered: bool, mode: str | None) -> "_board.Socket":
+    port = Port(f"/dev/{kind}", 0x1A86 if kind == "uart" else 0x303A, 0, "x", kind)
+    return _board.Socket(port, answered, mode, "")
+
+
+class ModeAware(unittest.TestCase):
+    def test_parse_mode(self) -> None:
+        self.assertEqual(_board.parse_mode(["NMEA Simulator frames=3"]), _board.SIM)
+        self.assertEqual(_board.parse_mode(["junk", "NMEA NMEA 2000 bus=ok"]), _board.N2K)
+        self.assertIsNone(_board.parse_mode(["N2K: started"]))
+
+    def test_sim_log_on_usb_commands_on_uart(self) -> None:
+        s = [_sock("uart", True, _board.SIM), _sock("usb", True, _board.SIM)]
+        self.assertEqual(_board.pick(s, "log").port.kind, "usb")
+        self.assertEqual(_board.pick(s, "command").port.kind, "uart")
+        self.assertFalse(any("switch" in n for n in _board.explain(s)))
+
+    def test_n2k_uart_only(self) -> None:
+        s = [_sock("uart", True, _board.N2K)]
+        self.assertEqual(_board.pick(s, "log").port.kind, "uart")
+        notes = _board.explain(s)
+        self.assertTrue(any("only the UART" in n for n in notes))
+        self.assertFalse(any("switch" in n for n in notes))
+
+    def test_switch_only_when_uart_gets_no_reply(self) -> None:
+        s = [_sock("uart", False, None), _sock("usb", True, _board.SIM)]
+        self.assertTrue(any("UART1" in n for n in _board.explain(s)))
+        self.assertEqual(_board.pick(s, "command").port.kind, "usb")
+        self.assertTrue(any("UART1" in n for n in _board.explain([_sock("uart", False, None)])))
+        self.assertFalse(any("UART1" in n for n in _board.explain([_sock("usb", True, _board.SIM)])))
+        self.assertIsNone(_board.pick([_sock("uart", False, None)], "log"))
+
+    def test_flash_advice(self) -> None:
+        self.assertIn("cannot flash", _board.flash_advice(_board.N2K, False))
+        self.assertIn("USB socket", _board.flash_advice(None, False))
+        self.assertIn("Simulator", _board.flash_advice(_board.SIM, True))
+
+    def test_terminal_socket_note(self) -> None:
+        import terminal
+        self.assertIn("only the UART", terminal.socket_note("n2k"))
+        self.assertIn("Simulator", terminal.socket_note("sim"))
+
+
+class SessionChanges(unittest.TestCase):
+    def snap(me, **kw):
+        d = {"bus": {"frames": 100, "bus_err": 0, "fps": 50, "state": "ok", "hint": "ok"},
+             "self": {"node": "claimed", "address": 23, "bus_off": 0},
+             "devices": [{"src": 1, "maker": "Garmin", "model": "GPSMAP 740"}],
+             "pgns": [{"pgn": 129025, "src": 1, "name": "position"}], "sources": []}
+        for k, v in kw.items():
+            d[k].update(v) if isinstance(v, dict) else d.__setitem__(k, v)
+        return d
+
+    def test_first_snapshot_lists_devices(self) -> None:
+        self.assertEqual(changes(None, self.snap()), ["device 1: Garmin GPSMAP 740"])
+        self.assertIn("bus-off 0", status_line(self.snap()))
+
+    def test_events(self) -> None:
+        a = self.snap()
+        b = self.snap(self={"address": 24, "bus_off": 1}, bus={"frames": 200, "bus_err": 5},
+                      devices=a["devices"] + [{"src": 2, "maker": "Garmin", "model": "GPSMAP 740"}],
+                      pgns=a["pgns"] + [{"pgn": 130306, "src": 2, "name": "wind"}],
+                      sources=[{"what": "heading", "src": 1, "other": 2}])
+        got = "\n".join(changes(a, b))
+        for want in ("NEW device 2", "NEW PGN 130306", "OUR ADDRESS 23 -> 24", "BUS-OFF x1",
+                     "bus errors +5", "DUPLICATE heading"):
+            self.assertIn(want, got)
+
+    def test_reboot(self) -> None:
+        a = self.snap()
+        b = self.snap(bus={"frames": 5})
+        self.assertTrue(any("rebooted" in c for c in changes(a, b)))
+
 if __name__ == "__main__":
     unittest.main()
 

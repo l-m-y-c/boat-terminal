@@ -179,3 +179,49 @@ def summarise_device(d: dict[str, Any]) -> str:
     for r in d.get("recent", [])[:20]:
         out.append(f"  {r.get('age_ms', 0) / 1000:6.1f} s  {r.get('pgn', 0):6d}  {r.get('text') or r.get('hex', '')}")
     return "\n".join(out)
+
+
+def status_line(d: dict[str, Any]) -> str:
+    """One line per NMEA DIAG snapshot: rate, devices, node, every error counter."""
+    bus, me = d.get("bus", {}), d.get("self", {})
+    lost = bus.get("lost_q", 0) + bus.get("lost_drv", 0) + bus.get("lost_hw", 0)
+    return (f"{bus.get('state')} {bus.get('fps', 0)} f/s, {len(d.get('devices', []))} devices, "
+            f"{len(d.get('pgns', []))} PGN/src, node {me.get('node')} {me.get('address', '')}, "
+            f"lost {lost}, bus errors {bus.get('bus_err', 0)} REC {bus.get('rec', 0)}, "
+            f"bus-off {me.get('bus_off', 0)}, tx refused {me.get('tx_failed', 0)}, "
+            f"repeats {bus.get('repeats', 0)}, bad {bus.get('bad_values', 0)}, hint {bus.get('hint')}")
+
+
+def changes(prev: dict[str, Any] | None, cur: dict[str, Any]) -> list[str]:
+    """What is new since the last snapshot: devices, PGN/source pairs, an
+    address change, bus-off, error bursts, a duplicate source, a reboot."""
+    out: list[str] = []
+    devs = {x.get("src"): x for x in cur.get("devices", [])}
+    pgns = {(p.get("pgn"), p.get("src")): p for p in cur.get("pgns", [])}
+    me, bus = cur.get("self", {}), cur.get("bus", {})
+    if prev is None:
+        for s, x in sorted(devs.items(), key=lambda kv: kv[0] or 0):
+            out.append(f"device {s}: {x.get('maker') or x.get('mfr', '?')} {x.get('model', '')}".rstrip())
+    else:
+        pdevs = {x.get("src") for x in prev.get("devices", [])}
+        ppgns = {(p.get("pgn"), p.get("src")) for p in prev.get("pgns", [])}
+        pme, pbus = prev.get("self", {}), prev.get("bus", {})
+        for s in sorted(set(devs) - pdevs, key=lambda v: v or 0):
+            x = devs[s]
+            out.append(f"NEW device {s}: {x.get('maker') or x.get('mfr', '?')} {x.get('model', '')}".rstrip())
+        for s in sorted(pdevs - set(devs), key=lambda v: v or 0):
+            out.append(f"device {s} gone")
+        for k in sorted(set(pgns) - ppgns, key=lambda k: (k[0] or 0, k[1] or 0)):
+            out.append(f"NEW PGN {k[0]} {pgns[k].get('name', '')} from {k[1]}")
+        if me.get("address") != pme.get("address"):
+            out.append(f"OUR ADDRESS {pme.get('address')} -> {me.get('address')}")
+        if me.get("bus_off", 0) > pme.get("bus_off", 0):
+            out.append(f"BUS-OFF x{me.get('bus_off', 0) - pme.get('bus_off', 0)} (total {me.get('bus_off')})")
+        elif me.get("bus_off", 0) < pme.get("bus_off", 0) or bus.get("frames", 0) < pbus.get("frames", 0):
+            out.append("counters went back to zero: the terminal rebooted")
+        if bus.get("bus_err", 0) > pbus.get("bus_err", 0) and bus.get("frames", 0) >= pbus.get("frames", 0):
+            out.append(f"bus errors +{bus.get('bus_err', 0) - pbus.get('bus_err', 0)}")
+    for o in cur.get("sources", []):
+        if "other" in o:
+            out.append(f"DUPLICATE {o.get('what')}: {o.get('src')} and {o.get('other')} both send it")
+    return out

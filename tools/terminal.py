@@ -33,6 +33,17 @@ def _get(host: str, path: str, timeout: float = 4.0) -> str:
         return r.read().decode("utf-8", errors="replace")
 
 
+def socket_note(src: str | None) -> str:
+    """Which USB-C socket a laptop can use, for the mode the terminal reports."""
+    if src is None:
+        return "Mode unknown (older firmware)."
+    if "2000" in src or src.lower() == "n2k":
+        return ("Mode NMEA 2000: only the UART socket has a console (the USB socket's pins are "
+                "the CAN bus). Battery-only laptop on the UART socket while on the backbone.")
+    return ("Mode Simulator: the log is on the USB socket (and mirrored to UART on new firmware); "
+            "commands work on either.")
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     d = json.loads(_get(args.host, "/status.json"))
     print(json.dumps(d, indent=2) if args.raw else summarise_status(d))
@@ -46,6 +57,8 @@ def cmd_bus(args: argparse.Namespace) -> int:
         print("The terminal is still starting its diagnostics. Try again in a second.")
         return 1
     print(json.dumps(d, indent=2) if args.raw else summarise_n2k(d))
+    if not args.raw:
+        print("\n" + socket_note(d.get("bus", {}).get("src")))
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(body)

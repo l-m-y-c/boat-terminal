@@ -2,7 +2,7 @@
 """The terminal board: find it, see what it runs, get it back, flash it.
 
     python3 tools/board.py ports      # serial ports, which socket is which
-    python3 tools/board.py status     # app / bootloader / silent / absent
+    python3 tools/board.py status     # both sockets, the mode (Simulator / NMEA 2000), advice
     python3 tools/board.py attach     # WSL: attach via usbipd --auto-attach
     python3 tools/board.py boot       # bootloader -> app (USB socket)
     python3 tools/board.py flash      # build, upload, check it booted, recover
@@ -34,14 +34,28 @@ def cmd_ports(_: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    st = board.probe("any", args.port)
-    port = f" on {st.port.path} ({st.port.kind})" if st.port else ""
-    print(f"{st.state}{port}: {st.detail}")
-    if st.state == "bootloader":
-        print("Run `python3 tools/board.py boot` to start the app.")
-    elif st.state == "absent" and is_wsl():
-        print(board.wsl_hint())
-    return 0 if st.state == "app" else 1
+    """Both sockets, each asked NMEA STATS, then the mode and what it means."""
+    sockets = board.survey(args.port)
+    if not sockets:
+        st = board.probe("any", args.port)
+        print(f"{st.state}: {st.detail}")
+        if is_wsl():
+            print(board.wsl_hint())
+        return 1
+    for s in sockets:
+        mode = f" [{s.mode}]" if s.mode else ""
+        print(f"{s.port.kind:4} {s.port.path}{mode}: {s.line}")
+    mode = board.board_mode(sockets)
+    print(f"Mode: {mode or 'unknown'}")
+    for note in board.explain(sockets):
+        print(note)
+    if mode is None:
+        st = board.probe("any", args.port)
+        if st.state == "bootloader":
+            print(f"{st.port.path}: {st.detail} Run `python3 tools/board.py boot` to start the app.")
+        elif is_wsl():
+            print(board.wsl_hint())
+    return 0 if mode else 1
 
 
 def cmd_attach(_: argparse.Namespace) -> int:
@@ -86,13 +100,13 @@ def cmd_boot(args: argparse.Namespace) -> int:
 
 
 def cmd_flash(args: argparse.Namespace) -> int:
-    try:
-        port = board.find_port("usb", args.port)
-    except LookupError:
-        print("Flashing needs the USB socket, which only exists on the simulator.\n"
-              "Switch the terminal to Simulator on the Data source screen first (unplug the "
-              "NMEA 2000 drop if it is on a backbone).\n" + board.uart_flash_note())
+    sockets = board.survey(args.port)
+    mode = board.board_mode(sockets)
+    usb = next((s.port for s in sockets if s.port.kind == "usb"), None)
+    print(board.flash_advice(mode, usb is not None))
+    if mode == board.N2K or usb is None:
         return 1
+    port = usb
     print(f"Uploading through {port.path}")
     if board.upload(port) != 0:
         return 1

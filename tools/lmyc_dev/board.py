@@ -147,17 +147,132 @@ def _in_bootloader(port: Port) -> bool:
     return ok and "Staying in bootloader" in text
 
 
+# ---- mode-aware sockets ----------------------------------------------------
+#
+# Simulator: CAN is closed, so the native USB socket is up and carries the
+# app log; commands work on either socket, and the UART mirrors the log
+# (firmware 4c2c408 and later mirror it; older builds only answer commands
+# there). NMEA 2000: GPIO19/20 are CAN, the USB socket is gone by design and
+# only the UART socket works.
+
+SIM = "Simulator"
+N2K = "NMEA 2000"
+
+
+def parse_mode(lines: list[str]) -> str | None:
+    """The data source from an NMEA STATS reply: 'NMEA Simulator ...' or
+    'NMEA NMEA 2000 ...'. None if no STATS line is there."""
+    for line in lines:
+        if line.startswith("NMEA Simulator"):
+            return SIM
+        if line.startswith("NMEA NMEA 2000"):
+            return N2K
+    return None
+
+
+def ask_stats(path: str, tries: int = 3, seconds: float = 1.5) -> tuple[list[str], str | None]:
+    """NMEA STATS, retried: the first line after the port opens can land on a
+    half-received line and be dropped, so a blank line goes first."""
+    with Console(path) as con:
+        for _ in range(tries):
+            con.send("")
+            reply = con.command("NMEA STATS", seconds)
+            stats = [l for l in reply if l.startswith("NMEA ")]
+            if stats:
+                return stats, parse_mode(stats)
+    return [], None
+
+
+@dataclass
+class Socket:
+    port: Port
+    answered: bool
+    mode: str | None
+    line: str  # the STATS line, or why there is none
+
+
+def survey(path: str | None = None) -> list[Socket]:
+    """Every terminal socket that is plugged in, asked NMEA STATS. Opening
+    either socket leaves DTR/RTS alone and never resets the chip."""
+    ports = [find_port("any", path)] if path else [p for p in list_ports() if p.kind in ("uart", "usb")]
+    out: list[Socket] = []
+    for port in sorted(ports, key=lambda p: 0 if p.kind == "uart" else 1):
+        try:
+            stats, mode = ask_stats(port.path)
+        except (OSError, ConnectionError) as exc:
+            out.append(Socket(port, False, None, f"could not open: {exc}"))
+            continue
+        out.append(Socket(port, bool(stats), mode, stats[-1] if stats else "no reply to NMEA STATS"))
+    return out
+
+
+def board_mode(sockets: list[Socket]) -> str | None:
+    for s in sockets:
+        if s.mode:
+            return s.mode
+    return None
+
+
+def explain(sockets: list[Socket]) -> list[str]:
+    """What the sockets say, in words, and what to do about silence. The
+    UART select switch is suspected only when the UART is plugged in and
+    gets no reply to a command at all."""
+    mode = board_mode(sockets)
+    uart = next((s for s in sockets if s.port.kind == "uart"), None)
+    usb = next((s for s in sockets if s.port.kind == "usb"), None)
+    notes: list[str] = []
+    if mode == SIM:
+        notes.append("Simulator mode: the app log is on the USB socket (and mirrored to the UART on "
+                     "current firmware); commands work on either socket.")
+    elif mode == N2K:
+        notes.append("NMEA 2000 mode: the USB socket's pins are CAN, so only the UART socket works.")
+    if uart is None:
+        if mode == SIM:
+            notes.append("No UART cable: fine on the simulator. On NMEA 2000 you will need it.")
+        elif usb is None:
+            notes.append("No terminal socket at all: check the cable is a data cable. On NMEA 2000 "
+                         "use the socket marked UART.")
+    elif not uart.answered:
+        if mode == SIM:
+            notes.append("The UART is plugged in but did not answer while the USB socket did: set the "
+                         "board's UART select switch to UART1 (on UART2 the Type-C socket is "
+                         "disconnected).")
+        elif mode is None:
+            notes.append("The UART is plugged in and got no reply. Either the chip is in the ROM "
+                         "bootloader, or the UART select switch is on UART2: set it to UART1.")
+    if usb is not None and mode == N2K:
+        notes.append("A USB socket is listed while the app reports NMEA 2000: unusual; unplug it.")
+    if usb is not None and not usb.answered and mode is None and uart is None:
+        notes.append("The USB socket did not answer: the app is not running (bootloader?), or it "
+                     "has just switched to NMEA 2000 and is closing USB.")
+    return notes
+
+
+def pick(sockets: list[Socket], purpose: str) -> Socket | None:
+    """purpose "log": where the full log is; "command": any socket that
+    answers, UART first (it never resets the chip and survives NMEA 2000)."""
+    live = [s for s in sockets if s.answered]
+    if not live:
+        return None
+    if purpose == "log" and board_mode(sockets) == SIM:
+        for s in live:
+            if s.port.kind == "usb":
+                return s
+    for s in live:
+        if s.port.kind == "uart":
+            return s
+    return live[0]
+
+
 def probe(prefer: str = "any", path: str | None = None) -> Status:
     try:
         port = find_port(prefer, path)
     except LookupError as exc:
         return Status("absent", None, str(exc))
     try:
-        with Console(port.path) as con:
-            reply = con.command("NMEA STATS", 1.5)
+        stats, mode = ask_stats(port.path)
     except (OSError, ConnectionError) as exc:
         return Status("silent", port, f"could not read {port.path}: {exc}")
-    stats = [l for l in reply if l.startswith("NMEA ")]
     if stats:
         return Status("app", port, stats[-1])
     # Silent: the ROM bootloader first (BOOT held at reset, or left there by
@@ -171,6 +286,18 @@ def probe(prefer: str = "any", path: str | None = None) -> Status:
         detail += (" Check the board's UART select switch is on UART1: on UART2 the Type-C socket "
                    "is disconnected and not even the boot banner comes through.")
     return Status("silent", port, detail)
+
+
+def flash_advice(mode: str | None, have_usb: bool) -> str:
+    if mode == N2K:
+        return ("The terminal is in NMEA 2000 mode, so the USB socket is CAN and cannot flash. Either "
+                "switch to Simulator (Data source screen, or `console.py send NMEA SIM`; unplug the "
+                "NMEA 2000 drop first) and flash over USB, or hold BOOT, tap RESET, release BOOT with a "
+                "cable in the USB socket.\n" + uart_flash_note())
+    if not have_usb:
+        return ("Flashing needs the USB socket. Plug a data cable into the socket marked USB "
+                "(Simulator mode).\n" + uart_flash_note())
+    return "Simulator mode: flashing over the USB socket."
 
 
 def boot_app(port: Port) -> tuple[bool, str]:
