@@ -373,6 +373,9 @@ static bool has(const Device &d, int want)
 bool n2k_net_next_request(uint32_t now, bool can_send, uint8_t *dst, unsigned long *pgn)
 {
     Device *t = table();
+    /* Nothing goes out without a claimed address (not 254, claim wait
+     * over). The broadcast sweep below is armed only by n2k_net_reset() at
+     * boot and by n2k_net_refresh() (the user's Refresh): never by a timer. */
     if (!can_send || t == nullptr || dst == nullptr || pgn == nullptr) {
         return false;
     }

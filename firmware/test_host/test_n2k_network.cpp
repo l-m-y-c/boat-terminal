@@ -239,6 +239,43 @@ int main()
     run(5000);
     expect_true("refresh asks again", g_requests_sent > before + 6);
 
+    /* ---- the broadcast sweep: boot (once claimed) and Refresh only ---- */
+    {
+        n2k_net_reset();
+        uint8_t dst = 0;
+        unsigned long pgn = 0;
+        uint32_t t = 100000;
+        bool any = false;
+        for (int i = 0; i < 200; ++i, t += 50) {
+            any = any || n2k_net_next_request(t, false, &dst, &pgn);
+        }
+        expect_true("no request while the address is unclaimed", !any);
+        const bool first = n2k_net_next_request(t, true, &dst, &pgn);
+        expect_true("boot sweep once claimed", first && dst == 0xff && pgn == 60928UL);
+        int broadcasts = 0;
+        for (int i = 0; i < 6000; ++i, t += 50) { /* five minutes */
+            if (n2k_net_next_request(t, true, &dst, &pgn) && dst == 0xff) {
+                ++broadcasts;
+            }
+        }
+        expect_true("no periodic broadcast sweep", broadcasts == 0);
+        n2k_net_refresh();
+        any = false;
+        for (int i = 0; i < 200; ++i, t += 50) {
+            any = any || n2k_net_next_request(t, false, &dst, &pgn);
+        }
+        expect_true("refresh waits while unclaimed", !any);
+        const bool again = n2k_net_next_request(t, true, &dst, &pgn);
+        expect_true("refresh sweeps once claimed", again && dst == 0xff && pgn == 60928UL);
+        broadcasts = 0;
+        for (int i = 0; i < 6000; ++i, t += 50) {
+            if (n2k_net_next_request(t, true, &dst, &pgn) && dst == 0xff) {
+                ++broadcasts;
+            }
+        }
+        expect_true("one sweep per refresh", broadcasts == 0);
+    }
+
     printf("n2k network: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
