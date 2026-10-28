@@ -55,7 +55,18 @@ From the board labeling:
 | 7 / 6 | UART2 / UART1 | One UART, to the CH343 Type-C (UART1) or the UART header (UART2), chosen by the UART select switch (item 15). **Keep it on UART1**: on UART2 the Type-C socket still enumerates but carries nothing (the likely cause of the old "does not deliver flash data" on the Mac). |
 | 10 | I2C header | Sensors / expansion |
 | 4 | TF card slot | Local logs, reference data |
-| 5 | USB Type-C | ESP32 native USB. Shared with CAN. Flash port on a Mac (see below) |
+| 5 | USB Type-C | ESP32 native USB. Shared with CAN: gone in NMEA 2000 mode. Flash port on a Mac (see below) |
+
+### Which socket, by mode
+
+The board is powered only through a USB-C socket.
+
+| Mode | USB socket | UART socket |
+|------|-----------|-------------|
+| Simulator | Log + commands; flashing | Commands; log mirrored (firmware 0.9 and later) |
+| NMEA 2000 | Pins are CAN. Nothing plugged in | The only console. Bus power (pigtail from the Pololu, [20](20-n2k-bus-power-supply.md)), or a battery-only laptop instead |
+
+`python3 tools/board.py status` lists both sockets and the mode. **Isolation:** the board is not isolated from the bus. While the terminal is on the backbone, never plug a laptop that is on mains or ship power (or charging) into the UART socket: battery only, charger unplugged, nothing else connected to the laptop.
 
 ### Flashing from a Mac
 

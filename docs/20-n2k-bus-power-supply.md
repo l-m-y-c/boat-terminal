@@ -21,7 +21,7 @@ Files:
 
 It powers the Waveshare ESP32-S3-Touch-LCD-7 from the N2K drop (NET-S / NET-C) with no custom PCB:
 
-`NET-S → inline 1 A ATO fuse → [D1 TVS to NET-C] → [D2 Schottky] → Pololu APM81815 VIN` · `NET-C → Pololu GND` · `Pololu 5 V / GND → USB-C power pigtail → Waveshare "USB" socket` · `CAN-H / CAN-L → CAN header` · shield cut back.
+`NET-S → inline 1 A ATO fuse → [D1 TVS to NET-C] → [D2 Schottky] → Pololu APM81815 VIN` · `NET-C → Pololu GND` · `Pololu 5 V / GND → USB-C power pigtail → Waveshare "UART" socket` · `CAN-H / CAN-L → CAN header` · shield cut back.
 
 Recommended: fit D2 (a 1N5822 Schottky in series, for reverse-polarity protection) and D1 (a P6KE27CA TVS on the bus side of D2). Both are axial parts, about $1 each, soldered into the wiring. Optional: a 100 µF electrolytic (C1) across the Pololu VIN/GND pins, only if the hot-plug test needs it.
 
@@ -102,7 +102,7 @@ The [Pololu D36V28F5](https://www.pololu.com/product/3782) (#3782, US$23.95, sho
 - If you prefer a compliant source, use an Adafruit 5978 plug breakout with its 5.1k CC1 jumper cut, and a 56 kΩ from VBUS to CC1. That's optional.
 - Cut the pigtail short (20–30 cm). At 22 AWG the drop is under 0.1 V at 0.7 A.
 - Don't solder to on-board 5 V pads; the USB socket is the clean path.
-- The "UART" Type-C socket feeds 5 V through its own P-FET. Leave it and the battery header empty.
+- The "UART" Type-C socket feeds 5 V through its own P-FET. **In NMEA 2000 mode the pigtail goes into the UART socket** (decision 2026-10-27): the USB socket's pins are CAN in that mode, so it stays empty, and the UART socket is the one a battery-only laptop uses for the console when the pigtail is unplugged. The P-FET drop at 0.7 A is small; confirm 5 V at the board in the bench test. Leave the battery header empty.
 
 ## Parts
 
@@ -113,7 +113,7 @@ Full details, specs and links are in [bom.csv](assets/n2k-power/bom.csv).
 | U1 | 1 | 5 V step-down regulator carrier | [Pololu APM81815, 5V Out](https://www.pololu.com/product/5267) (#5267), US$6.95 | 5.05–72 V in (80 V abs max), ~1.9 A at 9–12 V. **No reverse protection.** Alternative: [D36V28F5](https://www.pololu.com/product/3782) (#3782, US$23.95), with built-in reverse protection. |
 | F1a | 1 | Waterproof inline ATO/ATC fuse holder | [Blue Sea 5065](https://www.bluesea.com/products/5065/Waterproof_In-Line_ATO_ATC_Fuse_holder) | Fuse sold separately. The 5064 is the non-waterproof version. |
 | F1b | 1 + spares | 1 A ATO blade fuse, fast-acting | Littelfuse 0287001.PXCN | Don't fit a lower rating. |
-| J2 | 1 | USB-C male to 2 bare wires, power only | Generic 22 AWG pigtail (e.g. XMSJSIY LE-103) | Into the socket marked **USB**. Check polarity with a meter first. |
+| J2 | 1 | USB-C male to 2 bare wires, power only | Generic 22 AWG pigtail (e.g. XMSJSIY LE-103) | Into the socket marked **UART** (NMEA 2000 mode). Check polarity with a meter first. |
 | D2 | 0–1 | Schottky diode, 40 V 3 A, recommended | onsemi 1N5822 (e.g. [1N5822RLG](https://www.digikey.com/en/products/detail/onsemi/1N5822RLG/807334)), about US$1 | In series in NET-S, band towards Pololu VIN. Reverse-polarity protection. SS34 (SMD) is equivalent. |
 | D1 | 0–1 | Bidirectional TVS | Littelfuse P6KE27CA | Fit if D2 is fitted (bus side of D2). Otherwise optional, across Pololu VIN/GND. |
 | C1 | 0–1 | 100 µF 50 V electrolytic, optional | Panasonic EEU-FC1H101 | Across Pololu VIN/GND, only if the hot-plug test shows VIN over about 40 V. |
@@ -127,7 +127,7 @@ Full details, specs and links are in [bom.csv](assets/n2k-power/bom.csv).
 3. Pololu VOUT → pigtail red. Pololu GND → pigtail black. The APM81815 has one GND pin, shared by input and output, so NET-C and pigtail black both go to it. Leave EN open (it is pulled up to VIN on the board). There is no PG pin.
 4. CAN-H (white) / CAN-L (blue) → Waveshare CAN header H / L, kept twisted. Remove jumper 13 (120 Ω).
 5. Shield/drain: cut back and insulate. It isn't connected; N2K grounds it only at the power tap.
-6. **Single ground:** NET-C = Pololu GND = USB-C GND = board GND = the TJA1051's reference. While the board is on the bus, nothing else is wired to it: no laptop USB, no phone charger, no RS485, no second 12 V. This is the interim rule while the prototype is not isolated (see Risks and open points).
+6. **Single ground:** NET-C = Pololu GND = USB-C GND = board GND = the TJA1051's reference. While the board is on the bus, nothing else is wired to it: no laptop USB (except a laptop on battery only, on the UART socket, with the pigtail unplugged), no phone charger, no RS485, no second 12 V. This is the interim rule while the prototype is not isolated (see Risks and open points).
 7. Enclosure:
    - **Box:** a small IP66/67 box with two cable glands. The APM81815 has no mounting holes, so solder the wires straight to its pins, sleeve D1/D2 in heat-shrink, and hold the module down with double-sided foam tape or a dab of sealant. Strain-relieve the wires so the pins carry no load.
    - **Fuse holder:** put it outside the box, or inside if there's room, so the fuse stays reachable.

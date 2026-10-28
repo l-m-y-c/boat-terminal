@@ -134,7 +134,7 @@ flowchart LR
     TEE[Tee] --- DROP[Micro-C drop]
     DROP -- "NET-S (red)" --> FUSE[1 A ATO fuse<br/>Blue Sea 5065] --> DCDC[Diode + Pololu APM81815<br/>12 V to 5 V, non-isolated]
     DROP -- "NET-C (black)" --> DCDC
-    DCDC -- "5 V + GND,<br/>2-wire USB-C pigtail" --> USB[Waveshare USB socket]
+    DCDC -- "5 V + GND,<br/>2-wire USB-C pigtail" --> USB[Waveshare UART socket]
     DROP -- "CAN-H (white) / CAN-L (blue)" --> CAN[Waveshare CAN header<br/>PH2.0, jumper 13 off]
     DROP -. "shield / drain (bare):<br/>cut back, insulate" .- X[not connected]
 ```
@@ -144,7 +144,9 @@ Wiring:
 1. Remove jumper 13, the onboard 120 Ω terminator.
 2. NET-S (red) through the Blue Sea 5065 holder with a 1 A ATO fuse (Littelfuse 0287001.PXCN), then the 1N5822 diode (band towards the Pololu), to the Pololu VIN. The Pololu has no reverse protection, so if you leave the diode out, check the drop polarity with a meter before every first connection.
 3. NET-C (black) to the Pololu GND. With the diode, fit the P6KE27CA TVS from NET-S to NET-C on the bus side of the diode. Fit the 100 µF cap across the Pololu VIN/GND only if the hot-plug test needs it.
-4. Pololu VOUT and GND to the board through a 2-wire USB-C power pigtail into the socket marked **USB**. That socket's VBUS goes straight onto the board's 5 V rail, and CC1/CC2 already have 5.1 kΩ to ground, so no CC resistor is needed. Leave EN open. Leave the UART socket empty.
+4. Pololu VOUT and GND to the board through a 2-wire USB-C power pigtail into the socket marked **UART**. The board takes power only through its USB-C sockets, and in NMEA 2000 mode the **USB** socket's pins (GPIO19/20) are the CAN bus, so the USB socket is kept free of any cable. The UART socket feeds the 5 V rail through its own P-FET; check the pigtail polarity with a meter first. Leave EN open. Leave the USB socket empty.
+
+   The UART socket is also the only console in NMEA 2000 mode (CH343, 115200). To debug on the boat, unplug the pigtail and plug in a laptop on battery instead: the laptop then powers the board. See [the boat test](boat-test-2026-10-28.md). (Before 2026-10-27 this step said the USB socket. A strictly 2-wire pigtail never touches the data pins, so the USB socket also works electrically; the UART socket was chosen so no data cable ever goes on the CAN pins.)
 5. CAN-H (white) and CAN-L (blue) to the board's CAN header (PH2.0, High and Low). Check colours against the cable's own sheet.
 6. Shield / drain (bare): cut it back at the boat-terminal end and insulate it. On N2K the shield is grounded at one point only, the power tap. Devices don't connect it.
 7. On the terminal, tap the **SIMULATION** badge and choose **NMEA 2000**. The choice is saved, so do it once, on the bench, before the drop goes on. (`NMEA_SOURCE 1` in `firmware/src/secrets.h` does the same for a freshly erased board.) See [05](05-nmea-connectivity.md#data-source-simulator-or-nmea-2000).
@@ -160,6 +162,8 @@ The Pololu is a bare 10 × 19 mm board with no mounting holes. Solder the wires 
 - No separate 12 V feed.
 - No battery on the PH2.0 header.
 - Wi-Fi and BLE only.
+
+**Isolation:** the board is not isolated from the bus. While the terminal is on the backbone, never plug a laptop that is on mains or ship power (or charging) into the UART socket: battery only, charger unplugged, nothing else connected to the laptop.
 
 Any second wire brings back a second ground, and with it the ground loop. The same goes for a phone charger or a laptop on mains touching the board. Flash and debug the board off the bus, or from a laptop running on its own battery with nothing else plugged in.
 
