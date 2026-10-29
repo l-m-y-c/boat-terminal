@@ -84,7 +84,7 @@ boat Wi-Fi (through the relay on 127.0.0.1:10180):
 | `manifest.json` | when, why (manual / problem / auto-bus-off / auto-bus-errors / auto-no-frames), the member's note, app version, chart-app stats |
 
 Saved as `lmyc-diag-YYYYMMDD-HHMMSS-<reason>.zip` in
-`/sdcard/Android/data/ca.lmyc.lmyc_app/files/diagnostics/` (last 30 kept),
+`/sdcard/Android/data/ca.lmyc.boat/files/diagnostics/` (last 30 kept),
 each with a Share button (email, Drive, ...). If the terminal does not answer
 the zip still holds the phone side and the card says so.
 

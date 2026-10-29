@@ -34,7 +34,7 @@
         android:required="true" />
 
     <application
-        android:label="LMYC"
+        android:label="LMYC Boat Terminal"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">

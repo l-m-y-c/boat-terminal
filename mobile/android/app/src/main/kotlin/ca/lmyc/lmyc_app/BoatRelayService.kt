@@ -55,7 +55,7 @@ class BoatRelayService : Service() {
         private const val HTTP_MAX_CONNECTIONS = 4
         private const val CHANNEL = "boat_relay"
         private const val NOTIFICATION_ID = 4411
-        private const val ACTION_STOP = "ca.lmyc.lmyc_app.STOP_RELAY"
+        private const val ACTION_STOP = "ca.lmyc.boat.STOP_RELAY"
         private const val EXTRA_IP = "ip"
         private const val EXTRA_SSID = "ssid"
         private const val EXTRA_PSK = "psk"

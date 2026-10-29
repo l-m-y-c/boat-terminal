@@ -17,7 +17,7 @@ import java.util.TimeZone
  * logcat under the tag LmycRelay.
  *
  * The file is relay-log.txt in the app's external files directory, which
- * `adb pull /sdcard/Android/data/ca.lmyc.lmyc_app/files/` reads without
+ * `adb pull /sdcard/Android/data/ca.lmyc.boat/files/` reads without
  * root (tools/boat_diag.py does), with relay-log.1.txt the previous 512 KB.
  */
 object RelayLog {

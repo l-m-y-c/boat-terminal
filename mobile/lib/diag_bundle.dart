@@ -16,7 +16,7 @@ import 'boat_wifi.dart';
 import 'terminal_stats.dart';
 
 /// Where bundles go, under the app's external files dir:
-/// /sdcard/Android/data/ca.lmyc.lmyc_app/files/diagnostics/ (adb-pullable,
+/// /sdcard/Android/data/ca.lmyc.boat/files/diagnostics/ (adb-pullable,
 /// no permission needed). tools/boat_diag.py pulls and unpacks them.
 const kDiagFolder = 'diagnostics';
 

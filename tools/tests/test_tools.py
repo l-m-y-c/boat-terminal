@@ -359,6 +359,20 @@ class BoatDiagRunTest(unittest.TestCase):
             self.assertIn("a", out.read_text(encoding="utf-8"))
 
 
+class AppIdTest(unittest.TestCase):
+    """The Play applicationId is the one boat_diag pulls from."""
+
+    def test_application_id(self):
+        import re
+        import boat_diag
+        gradle = (TOOLS.parent / "mobile/android/app/build.gradle.kts").read_text()
+        app_id = re.search(r'applicationId = "([^"]+)"', gradle).group(1)
+        self.assertEqual(app_id, "ca.lmyc.boat")
+        self.assertEqual(boat_diag.PKG, app_id)
+        manifest = (TOOLS.parent / "mobile/android/app/src/main/AndroidManifest.xml").read_text()
+        self.assertIn('android:label="LMYC Boat Terminal"', manifest)
+
+
 if __name__ == "__main__":
     unittest.main()
 

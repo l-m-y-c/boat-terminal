@@ -35,7 +35,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-PKG = "ca.lmyc.lmyc_app"
+PKG = "ca.lmyc.boat"  # applicationId (Play); the Kotlin namespace is still ca.lmyc.lmyc_app
 PY = sys.executable
 
 
