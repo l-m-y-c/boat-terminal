@@ -63,3 +63,27 @@ $cxx -std=gnu++17 -O1 -w -include cstdlib -include cstring -include cstdio \
     "$lib/N2kGroupFunction.cpp" "$lib/N2kGroupFunctionDefaultHandlers.cpp" "$out/N2kTimer_sim.o" \
     -o "$out/test_n2k_network"
 "$out/test_n2k_network"
+# A Garmin GPSMAP 740s alone on the bus (Baca Lele): the plotter's GPS must
+# come out as RMC with time, date and status A, plus GGA, GLL and VTG.
+python3 "$here/../../tools/garmin740s_capture.py" 20 "$out/garmin740s.log"
+sh "$here/replay.sh" "$out/garmin740s.log" --sentences "$out/garmin740s.txt" > "$out/garmin740s.out"
+python3 - "$out/garmin740s.txt" <<'PY'
+import re, sys
+lines = [l.split(None, 1)[1].strip() for l in open(sys.argv[1]) if " $" in l or " !" in l]
+def ok(s):
+    body, _, cs = s[1:].partition("*")
+    c = 0
+    for ch in body:
+        c ^= ord(ch)
+    return cs.upper() == "%02X" % c
+rmc = [l for l in lines if l.startswith("$GPRMC")]
+fails = []
+if len(rmc) < 15: fails.append("RMC at 1 Hz")
+if not all(ok(l) for l in lines): fails.append("checksums")
+good = [r for r in rmc if re.match(r"\$GPRMC,\d{6}\.\d\d,A,\d{4}\.\d{4},N,\d{5}\.\d{4},W,\d+\.\d,\d+\.\d,\d{6},", r)]
+if len(good) < len(rmc) - 1: fails.append("RMC has time, A, position, SOG, COG and date")
+for t in ("$GPGGA", "$GPGLL", "$GPVTG"):
+    if sum(l.startswith(t) for l in lines) < 15: fails.append(t)
+print("garmin 740s replay: %d sentences, %s" % (len(lines), "ok" if not fails else "FAIL " + ", ".join(fails)))
+sys.exit(1 if fails else 0)
+PY
