@@ -1362,7 +1362,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
     final stats = _stats;
     if (stats != null) {
-      phone['chart_apps_on_terminal'] = stats.chartApps;
+      // The relay itself is one of these; relay clients are in wifi_relay.
+      phone['terminal_tcp_clients'] = stats.chartApps;
       phone['sentences_out'] = stats.sentencesOut;
     }
     if (_statsRaw != null) files['phone/ble-stats.json'] = _statsRaw!;

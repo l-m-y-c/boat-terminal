@@ -28,15 +28,17 @@ class _DiagBundleCardState extends State<DiagBundleCard> {
   Future<void> _collect(String reason, {String? note}) async {
     final r = await widget.controller.collect(reason, note: note);
     if (!mounted || r == null) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Saved ${_name(r.file.path)}: ${r.summary}'),
-        action: SnackBarAction(
-          label: 'Share',
-          onPressed: () => unawaited(_share(r.file.path)),
+    // No action button: with one, Android accessibility keeps the snackbar up
+    // indefinitely and it covers Mark problem. Share is on the list below.
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+          content: Text('Saved ${_name(r.file.path)}: ${r.summary}'),
         ),
-      ),
-    );
+      );
   }
 
   Future<void> _mark() async {

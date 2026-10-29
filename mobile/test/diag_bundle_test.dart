@@ -209,4 +209,40 @@ void main() {
     expect(find.textContaining('lmyc-diag-'), findsOneWidget);
     dir.deleteSync(recursive: true);
   });
+
+  testWidgets('saving shows a plain snackbar that cannot block the buttons', (
+    tester,
+  ) async {
+    final dir = Directory.systemTemp.createTempSync('diag');
+    final c = DiagBundleController(
+      dir: () async => dir,
+      phoneContext: () async => (<String, Object?>{}, <String, String>{}),
+      collector: DiagCollector(
+        client: MockClient((_) async => throw const SocketException('x')),
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(child: DiagBundleCard(controller: c)),
+        ),
+      ),
+    );
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const ValueKey('diag-collect')));
+      for (var i = 0; i < 50 && c.last == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
+    await tester.pump();
+    expect(find.byType(SnackBar), findsOneWidget);
+    expect(find.byType(SnackBarAction), findsNothing);
+    final bar = tester.widget<SnackBar>(find.byType(SnackBar));
+    expect(bar.behavior, SnackBarBehavior.floating);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pumpAndSettle();
+    expect(find.byType(SnackBar), findsNothing);
+    dir.deleteSync(recursive: true);
+  });
 }
