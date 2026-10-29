@@ -11,6 +11,8 @@
 
 #include <Arduino.h>
 
+#include "diag_log.h"
+
 inline constexpr size_t kLogTeeUartTx = 2048;
 inline volatile bool g_log_tee_uart = false;
 
@@ -33,8 +35,27 @@ public:
         if (g_log_tee_uart && Serial0.availableForWrite() >= static_cast<int>(n)) {
             Serial0.write(buf, n);
         }
+        /* Each finished line also goes to the diagnostics ring as an event,
+         * so the bench pull sees Wi-Fi clients, gateway and mode changes.
+         * Lines from two tasks at once may mix; the ring is best effort. */
+        for (size_t i = 0; i < n; ++i) {
+            const char ch = static_cast<char>(buf[i]);
+            if (ch == '\n' || line_n_ + 1 >= sizeof(line_)) {
+                line_[line_n_] = '\0';
+                if (line_n_ > 0) {
+                    diag_log_add('L', line_);
+                }
+                line_n_ = 0;
+            } else if (ch != '\r') {
+                line_[line_n_++] = ch;
+            }
+        }
         return n;
     }
+
+private:
+    char line_[96] = {};
+    size_t line_n_ = 0;
 };
 
 inline LogTee g_log;

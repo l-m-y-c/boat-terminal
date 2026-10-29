@@ -9,6 +9,7 @@
 #include "terminal_stats.h"
 #include "gateway.h"
 #include "n2k.h"
+#include "diag_log.h"
 
 #if LMYC_WITH_REPORTS_CHARTS
 #include <SD.h>
@@ -259,6 +260,38 @@ static esp_err_t get_n2k_frames(httpd_req_t *req)
     const size_t body = n2k_capture_read(static_cast<uint32_t>(after), buf + kHead, kCap - kHead, &next, &lost, src);
     /* Full means there was more than fit: the phone asks again at once. */
     const bool more = body + 52 * 33 >= kCap - kHead;
+    char head[kHead];
+    const int hn = snprintf(head, sizeof(head), "#next %lu lost %lu more %d\n", static_cast<unsigned long>(next),
+                            static_cast<unsigned long>(lost), more ? 1 : 0);
+    const size_t start = kHead - static_cast<size_t>(hn);
+    memcpy(buf + start, head, static_cast<size_t>(hn));
+    httpd_resp_set_type(req, "text/plain");
+    const esp_err_t err = httpd_resp_send(req, buf + start, static_cast<ssize_t>(hn + body));
+    heap_caps_free(buf);
+    return err;
+}
+
+/* GET /diag/nmea.txt?after=N: the sentence and event ring (diag_log.h).
+ * First line "#next N lost M more 0|1"; after=0 (or none) is the oldest kept. */
+static esp_err_t get_diag_nmea(httpd_req_t *req)
+{
+    char query[32];
+    char after_s[16];
+    unsigned long after = 0;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "after", after_s, sizeof(after_s)) == ESP_OK) {
+        after = strtoul(after_s, nullptr, 10);
+    }
+    constexpr size_t kCap = 32768;
+    constexpr size_t kHead = 64;
+    char *buf = static_cast<char *>(heap_caps_malloc(kCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (buf == nullptr) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    uint32_t next = 0, lost = 0;
+    const size_t body = diag_log_read(static_cast<uint32_t>(after), buf + kHead, kCap - kHead, &next, &lost);
+    const bool more = next < diag_log_count();
     char head[kHead];
     const int hn = snprintf(head, sizeof(head), "#next %lu lost %lu more %d\n", static_cast<unsigned long>(next),
                             static_cast<unsigned long>(lost), more ? 1 : 0);
@@ -823,6 +856,9 @@ void hub_http_start(void)
         .uri = "/n2k/device.json", .method = HTTP_GET, .handler = get_n2k_device, .user_ctx = nullptr};
     httpd_register_uri_handler(g_httpd, &n2k_network);
     httpd_register_uri_handler(g_httpd, &n2k_device);
+    static httpd_uri_t diag_nmea = {
+        .uri = "/diag/nmea.txt", .method = HTTP_GET, .handler = get_diag_nmea, .user_ctx = nullptr};
+    httpd_register_uri_handler(g_httpd, &diag_nmea);
 #if LMYC_WITH_REPORTS_CHARTS
     static httpd_uri_t snap = {
         .uri = "/snapshot", .method = HTTP_POST, .handler = post_snapshot,

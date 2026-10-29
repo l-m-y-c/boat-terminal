@@ -26,6 +26,7 @@
 #include "nmea.h"
 #include "nmea_io.h"
 #include "n2k.h"
+#include "diag_log.h"
 #include "n2k_diag.h"
 #include "n2k_network.h"
 #include "n2k_to_0183.h"
@@ -2998,6 +2999,7 @@ static void create_ui(void)
 static void on_nmea_sentence(const char *sentence, size_t /*len*/, void * /*ctx*/)
 {
     nmea_state_note(sentence);
+    diag_log_add('S', sentence);
     gateway_send_sentence(sentence);
     pairing_nmea_notify(sentence);
 }
@@ -3057,6 +3059,7 @@ void setup()
 #endif
     gateway_init();
     hub_http_init();
+    diag_log_init();
     nmea_set_sink(on_nmea_sentence, nullptr);
     /* Before BLE, Wi-Fi or HTTP start their tasks. On NMEA 2000 this ends
      * USB Serial, which must not happen while another task is printing. */

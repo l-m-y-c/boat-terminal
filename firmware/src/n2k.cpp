@@ -5,6 +5,7 @@
 #include "n2k_node.h"
 #include "log_tee.h"
 #include "n2k_sim.h"
+#include "diag_log.h"
 #include "n2k_to_0183.h"
 #include "nmea_io.h"
 
@@ -169,6 +170,7 @@ static void n2k_log(const char *msg)
 {
     /* UART0 (CH343) is up in every mode. USB Serial only while the mux is on USB. */
     Serial0.println(msg);
+    diag_log_add('E', msg);
     if (!g_uart) {
         Serial.println(msg);
     }
@@ -264,10 +266,12 @@ static QueueHandle_t make_queue(uint32_t items, size_t item_size)
 
 /* ---- raw capture ------------------------------------------------------ */
 
-/* Every frame loop() decodes, kept for the phone's "Record bus". At 500
- * frames/s 4096 frames is 8 s, so a phone polling twice a second never
- * falls behind. Written by loop(), read by the web server task. */
-static constexpr uint32_t kCaptureFrames = 4096;
+/* Every frame loop() decodes, kept for the phone's "Record bus" and for
+ * the bench pull (tools/boat_diag.py, GET /n2k/frames?after=1 reads the
+ * whole ring). 32768 frames x 32 bytes = 1 MB of PSRAM: about 65 s at
+ * 500 frames/s, and over 20 min of a Garmin 740s alone (~25 frames/s).
+ * Written by loop(), read by the web server task. */
+static constexpr uint32_t kCaptureFrames = 32768;
 
 struct CaptureFrame {
     uint32_t seq;
@@ -444,6 +448,16 @@ bool N2kStack::CANSendFrame(unsigned long id, unsigned char len, const unsigned 
         return false;
     }
     g_tx_frames = g_tx_frames + 1;
+    /* What the terminal itself put on the backbone goes into the capture
+     * too, as a candump on the wire would show it: the bench can then see
+     * exactly which address claim, product and configuration information
+     * a chart plotter was given. */
+    N2kFrame sent = {};
+    sent.id = m.identifier;
+    sent.len = m.data_length_code;
+    memcpy(sent.data, m.data, sent.len);
+    sent.us = esp_timer_get_time();
+    capture_frame(sent);
     return true;
 }
 
@@ -1276,6 +1290,36 @@ static void switch_from_console(DataSource next)
     n2k_switch_source(next);
 }
 
+/* NMEA OUT [n]: the last n (default 200, at most 8192) entries of the
+ * sentence and event ring, between BEGIN/END markers for tools/console.py
+ * dump. Printed straight to the UART so it does not log itself. */
+static void log_diag_ring(const char *arg)
+{
+    while (*arg == ' ') {
+        ++arg;
+    }
+    long want = *arg ? strtol(arg, nullptr, 10) : 200;
+    if (want <= 0 || want > 8192) {
+        want = 8192;
+    }
+    const uint32_t head = diag_log_count();
+    uint32_t after = head > static_cast<uint32_t>(want) ? head - static_cast<uint32_t>(want) : 0;
+    Serial0.printf("NMEA OUT BEGIN %lu\n", static_cast<unsigned long>(head));
+    static char buf[4096];
+    while (after < head) {
+        uint32_t next = after;
+        const size_t n = diag_log_read(after, buf, sizeof(buf), &next, nullptr);
+        if (n > 0) {
+            Serial0.write(reinterpret_cast<const uint8_t *>(buf), n);
+        }
+        if (next <= after) {
+            break;
+        }
+        after = next;
+    }
+    Serial0.println("NMEA OUT END");
+}
+
 /* Pausing for canned PGNs: frames the simulator already queued would
  * overwrite the demo values in the same pass, so they are dropped and
  * counted as ignored. */
@@ -1331,6 +1375,8 @@ bool n2k_handle_command(const char *line)
         log_diag();
     } else if (strncasecmp(arg, "NET", 3) == 0 && (arg[3] == '\0' || arg[3] == ' ')) {
         log_network(arg + 3);
+    } else if (strncasecmp(arg, "OUT", 3) == 0 && (arg[3] == '\0' || arg[3] == ' ')) {
+        log_diag_ring(arg + 3);
     } else if (strcasecmp(arg, "DEMO") == 0) {
         if (require_simulator("DEMO")) {
             pause_simulator();
@@ -1348,7 +1394,7 @@ bool n2k_handle_command(const char *line)
             }
         }
     } else {
-        n2k_log("NMEA command: SIM, N2K, STATS, DIAG, NET [address|REFRESH], DEMO, or PGN <number> [src=N] <hex>");
+        n2k_log("NMEA command: SIM, N2K, STATS, DIAG, NET [address|REFRESH], OUT [n], DEMO, or PGN <number> [src=N] <hex>");
     }
     return true;
 }
