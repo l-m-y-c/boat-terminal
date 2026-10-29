@@ -43,6 +43,7 @@ object BoatWifi : MethodChannel.MethodCallHandler {
                     ip,
                     call.argument<String>("ssid"),
                     call.argument<String>("psk"),
+                    call.argument<Boolean>("force") == true,
                 )
                 result.success(null)
             }
@@ -88,6 +89,7 @@ object BoatWifi : MethodChannel.MethodCallHandler {
                 "relayDataAgeMs" to BoatRelayService.dataAgeMs(),
                 "relayClients" to BoatRelayService.clients.size,
                 "relayDeclined" to BoatRelayService.declined,
+                "relayUnavailable" to BoatRelayService.unavailable,
                 "relayNeedsApp" to BoatRelayService.needsApp,
             ),
         )

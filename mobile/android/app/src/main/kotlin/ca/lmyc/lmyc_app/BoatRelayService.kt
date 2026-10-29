@@ -59,6 +59,16 @@ class BoatRelayService : Service() {
         private const val EXTRA_IP = "ip"
         private const val EXTRA_SSID = "ssid"
         private const val EXTRA_PSK = "psk"
+        private const val EXTRA_FORCE = "force"
+        /**
+         * How long Android may look for the boat hotspot. Without a limit a
+         * request that never matches (hotspot not up yet, dialog dismissed)
+         * waits for the life of the process: the stall seen on 2026-10-28.
+         */
+        private const val WIFI_TIMEOUT_MS = 30000
+        /** After the boat network drops, or a request times out, ask again. */
+        private const val REASK_AFTER_LOST_MS = 4000L
+        private const val REASK_AFTER_TIMEOUT_MS = 10000L
         private const val CONNECT_TIMEOUT_MS = 3000
         /**
          * Longer than the app's 35 s stale limit (two missed 15 s heartbeats),
@@ -92,6 +102,14 @@ class BoatRelayService : Service() {
             private set
 
         /**
+         * Android looked for the boat hotspot for [WIFI_TIMEOUT_MS] and did
+         * not find it: the terminal is off, out of range or still starting.
+         * Not a refusal; the relay keeps asking.
+         */
+        @Volatile var unavailable = false
+            private set
+
+        /**
          * Android restarted the relay on its own, without the boat's Wi-Fi
          * details. Nothing is asked in the background; the notification asks
          * the member to open the app, which starts the relay again.
@@ -105,11 +123,12 @@ class BoatRelayService : Service() {
          * alone. Nothing is saved for the phone, and the phone's own Wi-Fi and
          * mobile data stay as they are; chart apps read 127.0.0.1 instead.
          */
-        fun start(context: Context, ip: String, ssid: String?, psk: String?) {
+        fun start(context: Context, ip: String, ssid: String?, psk: String?, force: Boolean = false) {
             val intent = Intent(context, BoatRelayService::class.java)
                 .putExtra(EXTRA_IP, ip)
                 .putExtra(EXTRA_SSID, ssid)
                 .putExtra(EXTRA_PSK, psk)
+                .putExtra(EXTRA_FORCE, force)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
@@ -142,6 +161,22 @@ class BoatRelayService : Service() {
     private var wantedSsid: String? = null
     private var wantedPsk: String? = null
     @Volatile private var wifiCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var requestedAt = 0L
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private val reask = Runnable {
+        val ssid = wantedSsid
+        val psk = wantedPsk
+        if (!stopping && boatNetwork == null && !declined && ssid != null && psk != null) {
+            RelayLog.event("wifi: asking again for $ssid")
+            requestBoat(ssid, psk)
+            refresh()
+        }
+    }
+
+    private fun scheduleReask(ms: Long) {
+        main.removeCallbacks(reask)
+        if (wantedSsid != null && wantedPsk != null && !stopping) main.postDelayed(reask, ms)
+    }
 
     private val httpPool: ExecutorService = Executors.newFixedThreadPool(HTTP_MAX_CONNECTIONS * 2) { r ->
         Thread(r, "relay-http").apply { isDaemon = true }
@@ -155,7 +190,9 @@ class BoatRelayService : Service() {
 
         override fun onAvailable(network: Network) {
             if (!current()) return
+            RelayLog.event("wifi: onAvailable $network after ${SystemClock.elapsedRealtime() - requestedAt} ms")
             declined = false
+            unavailable = false
             refresh()
         }
 
@@ -164,8 +201,10 @@ class BoatRelayService : Service() {
             declined = false
             val ip = target ?: return
             if (BoatWifi.onSubnet(lp, ip)) {
+                if (boatNetwork != network) RelayLog.event("wifi: on the boat subnet, $network ${lp.linkAddresses}")
                 boatNetwork = network
             } else if (boatNetwork == network) {
+                RelayLog.event("wifi: $network left the boat subnet ${lp.linkAddresses}")
                 lostBoat()
             }
             refresh()
@@ -173,15 +212,27 @@ class BoatRelayService : Service() {
 
         override fun onLost(network: Network) {
             if (!current()) return
+            RelayLog.event("wifi: onLost $network (boat=${boatNetwork == network})")
             if (boatNetwork == network) lostBoat()
+            // The request is spent once its network is lost: ask again while
+            // the details are in memory, or nothing ever reconnects.
+            scheduleReask(REASK_AFTER_LOST_MS)
             refresh()
         }
 
         override fun onUnavailable() {
-            // Only a request made from the open app reaches here: the member
-            // said no, or Android found no boat. Tapping Try again asks anew.
             if (!current()) return
-            declined = true
+            val waited = SystemClock.elapsedRealtime() - requestedAt
+            // The timeout ends a request with onUnavailable too. Near the
+            // limit it is "not found"; well before it the member said no.
+            if (waited >= WIFI_TIMEOUT_MS - 2000) {
+                RelayLog.event("wifi: onUnavailable after $waited ms: hotspot not found")
+                unavailable = true
+                scheduleReask(REASK_AFTER_TIMEOUT_MS)
+            } else {
+                RelayLog.event("wifi: onUnavailable after $waited ms: declined")
+                declined = true
+            }
             refresh()
         }
     }
@@ -192,7 +243,9 @@ class BoatRelayService : Service() {
         wantedSsid = ssid
         wantedPsk = psk
         declined = false
+        unavailable = false
         needsApp = false
+        main.removeCallbacks(reask)
         val request = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -202,7 +255,9 @@ class BoatRelayService : Service() {
             .build()
         val callback = newCallback()
         wifiCallback = callback
-        cm.requestNetwork(request, callback)
+        requestedAt = SystemClock.elapsedRealtime()
+        RelayLog.event("wifi: requestNetwork $ssid (timeout ${WIFI_TIMEOUT_MS / 1000} s)")
+        cm.requestNetwork(request, callback, WIFI_TIMEOUT_MS)
     }
 
     private fun releaseRequest() {
@@ -220,6 +275,8 @@ class BoatRelayService : Service() {
     override fun onCreate() {
         super.onCreate()
         cm = getSystemService(ConnectivityManager::class.java)
+        RelayLog.init(this)
+        RelayLog.event("relay: service created")
         createChannel()
     }
 
@@ -240,12 +297,19 @@ class BoatRelayService : Service() {
         }
         val ssid = intent?.getStringExtra(EXTRA_SSID)
         val psk = intent?.getStringExtra(EXTRA_PSK)
+        val force = intent?.getBooleanExtra(EXTRA_FORCE, false) == true
         if (ssid != null && psk != null) {
-            // A new boat, a changed passphrase, or Try again after a refusal.
-            if (wifiCallback == null || declined || ssid != wantedSsid || psk != wantedPsk) {
+            // A new boat, a changed passphrase, Try again after a refusal, or
+            // the open app saying it is still not on the boat (force): a
+            // request that is pending can be stuck, so start a fresh one.
+            val stale = force && boatNetwork == null
+            RelayLog.event("relay: start ssid=$ssid force=$force onBoat=${boatNetwork != null} " +
+                "pending=${wifiCallback != null} declined=$declined unavailable=$unavailable")
+            if (wifiCallback == null || declined || stale || ssid != wantedSsid || psk != wantedPsk) {
                 requestBoat(ssid, psk)
             }
         } else if (wifiCallback == null) {
+            RelayLog.event("relay: restarted by Android without Wi-Fi details")
             // Restarted by Android with no details: ask nothing with nobody
             // there, and let the notification bring the member back.
             needsApp = true
@@ -256,6 +320,8 @@ class BoatRelayService : Service() {
     }
 
     override fun onDestroy() {
+        RelayLog.event("relay: service destroyed")
+        main.removeCallbacks(reask)
         stopping = true
         running = false
         releaseRequest()
@@ -299,6 +365,7 @@ class BoatRelayService : Service() {
                         socket.tcpNoDelay = true
                         val client = Client(socket)
                         clients.add(client)
+                        RelayLog.event("bridge: TCP chart app connected from ${socket.port}, ${clients.size} now")
                         client.start()
                         refresh()
                     }
@@ -422,6 +489,7 @@ class BoatRelayService : Service() {
                     upstreamSocket = socket
                     socket.soTimeout = READ_TIMEOUT_MS
                     socket.connect(InetSocketAddress(ip, PORT), CONNECT_TIMEOUT_MS)
+                    RelayLog.event("terminal: TCP $ip:$PORT connected")
                     upstream = true
                     refresh()
                     val input = socket.getInputStream()
@@ -432,9 +500,12 @@ class BoatRelayService : Service() {
                         val chunk = buf.copyOf(n)
                         for (c in clients) c.offer(chunk)
                         udp.feed(chunk)
+                        RelayLog.maybeSummary(lastDataAt, clients.size)
                     }
+                    RelayLog.event("terminal: TCP closed by the terminal")
                 }
-            } catch (_: IOException) {
+            } catch (e: IOException) {
+                RelayLog.event("terminal: TCP $ip:$PORT ${e.javaClass.simpleName}: ${e.message}")
             }
             upstream = false
             upstreamSocket = null
@@ -476,6 +547,7 @@ class BoatRelayService : Service() {
             val s = socket ?: return
             var end = n
             if (line[end - 1] == '\r'.code.toByte()) end--
+            RelayLog.sentence(line, end)
             line[end] = '\r'.code.toByte()
             line[end + 1] = '\n'.code.toByte()
             for (port in UDP_PORTS) {
@@ -525,6 +597,7 @@ class BoatRelayService : Service() {
             open = false
             closeQuietly(socket)
             clients.remove(this)
+            RelayLog.event("bridge: TCP chart app left, ${clients.size} now")
             refresh()
         }
     }
@@ -533,6 +606,7 @@ class BoatRelayService : Service() {
         needsApp -> "Tap to reconnect to the boat."
         !listening -> "Starting"
         declined -> "The boat Wi-Fi was not allowed. Open the LMYC app."
+        unavailable && boatNetwork == null -> "Boat Wi-Fi not found. Is the terminal on? Still looking."
         boatNetwork == null -> "Waiting for the boat Wi-Fi"
         !upstream -> "Waiting for the terminal"
         else -> {
@@ -551,6 +625,7 @@ class BoatRelayService : Service() {
         val now = state()
         if (now == shownState || stopping) return
         shownState = now
+        RelayLog.event("state: $now")
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(now))
     }
 

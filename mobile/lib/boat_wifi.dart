@@ -43,6 +43,7 @@ class BoatWifiStatus {
     this.relayClients = 0,
     this.relayDeclined = false,
     this.relayNeedsApp = false,
+    this.relayUnavailable = false,
   });
 
   /// The phone has a Wi-Fi address on the boat hotspot.
@@ -73,6 +74,10 @@ class BoatWifiStatus {
   /// starts it again with them.
   final bool relayNeedsApp;
 
+  /// Android looked for the boat hotspot and did not find it (the request
+  /// timed out). Not a refusal: the relay keeps asking.
+  final bool relayUnavailable;
+
   /// The terminal's data is reaching the relay.
   bool get receiving =>
       relayUpstream && relayDataAgeMs >= 0 && relayDataAgeMs < kRelayStaleMs;
@@ -96,7 +101,8 @@ class BoatWifiStatus {
       other.receiving == receiving &&
       other.relayClients == relayClients &&
       other.relayDeclined == relayDeclined &&
-      other.relayNeedsApp == relayNeedsApp;
+      other.relayNeedsApp == relayNeedsApp &&
+      other.relayUnavailable == relayUnavailable;
 
   @override
   int get hashCode => Object.hash(
@@ -108,6 +114,7 @@ class BoatWifiStatus {
     relayClients,
     relayDeclined,
     relayNeedsApp,
+    relayUnavailable,
   );
 }
 
@@ -288,6 +295,7 @@ class BoatWifi {
       relayClients: (map?['relayClients'] as num?)?.toInt() ?? 0,
       relayDeclined: map?['relayDeclined'] == true,
       relayNeedsApp: map?['relayNeedsApp'] == true,
+      relayUnavailable: map?['relayUnavailable'] == true,
     );
   }
 
@@ -298,11 +306,13 @@ class BoatWifi {
     required String ip,
     String? ssid,
     String? psk,
+    bool force = false,
   }) async {
     await _channel.invokeMethod<void>('startRelay', {
       'ip': ip,
       'ssid': ssid,
       'psk': psk,
+      'force': force,
     });
   }
 

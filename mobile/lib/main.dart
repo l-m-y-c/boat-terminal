@@ -217,6 +217,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   BoatWifiStatus? _wifiLatest;
   Timer? _wifiTimer;
 
+  /// When the open app first saw the relay off the boat; null while on it.
+  DateTime? _offBoatSince;
+
+  /// The relay's Wi-Fi request can stall (2026-10-28): after this long off
+  /// the boat with the app open, it is asked to start a fresh request.
+  static const _kOffBoatRestart = Duration(seconds: 25);
+
   _Landing _landing = _Landing.start;
   String? _lastBoat;
   _NearbyHit? _autoTarget;
@@ -1008,12 +1015,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   /// Chart apps read 127.0.0.1:10110. The notification is the only sign the
   /// relay is running, so ask for it first; the relay works without it.
-  Future<void> _startRelay(BoatWifiInfo info) async {
+  Future<void> _startRelay(BoatWifiInfo info, {bool force = false}) async {
     try {
       await Permission.notification.request();
       // A refused Connect dialog is not asked again by a running service.
       if (_wifiStatus?.relayDeclined == true) await BoatWifi.stopRelay();
-      await BoatWifi.startRelay(ip: info.ip, ssid: info.ssid, psk: info.psk);
+      await BoatWifi.startRelay(
+        ip: info.ip,
+        ssid: info.ssid,
+        psk: info.psk,
+        force: force,
+      );
     } on PlatformException catch (e) {
       debugPrint('relay: ${e.message}');
     }
@@ -1033,6 +1045,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _ui.ping();
       // The relay came back without the Wi-Fi details: hand them over again.
       if (status.relayNeedsApp) unawaited(_startRelay(info));
+      // Still not on the boat after a while with the app open: a pending
+      // request may never finish, so ask for a fresh one (not after a "no").
+      if (status.onBoat) {
+        _offBoatSince = null;
+      } else if (!status.relayDeclined) {
+        final since = _offBoatSince ??= DateTime.now();
+        if (DateTime.now().difference(since) >= _kOffBoatRestart) {
+          _offBoatSince = DateTime.now();
+          debugPrint(
+            'boat wifi: $_kOffBoatRestart off the boat, fresh request',
+          );
+          unawaited(_startRelay(info, force: true));
+        }
+      }
       if (status != _wifiStatus) {
         debugPrint('boat wifi: $status');
         setState(() => _wifiStatus = status);
