@@ -65,3 +65,42 @@ The Join tick in the LMYC app must be green (relay running) before the chart app
 5. In the pull: `analysis/summary.txt` (which PGNs the 740s sent), `wifi/nmea-ring.txt`
    (sentences we produced, TCP client connects), `phone/files/relay-log.txt`
    (Wi-Fi request/lost/unavailable, chart app connects, sentence counts per 30 s).
+
+## Getting debug data off a closed enclosure: the phone
+
+Once the enclosure is closed the USB-C ports are out of reach, so the phone
+app is the conduit. **Diagnostics tab > Collect diagnostics** pulls, over the
+boat Wi-Fi (through the relay on 127.0.0.1:10180):
+
+| In the zip | From |
+|---|---|
+| `terminal/bus-ring.log` | `/n2k/frames?after=1`, the whole 32768-frame ring incl. our own TX, candump format (`capture.py summary/replay` reads it) |
+| `terminal/nmea-ring.txt` | `/diag/nmea.txt`: sentences produced (S), bus events (E), log lines (L) |
+| `terminal/status.json` | boat, firmware version (`fw`), reset reason, uptime, TCP clients, NMEA counters, stats |
+| `terminal/n2k.json` | bus state, errors, PGN table, converter counts |
+| `terminal/network.json` | device inventory: the 740s NAME, product info (model, software, serial), our own entry |
+| `phone/relay-log*.txt` | the relay diary: Wi-Fi requests and callbacks, chart apps connecting and leaving, sentence counts per 30 s |
+| `phone/wifi-status.json`, `phone/ble-stats.json`, `phone/report.txt` | Wi-Fi/relay state, the terminal's Bluetooth stats, the Diagnostics report with recent app events |
+| `manifest.json` | when, why (manual / problem / auto-bus-off / auto-bus-errors / auto-no-frames), the member's note, app version, chart-app stats |
+
+Saved as `lmyc-diag-YYYYMMDD-HHMMSS-<reason>.zip` in
+`/sdcard/Android/data/ca.lmyc.lmyc_app/files/diagnostics/` (last 30 kept),
+each with a Share button (email, Drive, ...). If the terminal does not answer
+the zip still holds the phone side and the card says so.
+
+- **Mark problem**: same, with a note, at the moment something looks wrong.
+- **Automatic snapshot**: while paired on NMEA 2000 the app watches the 2 s
+  Bluetooth stats and collects by itself on BUS-OFF/failed, a jump of 200+ bus
+  errors, or frames stopping for 20 s after they had flowed (each reason at
+  most once per 15 min). The terminal's rings are RAM-only, so this keeps the
+  evidence even if it reboots later.
+- **On the bench**: `make boat-diag` (or `python3 tools/boat_diag.py --no-uart --no-wifi`
+  with only the phone on USB) pulls the folder and unpacks every zip into
+  `sessions/<now>/phone/bundles/<name>/`; the analysis runs on the newest
+  bundle's bus ring when there is no Wi-Fi pull.
+
+Persisting a snapshot on the terminal itself is not done: the ring is 1 MB of
+PSRAM and the boat build has no filesystem partition for it; the phone's
+automatic snapshot covers the reboot case. `status.json` now carries the
+reset reason (`reset`, esp_reset_reason) so a bundle shows whether the terminal
+rebooted from a brown-out (9), panic (4) or watchdog (5-7).

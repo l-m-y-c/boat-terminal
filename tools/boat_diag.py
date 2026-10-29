@@ -9,11 +9,16 @@ Each part is tried on its own and a missing one is noted, not fatal:
   terminal/  over the UART (CH343): NMEA STATS, DIAG json, NET json, NMEA OUT ring
   wifi/      over the hotspot: terminal.py fetch-diag (bus ring incl. own TX,
              n2k.json, network.json, 0183 ring, 10 s of TCP 10110)
-  phone/     over adb: relay-log.txt (the bridge diary), logcat (LmycRelay,
+  phone/     over adb: the app's diagnostics zips (Collect diagnostics, Mark
+             problem, automatic snapshots), unpacked into phone/bundles/<name>/;
+             relay-log.txt (the bridge diary), logcat (LmycRelay,
              flutter, WifiNetworkFactory, ConnectivityService), dumpsys
              connectivity, app version
   analysis/  capture.py summary + replay of the bus ring, sentence counts
-Then INDEX.txt lists what is there.
+With the enclosure closed only the phone part works: collect on the phone
+(Diagnostics tab), then run this with --no-uart --no-wifi.
+Then INDEX.txt lists what is there; the analysis uses the newest app bundle
+when the Wi-Fi pull is missing.
 
 Pull BEFORE powering the terminal off: its rings are in PSRAM.
 """
@@ -22,6 +27,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import subprocess
+import zipfile
 import sys
 from pathlib import Path
 
@@ -86,7 +92,21 @@ def main() -> int:
             run(["adb", "shell", "dumpsys", "connectivity"], ph / "dumpsys-connectivity.txt", 60, notes, "dumpsys")
             run(["adb", "shell", "dumpsys", "package", PKG], ph / "package.txt", 30, notes, "package")
 
+    # The app's "Collect diagnostics" / automatic snapshots (mobile/lib/diag_bundle.dart).
+    bundles = sorted((out / "phone/files").rglob("lmyc-diag-*.zip")) if (out / "phone/files").exists() else []
+    for z in bundles:
+        dest = out / "phone/bundles" / z.stem
+        try:
+            with zipfile.ZipFile(z) as zf:
+                zf.extractall(dest)
+        except zipfile.BadZipFile as exc:
+            notes.append(f"{z.name}: {exc}")
+    if bundles:
+        print(f"unpacked {len(bundles)} app bundle(s) into phone/bundles/")
+
     ring = out / "wifi/bus-ring.log"
+    if not (ring.exists() and ring.stat().st_size > 200) and bundles:
+        ring = out / "phone/bundles" / bundles[-1].stem / "terminal/bus-ring.log"
     if ring.exists() and ring.stat().st_size > 200:
         print("analysis ...")
         run([PY, str(HERE / "capture.py"), "summary", str(ring)], out / "analysis/summary.txt", 120, notes, "summary")

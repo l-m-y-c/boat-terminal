@@ -8,7 +8,7 @@ Tools for building, flashing and debugging the boat terminal, at the bench and o
 | `tools/board.py` | Find the board, see what it is running, get it out of the bootloader, flash it and check it booted |
 | `tools/console.py` | The serial console: log, commands, `NMEA DIAG` snapshots, the boat session, `dump` (the `NMEA OUT` sentence ring) |
 | `tools/terminal.py` | The terminal over its hotspot: status, bus check, recording the bus, the 0183 stream chart apps get, `fetch-diag` (both rings in one folder) |
-| `tools/boat_diag.py` | `make boat-diag`: the one-command bench pull after a boat session (UART, Wi-Fi rings, phone relay diary and logcat) into `sessions/<now>/` |
+| `tools/boat_diag.py` | `make boat-diag`: the one-command bench pull after a boat session (UART, Wi-Fi rings, phone relay diary and logcat) into `sessions/<now>/`, unpacking the phone app's Collect diagnostics zips into `phone/bundles/` |
 | `tools/garmin740s_capture.py` | A synthetic Garmin GPSMAP 740s bus capture for replay tests |
 | `tools/capture.py` | Look inside a bus recording, and replay it through the terminal's real code on the host |
 | `tools/n2k_play.py` | Send one console command, `NMEA DEMO` by default (older, kept for `make n2k-demo`) |
