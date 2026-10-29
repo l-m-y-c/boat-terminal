@@ -709,7 +709,7 @@ class _BusCheckPageState extends State<BusCheckPage> {
   String _selfLine(BusDiag d) => switch (d.node) {
     'claimed' =>
       'This terminal is NMEA 2000 address ${d.address}. The plotter\'s device '
-          'list shows it as LMYC Boat Terminal. It sends no instrument data.',
+          'list shows it as LMYC boat-terminal. It sends no instrument data.',
     'claiming' => 'This terminal is claiming an NMEA 2000 address.',
     'no_address' => 'This terminal could not claim an NMEA 2000 address: every address is taken.',
     _ => 'This terminal is not on a bus.',

@@ -67,7 +67,9 @@ void n2k_node_configure(tNMEA2000 &stack, bool node)
     const uint8_t upper = open ? prefs.getUChar(kKeyInstUpper, 0) : 0;
     const uint8_t system = open ? prefs.getUChar(kKeySystem, 0) : 0;
     char desc1[Max_N2kConfigurationInfoField_len] = LMYC_BOAT_NAME;
-    char desc2[Max_N2kConfigurationInfoField_len] = "";
+    /* Until an installer sets them on the plotter: the boat, then which
+     * terminal this is. */
+    char desc2[Max_N2kConfigurationInfoField_len] = "LMYC boat-terminal " LMYC_TERMINAL_ID;
     if (open && prefs.isKey(kKeyDesc1)) {
         prefs.getString(kKeyDesc1, desc1, sizeof(desc1));
     }

@@ -203,7 +203,23 @@ int main()
         unsigned char cert = 0, len = 0;
         ParseN2kPGN126996(*product, version, code, sizeof(model), model, sizeof(sw), sw, sizeof(model_ver),
                           model_ver, sizeof(serial), serial, cert, len);
-        expect_true("model ID", strcmp(model, "LMYC Boat Terminal") == 0);
+        expect_true("model ID", strcmp(model, "LMYC boat-terminal") == 0);
+        /* The bytes a Garmin reads: four fixed 32-byte ASCII fields after
+         * the version and product code, each printable then 0xFF padding. */
+        expect_true("126996 is 134 bytes", product->DataLen == 134);
+        bool fields_ok = product->DataLen == 134;
+        for (int f = 0; f < 4 && fields_ok; ++f) {
+            const unsigned char *b = product->Data + 4 + 32 * f;
+            int i = 0;
+            for (; i < 32 && b[i] != 0xff; ++i) {
+                fields_ok = fields_ok && b[i] >= 0x20 && b[i] < 0x7f;
+            }
+            for (; i < 32; ++i) {
+                fields_ok = fields_ok && b[i] == 0xff;
+            }
+        }
+        expect_true("126996 strings are ASCII padded with 0xFF", fields_ok);
+        expect_true("model ID bytes", memcmp(product->Data + 4, "LMYC boat-terminal\xff", 19) == 0);
         expect_true("model version", strcmp(model_ver, "Waveshare ESP32-S3-Touch-LCD-7") == 0);
         expect_true("serial is the MAC", strcmp(serial, "58E6C572D648") == 0);
         expect_true("LEN 6 (0.3 A)", len == 6);
@@ -221,6 +237,8 @@ int main()
         ParseN2kPGN126998(*config, l3, mfr, l1, d1, l2, d2);
         expect_true("installation description 1 is the boat name", strcmp(d1, LMYC_BOAT_NAME) == 0);
         expect_true("manufacturer information", strcmp(mfr, "LMYC boat-terminal") == 0);
+        expect_true("installation description 2 names the terminal",
+                    strcmp(d2, "LMYC boat-terminal " LMYC_TERMINAL_ID) == 0);
     }
 
     request(plotter, 22, 126464UL);

@@ -189,7 +189,7 @@ On the NMEA 2000 data source the terminal is a full NMEA 2000 node. It is built 
 
 | Field | Value |
 |-------|-------|
-| Model ID | `LMYC Boat Terminal` |
+| Model ID | `LMYC boat-terminal` |
 | Model version | `Waveshare ESP32-S3-Touch-LCD-7` |
 | Serial code | MAC address |
 | Software version | Firmware version |

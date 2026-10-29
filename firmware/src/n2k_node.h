@@ -14,7 +14,11 @@ inline constexpr uint8_t kN2kNodeDeviceClass = 25;
 inline constexpr uint8_t kN2kNodeDeviceFunction = 130;
 inline constexpr uint8_t kN2kNodeLoadEquivalency = 6;  // measured 260 mA on NET-S with Wi-Fi, 2026-10-28
 inline constexpr uint16_t kN2kNodeN2kVersion = 2101;
-inline constexpr const char *kN2kNodeModelId = "LMYC Boat Terminal";
+/* What a chart plotter lists. Plain ASCII, at most 32 characters: the
+ * library pads it to 32 bytes with 0xFF (host test checks the bytes). The
+ * boat's own name goes in installation description 1, not here: the model
+ * ID names the product, the same on every boat. */
+inline constexpr const char *kN2kNodeModelId = "LMYC boat-terminal";
 inline constexpr const char *kN2kNodeModelVersion = "Waveshare ESP32-S3-Touch-LCD-7";
 inline constexpr const char *kN2kNodeManufacturerInfo = "LMYC boat-terminal";
 
