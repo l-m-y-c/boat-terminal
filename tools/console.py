@@ -9,11 +9,12 @@
     python3 tools/console.py net [--src 35] [--refresh]   # the NMEA 2000 network
     python3 tools/console.py watch --every 10 --out session/   # snapshots only
     python3 tools/console.py session              # boat mode: log + snapshots, saved
+    python3 tools/console.py dump --out nmea.txt  # the 0183 sentence + log ring
 
 Mode-aware: it asks each plugged-in socket NMEA STATS. On the simulator the
 log comes from the USB socket and commands go to the UART first; on NMEA 2000
 only the UART socket exists. --usb / --port force a socket.
-Console commands: NMEA SIM | N2K | STATS | DIAG | DEMO | PGN <n> [src=N] <hex>.
+Console commands: NMEA SIM | N2K | STATS | DIAG | NET | OUT [n] | DEMO | PGN <n> [src=N] <hex>.
 """
 
 from __future__ import annotations
@@ -235,6 +236,33 @@ def cmd_session(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dump(args: argparse.Namespace) -> int:
+    """NMEA OUT: the terminal's 0183 sentence + log ring over the UART."""
+    body: list[str] = []
+    inside = False
+    with _open(args) as con:
+        for _ in con.lines(0.1):
+            pass
+        con.send(f"NMEA OUT {args.n}")
+        for l in con.lines(args.seconds):
+            if l.startswith("NMEA OUT BEGIN"):
+                inside, body = True, []
+            elif l.startswith("NMEA OUT END"):
+                break
+            elif inside:
+                body.append(l)
+    if not body:
+        print("No NMEA OUT block in the reply (firmware older than the diagnostics ring?)")
+        return 1
+    text = "\n".join(body) + "\n"
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(f"Saved {args.out}: {len(body)} entries")
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", help="serial device instead of finding it")
@@ -258,6 +286,11 @@ def main() -> int:
     p.add_argument("--raw", action="store_true")
     p.add_argument("--out")
     p.set_defaults(fn=cmd_net)
+    p = sub.add_parser("dump", help="the 0183 sentence + log ring (NMEA OUT)")
+    p.add_argument("-n", type=int, default=8192)
+    p.add_argument("--seconds", type=float, default=90.0)
+    p.add_argument("--out")
+    p.set_defaults(fn=cmd_dump)
     p = sub.add_parser("watch")
     p.add_argument("--every", type=float, default=10.0)
     p.add_argument("--out", help="directory for diag.jsonl")

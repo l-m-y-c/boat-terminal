@@ -290,6 +290,61 @@ class SessionChanges(unittest.TestCase):
         b = self.snap(bus={"frames": 5})
         self.assertTrue(any("rebooted" in c for c in changes(a, b)))
 
+
+class FetchDiagTest(unittest.TestCase):
+    """terminal.py fetch-diag drains the paged rings until more=0."""
+
+    def test_drain_and_fetch(self):
+        import http.server
+        import threading
+        import terminal
+
+        frames = [f"({i}.000000) can0 09F80101#{i:02X}00000000000000" for i in range(1, 8)]
+        sentences = ["1.000 S $GPRMC,x*00", "1.100 L tcp client 1 connected"]
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                from urllib.parse import urlparse, parse_qs
+                u = urlparse(self.path)
+                after = int(parse_qs(u.query).get("after", ["0"])[0])
+                if u.path == "/n2k/frames":
+                    start = max(after, 1)
+                    chunk = frames[start - 1:start - 1 + 3]
+                    nxt = start + len(chunk)
+                    more = 1 if nxt <= len(frames) else 0
+                    body = f"#next {nxt} lost 0 more {more}\n" + "\n".join(chunk)
+                elif u.path == "/diag/nmea.txt":
+                    body = f"#next {len(sentences)} lost 0 more 0\n" + "\n".join(sentences)
+                else:
+                    body = "{}"
+                data = body.encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        host = f"127.0.0.1:{srv.server_port}"
+        try:
+            rows, lost, _ = terminal._drain(host, "/n2k/frames", 1)
+            self.assertEqual(rows, frames)
+            self.assertEqual(lost, 0)
+            with tempfile.TemporaryDirectory() as d:
+                r = subprocess.run([sys.executable, str(TOOLS / "terminal.py"), "--host", host, "fetch-diag",
+                                    "--out", d, "--tcp-seconds", "0"], capture_output=True, text=True, timeout=60)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                ring = (Path(d) / "bus-ring.log").read_text().splitlines()
+                self.assertEqual([l for l in ring if not l.startswith("#")], frames)
+                self.assertEqual((Path(d) / "nmea-ring.txt").read_text().splitlines(), sentences)
+                self.assertTrue((Path(d) / "network.json").exists())
+        finally:
+            srv.shutdown()
+
+
 if __name__ == "__main__":
     unittest.main()
 

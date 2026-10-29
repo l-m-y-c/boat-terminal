@@ -8,6 +8,7 @@
     python3 tools/terminal.py device 35              # one device in detail
     python3 tools/terminal.py record --seconds 120 --out dock.log
     python3 tools/terminal.py nmea --seconds 30      # TCP 10110: what chart apps get
+    python3 tools/terminal.py fetch-diag --out DIR   # rings, bus picture, network, TCP sample
 
 Default host 192.168.4.1 (a laptop on the boat Wi-Fi). Through the phone's
 relay use --host 127.0.0.1:10180 (HTTP) and --nmea-host 127.0.0.1.
@@ -16,6 +17,7 @@ relay use --host 127.0.0.1:10180 (HTTP) and --nmea-host 127.0.0.1.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import datetime as dt
 import json
 import socket
@@ -189,6 +191,81 @@ def cmd_nmea(args: argparse.Namespace) -> int:
     return 0 if bad == 0 else 1
 
 
+def _drain(host: str, path: str, after: int, timeout: float = 6.0) -> tuple[list[str], int, int]:
+    """Every line of a "#next N lost M more 0|1" endpoint from `after` on."""
+    rows_all: list[str] = []
+    lost = 0
+    for _ in range(2000):
+        body = _get(host, f"{path}{'&' if '?' in path else '?'}after={after}", timeout)
+        rows = body.splitlines()
+        head = rows[0].split() if rows else []
+        if len(head) < 6 or head[0] != "#next":
+            raise ValueError(f"unexpected answer from {path}")
+        nxt, chunk_lost, more = int(head[1]), int(head[3]), head[5] == "1"
+        lost += chunk_lost
+        rows_all.extend(r for r in rows[1:] if r)
+        if nxt <= after or not more:
+            break
+        after = nxt
+    return rows_all, lost, after
+
+
+def cmd_fetch_diag(args: argparse.Namespace) -> int:
+    """Everything the terminal keeps for the bench, into one folder: status,
+    bus picture, network, the whole capture ring (incl. the terminal's own
+    frames), the 0183 sentence + log ring, and a few seconds of TCP 10110."""
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    ok = True
+    for name, path in (("status.json", "/status.json"), ("n2k.json", "/n2k.json"),
+                       ("network.json", "/n2k/network.json")):
+        try:
+            (out / name).write_text(_get(args.host, path, 8.0), encoding="utf-8")
+            print(f"saved {name}")
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"{name}: {exc}", file=sys.stderr)
+            ok = False
+    try:
+        rows, lost, _ = _drain(args.host, "/n2k/frames", 1)
+        with open(out / "bus-ring.log", "w", encoding="utf-8") as fh:
+            fh.write("# LMYC boat terminal capture ring (incl. its own TX), candump log format. "
+                     "Times are seconds since the terminal started.\n")
+            fh.write(f"# fetched {dt.datetime.now().isoformat(timespec='seconds')}, {lost} older frames overwritten\n")
+            fh.write("\n".join(rows) + ("\n" if rows else ""))
+        print(f"saved bus-ring.log: {len(rows)} frames")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"bus ring: {exc}", file=sys.stderr)
+        ok = False
+    try:
+        rows, lost, _ = _drain(args.host, "/diag/nmea.txt", 0)
+        (out / "nmea-ring.txt").write_text("\n".join(rows) + ("\n" if rows else ""), encoding="utf-8")
+        print(f"saved nmea-ring.txt: {len(rows)} entries (S sentence, E bus event, L log)")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"nmea ring: {exc} (firmware older than the diagnostics ring?)", file=sys.stderr)
+    if args.tcp_seconds > 0:
+        host = args.nmea_host or args.host.split(":")[0]
+        lines: list[str] = []
+        try:
+            with socket.create_connection((host, 10110), timeout=4) as s:
+                s.settimeout(1.0)
+                end = time.monotonic() + args.tcp_seconds
+                buf = b""
+                while time.monotonic() < end:
+                    try:
+                        chunk = s.recv(4096)
+                    except socket.timeout:
+                        continue
+                    if not chunk:
+                        break
+                    buf += chunk
+            lines = buf.decode("ascii", "replace").splitlines()
+            (out / "tcp10110.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+            print(f"saved tcp10110.txt: {len(lines)} lines in {args.tcp_seconds} s")
+        except OSError as exc:
+            print(f"tcp 10110: {exc}", file=sys.stderr)
+    return 0 if ok else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="192.168.4.1", help="HTTP host[:port]")
@@ -215,6 +292,10 @@ def main() -> int:
     p.add_argument("--src", type=int, help="only this device's frames")
     p.add_argument("--out", required=True)
     p.set_defaults(fn=cmd_record)
+    p = sub.add_parser("fetch-diag", help="everything the terminal keeps, into one folder")
+    p.add_argument("--out", required=True)
+    p.add_argument("--tcp-seconds", type=float, default=10.0)
+    p.set_defaults(fn=cmd_fetch_diag)
     p = sub.add_parser("nmea")
     p.add_argument("--seconds", type=float, default=30.0)
     p.add_argument("--out", help="also save every line")

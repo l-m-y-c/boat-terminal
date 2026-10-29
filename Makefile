@@ -12,7 +12,7 @@
 #   make devices            List serial + Flutter devices
 #   make clean              Clean both projects
 
-.PHONY: help all test firmware firmware-test n2k-demo flash monitor phone phone-get phone-run \
+.PHONY: boat-diag help all test firmware firmware-test n2k-demo flash monitor phone phone-get phone-run \
         phone-reinstall phone-test phone-analyze protocol-check pair-test devices doctor \
         clean clean-firmware clean-phone flash-pio board-ports board-status board-attach board-boot \
         console send diag watch session bus-check bus-status record nmea-tcp capture-summary replay \
@@ -203,6 +203,11 @@ SECONDS ?= 60
 OUT ?= capture-$$(date +%Y%m%d-%H%M%S).log
 record:
 	$(PY) tools/terminal.py --host $(HOST) record --seconds $(SECONDS) --out $(OUT)
+
+# Bench pull after a boat session: UART, Wi-Fi rings and the phone's relay
+# diary into sessions/<now>/ (tools/boat_diag.py). HOST as above.
+boat-diag:
+	$(PY) tools/boat_diag.py --host $(HOST)
 
 nmea-tcp:
 	$(PY) tools/terminal.py --nmea-host $(HOST) nmea --seconds 30
