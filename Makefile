@@ -12,7 +12,7 @@
 #   make devices            List serial + Flutter devices
 #   make clean              Clean both projects
 
-.PHONY: boat-diag help all test firmware firmware-test n2k-demo flash monitor phone phone-get phone-run \
+.PHONY: boat-diag phone-bundle help all test firmware firmware-test n2k-demo flash monitor phone phone-get phone-run \
         phone-reinstall phone-test phone-analyze protocol-check pair-test devices doctor \
         clean clean-firmware clean-phone flash-pio board-ports board-status board-attach board-boot \
         console send diag watch session bus-check bus-status record nmea-tcp capture-summary replay \
@@ -102,6 +102,13 @@ phone-get:
 # Fast path for UI-only iteration (may not pick up all native/BLE changes)
 phone phone-run: phone-get
 	cd $(MOBILE_DIR) && flutter run
+
+# Play Store upload bundle (docs/23-play-store.md). Signed with the upload key
+# from $$LMYC_KEY_PROPERTIES or ~/.android-keys/lmyc-boat/key.properties;
+# without it Gradle warns and signs with the debug key (Play rejects that).
+phone-bundle: phone-get
+	cd $(MOBILE_DIR) && flutter build appbundle --release
+	@echo "→ $(MOBILE_DIR)/build/app/outputs/bundle/release/app-release.aab"
 
 phone-test: phone-get
 	cd $(MOBILE_DIR) && flutter test

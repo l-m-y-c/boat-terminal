@@ -20,3 +20,8 @@ __pycache__/
 
 # Boat / bench sessions from tools/console.py session
 sessions/
+
+# Android release signing: never commit (docs/23-play-store.md)
+key.properties
+*.jks
+*.keystore
