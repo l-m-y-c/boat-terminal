@@ -6,6 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:share_plus/share_plus.dart';
 
+import 'diag_bundle.dart';
+import 'diag_bundle_card.dart';
+
 import 'boat_wifi.dart';
 import 'event_log.dart';
 import 'journey.dart';
@@ -560,6 +563,7 @@ class DiagnosticsView extends StatefulWidget {
     required this.snapshot,
     this.log,
     this.hubFetch,
+    this.diag,
     this.onReconnect,
     this.onSentences,
     this.onForget,
@@ -572,6 +576,9 @@ class DiagnosticsView extends StatefulWidget {
   /// Reads GET /status.json through the relay. Polled every 5 s while the
   /// phone is on the boat Wi-Fi.
   final Future<HubStatus?> Function()? hubFetch;
+
+  /// Collect diagnostics (zip bundle). Null hides the card.
+  final DiagBundleController? diag;
 
   final VoidCallback? onReconnect;
   final VoidCallback? onSentences;
@@ -741,6 +748,10 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
               ),
           ],
         ),
+        if (widget.diag != null) ...[
+          const SizedBox(height: 14),
+          DiagBundleCard(controller: widget.diag!),
+        ],
         const SizedBox(height: 18),
         const SectionLabel('Links'),
         const SizedBox(height: 10),

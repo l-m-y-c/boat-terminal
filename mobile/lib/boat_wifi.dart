@@ -281,6 +281,15 @@ class BoatWifi {
   static const _channel = MethodChannel('ca.lmyc/boat_wifi');
 
   /// Where the phone stands with the boat hotspot at [ip], and the relay.
+  /// The raw status map, for the diagnostics bundle.
+  static Future<Map<String, Object?>> statusMap({required String ip}) async =>
+      await _channel.invokeMapMethod<String, Object?>('status', {'ip': ip}) ??
+      const {};
+
+  /// The app's external files dir (relay-log.txt, diagnostics/), adb-pullable.
+  static Future<String?> filesDir() =>
+      _channel.invokeMethod<String>('filesDir');
+
   static Future<BoatWifiStatus> status({required String ip}) async {
     final map = await _channel.invokeMapMethod<String, Object?>('status', {
       'ip': ip,

@@ -24,8 +24,14 @@ import 'nmea_console.dart';
 import 'pairing_link.dart';
 import 'protocol.dart';
 import 'qr_scan_page.dart';
+import 'diag_bundle.dart';
 import 'settings_page.dart';
 import 'terminal_stats.dart';
+
+import 'package:package_info_plus/package_info_plus.dart';
+
+import 'dart:io' show Directory, File;
+
 import 'ui_kit.dart';
 
 Future<void> main() async {
@@ -206,6 +212,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   DateTime? _statsAt;
   Timer? _statsTimer;
   bool _statsReading = false;
+  String? _statsRaw;
+
+  /// Collect diagnostics: manual, Mark problem, and automatic snapshots when
+  /// the bus goes wrong (the terminal's rings are RAM-only).
+  late final DiagBundleController _diag = DiagBundleController(
+    dir: _diagDir,
+    phoneContext: _diagPhoneContext,
+  );
 
   bool _wifiReading = false;
   bool _wifiChecking = false;
@@ -1142,9 +1156,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (chr == null || _statsReading || _blePhase != BlePhase.paired) return;
     _statsReading = true;
     try {
-      final next = TerminalStats.parse(
-        utf8.decode(await chr.read(), allowMalformed: true),
-      );
+      final raw = utf8.decode(await chr.read(), allowMalformed: true);
+      final next = TerminalStats.parse(raw);
+      if (next != null) {
+        _statsRaw = raw.split('\u0000').first.trim();
+        _diag.observe(next);
+      }
       if (next != null && mounted && _statsChr == chr) {
         setState(() {
           _stats = next;
@@ -1184,6 +1201,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _diag.dispose();
     AppSettings.instance.removeListener(_settingsChanged);
     _syncWakelock(false);
     _statsTimer?.cancel();
@@ -1314,6 +1332,56 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     statsAt: _statsAt,
   );
 
+  Future<Directory?> _diagDir() async {
+    try {
+      final p = await BoatWifi.filesDir();
+      return p == null ? null : Directory('$p/$kDiagFolder');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The phone half of a diagnostics bundle.
+  Future<(Map<String, Object?>, Map<String, String>)>
+  _diagPhoneContext() async {
+    final phone = <String, Object?>{'boat': _boatTitle};
+    final files = <String, String>{};
+    try {
+      final pi = await PackageInfo.fromPlatform();
+      phone['app'] = '${pi.version}+${pi.buildNumber}';
+      phone['package'] = pi.packageName;
+    } catch (_) {}
+    final info = BoatSession.info;
+    try {
+      final w = await BoatWifi.statusMap(ip: info?.ip ?? kSoftApIp);
+      phone['wifi_relay'] = w;
+      files['phone/wifi-status.json'] = const JsonEncoder.withIndent('  ')
+          .convert(w);
+    } catch (e) {
+      phone['wifi_relay_error'] = '$e';
+    }
+    final stats = _stats;
+    if (stats != null) {
+      phone['chart_apps_on_terminal'] = stats.chartApps;
+      phone['sentences_out'] = stats.sentencesOut;
+    }
+    if (_statsRaw != null) files['phone/ble-stats.json'] = _statsRaw!;
+    try {
+      final dir = await BoatWifi.filesDir();
+      for (final n in ['relay-log.1.txt', 'relay-log.txt']) {
+        final f = File('$dir/$n');
+        if (dir != null && f.existsSync()) {
+          files['phone/$n'] = await f.readAsString();
+        }
+      }
+    } catch (_) {}
+    files['phone/report.txt'] = diagnosticsReport(
+      _diagnosticsSnapshot(),
+      events: EventLog.instance.events,
+    );
+    return (phone, files);
+  }
+
   Widget _diagnosticsView(BuildContext pageContext) {
     final device = _device;
     final canReconnect =
@@ -1321,6 +1389,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return DiagnosticsView(
       snapshot: _diagnosticsSnapshot(),
       hubFetch: readHubStatus,
+      diag: _diag,
       onReconnect: canReconnect ? _retry : null,
       onSentences: device == null
           ? null

@@ -47,6 +47,9 @@ object BoatWifi : MethodChannel.MethodCallHandler {
                 )
                 result.success(null)
             }
+            "filesDir" -> result.success(
+                (context.getExternalFilesDir(null) ?: context.filesDir).absolutePath,
+            )
             "stopRelay" -> {
                 BoatRelayService.stop(context.applicationContext)
                 result.success(null)

@@ -18,6 +18,8 @@ dependencies:
   # Runtime permissions (Bluetooth, location on older Android)
   permission_handler: ^11.3.1
   http: ^1.2.2
+  # Zips the Collect diagnostics bundle
+  archive: ^4.2.0
   image_picker: ^1.1.2
   image: ^4.3.0
   geolocator: ^13.0.2
