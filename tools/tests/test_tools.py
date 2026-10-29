@@ -345,6 +345,20 @@ class FetchDiagTest(unittest.TestCase):
             srv.shutdown()
 
 
+class BoatDiagRunTest(unittest.TestCase):
+    """boat_diag.run survives binary output (logcat has non-UTF-8 bytes)."""
+
+    def test_non_utf8_output(self):
+        import boat_diag
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "x.txt"
+            notes: list[str] = []
+            ok = boat_diag.run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'a\\xc0b')"],
+                               out, 20, notes, "bin")
+            self.assertTrue(ok, notes)
+            self.assertIn("a", out.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

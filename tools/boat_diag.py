@@ -3,6 +3,7 @@
 boat session, into sessions/<YYYY-MM-DD_HHMMSS>/ (gitignored).
 
     python3 tools/boat_diag.py                  # or: make boat-diag
+    python3 tools/boat_diag.py --via-phone      # Wi-Fi part through the phone on USB
     python3 tools/boat_diag.py --host 192.168.4.1 --out sessions/boat-2026-10-28/pull
 
 Each part is tried on its own and a missing one is noted, not fatal:
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import shutil
 import subprocess
 import zipfile
 import sys
@@ -39,7 +41,7 @@ PY = sys.executable
 
 def run(cmd: list[str], out: Path | None, timeout: float, notes: list[str], what: str) -> bool:
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=ROOT)
+        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout, cwd=ROOT)
     except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
         notes.append(f"{what}: {exc}")
         return False
@@ -55,10 +57,17 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", help="folder (default sessions/<now>)")
     ap.add_argument("--host", default="192.168.4.1", help="terminal HTTP over the hotspot")
+    ap.add_argument("--via-phone", action="store_true",
+                    help="reach the terminal through the phone's relay over USB (adb forward 10180/10110); "
+                         "the Mac does not need to join the hotspot")
     ap.add_argument("--no-uart", action="store_true")
     ap.add_argument("--no-wifi", action="store_true")
     ap.add_argument("--no-phone", action="store_true")
     a = ap.parse_args()
+    if a.via_phone:
+        for port in (10180, 10110):
+            subprocess.run(["adb", "forward", f"tcp:{port}", f"tcp:{port}"], capture_output=True, timeout=10)
+        a.host = "127.0.0.1:10180"
     out = Path(a.out) if a.out else ROOT / "sessions" / dt.datetime.now().strftime("%Y-%m-%d_%H%M%S")
     notes: list[str] = []
     for d in ("terminal", "wifi", "phone", "analysis"):
@@ -83,6 +92,8 @@ def main() -> int:
         print("phone over adb ...")
         ph = out / "phone"
         if run(["adb", "get-state"], None, 10, notes, "adb (phone plugged in, USB debugging allowed?)"):
+            # adb pull nests into an existing folder (files/files/): start clean.
+            shutil.rmtree(ph / "files", ignore_errors=True)
             run(["adb", "pull", f"/sdcard/Android/data/{PKG}/files/", str(ph / "files")], ph / "pull.txt", 60, notes,
                 "relay-log pull")
             run(["adb", "logcat", "-d", "-v", "threadtime"], ph / "logcat-all.txt", 60, notes, "logcat")

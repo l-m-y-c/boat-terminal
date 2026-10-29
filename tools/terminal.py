@@ -269,7 +269,7 @@ def cmd_fetch_diag(args: argparse.Namespace) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="192.168.4.1", help="HTTP host[:port]")
-    ap.add_argument("--nmea-host", default="192.168.4.1", help="TCP 10110 host")
+    ap.add_argument("--nmea-host", default=None, help="TCP 10110 host (default: the --host address)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("status")
     p.add_argument("--raw", action="store_true")
@@ -301,6 +301,8 @@ def main() -> int:
     p.add_argument("--out", help="also save every line")
     p.set_defaults(fn=cmd_nmea)
     args = ap.parse_args()
+    if args.nmea_host is None:
+        args.nmea_host = args.host.split(":")[0]
     try:
         return args.fn(args)
     except (urllib.error.URLError, OSError) as exc:

@@ -97,7 +97,9 @@ the zip still holds the phone side and the card says so.
 - **On the bench**: `make boat-diag` (or `python3 tools/boat_diag.py --no-uart --no-wifi`
   with only the phone on USB) pulls the folder and unpacks every zip into
   `sessions/<now>/phone/bundles/<name>/`; the analysis runs on the newest
-  bundle's bus ring when there is no Wi-Fi pull.
+  bundle's bus ring when there is no Wi-Fi pull. `make boat-diag VIA_PHONE=1`
+  also reaches the terminal live through the phone's relay (adb forward of
+  10180/10110), so the Mac never has to join the hotspot.
 
 Persisting a snapshot on the terminal itself is not done: the ring is 1 MB of
 PSRAM and the boat build has no filesystem partition for it; the phone's

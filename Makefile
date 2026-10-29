@@ -205,9 +205,10 @@ record:
 	$(PY) tools/terminal.py --host $(HOST) record --seconds $(SECONDS) --out $(OUT)
 
 # Bench pull after a boat session: UART, Wi-Fi rings and the phone's relay
-# diary into sessions/<now>/ (tools/boat_diag.py). HOST as above.
+# diary into sessions/<now>/ (tools/boat_diag.py). HOST as above, or
+# VIA_PHONE=1 to reach the terminal through the phone's relay over USB.
 boat-diag:
-	$(PY) tools/boat_diag.py --host $(HOST)
+	$(PY) tools/boat_diag.py --host $(HOST) $(if $(VIA_PHONE),--via-phone)
 
 nmea-tcp:
 	$(PY) tools/terminal.py --nmea-host $(HOST) nmea --seconds 30
